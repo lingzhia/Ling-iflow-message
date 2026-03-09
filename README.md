@@ -7,7 +7,9 @@ iflow CLI 交互模式管理工具，支持通过 tmux 启动 iflow，并实现�
 - ✅ 通过 tmux 启动和管理 iflow CLI 会话
 - ✅ 实时监控 iflow 的会话文件，捕获 AI 回复
 - ✅ 支持企业微信消息与 iflow CLI 的双向同步
-- ✅ 提供模拟企业微信消息的测试程序
+- ✅ 消息来源差异化处理（工具消息、企业微信消息、iflow 交互界面消息）
+- ✅ 后台监控功能，检测 iflow 交互界面的消息并自动同步到企业微信
+- ✅ 提供交互式测试工具和企业微信调试工具
 - ✅ 轻量级设计，易于安装和使用
 
 ## 快速开始
@@ -27,12 +29,19 @@ tmux new-session -d -s iflow "iflow --model kimi-k2.5"
 ### 3. 启动交互模式服务
 
 ```bash
-python test_wechat_mock.py
+ling-iflow start
 ```
 
 ### 4. 测试消息同步
 
-在测试程序中输入消息，观察 iflow 的回复。
+在另一个终端运行测试工具：
+
+```bash
+# 运行 iflow 交互式测试工具
+python tool/iflow_interactive.py
+```
+
+在测试工具中输入消息，观察 iflow 的回复。
 
 ## 使用说明
 
@@ -84,8 +93,9 @@ Ling-iflow/
 ├── cli/               # CLI 命令模块
 ├── config/            # 配置管理模块
 ├── interactive/       # 交互模式核心模块
+├── tool/              # 测试工具模块
 ├── utils/             # 工具函数模块
-├── test_wechat_mock.py # 测试程序
+├── wechat_bot.py      # 企业微信 Bot 主程序
 └── AGENTS.md          # 详细文档
 ```
 

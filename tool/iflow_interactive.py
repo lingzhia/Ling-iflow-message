@@ -178,31 +178,28 @@ class IFlowTester:
 
         return True
     
-    async def test_message(self, message: str, enable_background_monitor=False):
+    async def test_message(self, message: str, source: str = None):
         """测试单条消息。
 
         Args:
             message: 要测试的消息
-            enable_background_monitor: 是否启用后台监控
+            source: 消息来源（tool/wechat/""），默认为 tool
         """
         if not self._check_iflow_status():
             return
 
         self.message_count += 1
 
-        # 启动后台监控（如果启用）
-        if enable_background_monitor:
-            print(f"{COLOR_SYSTEM}✓ 正在启动后台监控...{COLOR_RESET}")
-            background_task = asyncio.create_task(self.bot.start_background_monitor())
-            print(f"{COLOR_SYSTEM}✓ 后台监控已启动{COLOR_RESET}")
-            print()
-
         # 直接调用 BotIntegration 的处理逻辑
         chat_id = "test_user"
         is_group = False
+        
+        # 如果未指定 source，使用默认的 mode
+        if source is None:
+            source = self.mode
 
         try:
-            await self.bot.handle_message(message, "test_user", chat_id, is_group, source=self.mode)
+            await self.bot.handle_message(message, "test_user", chat_id, is_group, source=source)
         except Exception as e:
             print(f"{COLOR_SYSTEM}✗ 处理失败: {e}{COLOR_RESET}")
             logger.error(f"处理消息失败: {e}", exc_info=True)
@@ -275,12 +272,8 @@ class IFlowTester:
             print(f"{COLOR_SYSTEM}✗ 监听错误: {e}{COLOR_RESET}")
             logger.error(f"监听错误: {e}", exc_info=True)
     
-    async def interactive_mode(self, enable_background_monitor=False):
-        """交互式模式。
-        
-        Args:
-            enable_background_monitor: 是否启用后台监控（模拟企业微信）
-        """
+    async def interactive_mode(self):
+        """交互式模式。"""
         print()
         print("=" * 70)
         print("iflow 交互式测试工具")
@@ -302,8 +295,6 @@ class IFlowTester:
         print()
         print(f"{COLOR_SYSTEM}当前模式: 工具模式（不发企业微信）{COLOR_RESET}")
         print(f"{COLOR_SYSTEM}输入 'mode' 切换到 iflow 模拟模式（合并发送企业微信）{COLOR_RESET}")
-        if enable_background_monitor:
-            print(f"{COLOR_SYSTEM}后台监控: 已启用（可接收 iflow 交互界面的消息）{COLOR_RESET}")
         print("=" * 70)
         print()
         
@@ -313,38 +304,6 @@ class IFlowTester:
         
         self.running = True
         
-        # 启动后台监控（接收 iflow 交互界面的消息）
-        if enable_background_monitor:
-            print(f"{COLOR_SYSTEM}✓ 正在启动后台监控...{COLOR_RESET}")
-            background_task = asyncio.create_task(self.bot.start_background_monitor())
-            print(f"{COLOR_SYSTEM}✓ 后台监控已启动{COLOR_RESET}")
-            
-            # 注册到消息分发器
-            from interactive.message_dispatcher import MessageDispatcher
-            dispatcher = MessageDispatcher()
-            
-            # 定义回调函数
-            async def tool_callback(message: str, metadata: dict) -> None:
-                """分发器回调：打印消息到控制台"""
-                try:
-                    self.message_count += 1
-                    time_str = datetime.now().strftime("%H:%M:%S")
-                    
-                    print()
-                    print(f"{COLOR_AI}[iflow 回复] #{self.message_count} ({time_str}){COLOR_RESET}")
-                    print(f"{COLOR_AI}{message}{COLOR_RESET}")
-                    print()
-                    sys.stdout.flush()
-                    
-                    logger.info(f"[MockWeChat] 收到分发器消息 #{self.message_count}: {message[:50]}")
-                except Exception as e:
-                    logger.error(f"[MockWeChat] 分发器回调失败: {e}")
-            
-            # 注册回调
-            dispatcher.subscribe("iflow_tool", tool_callback)
-            print(f"{COLOR_SYSTEM}✓ 已注册到消息分发器{COLOR_RESET}")
-            print()
-        
         while self.running:
             try:
                 user_input = input(f"{COLOR_USER}[你]{COLOR_RESET} ").strip()
@@ -353,14 +312,6 @@ class IFlowTester:
                 if user_input in ['quit', 'exit', 'q']:
                     print(f"{COLOR_SYSTEM}再见！{COLOR_RESET}")
                     self.running = False
-                    
-                    # 取消分发器注册
-                    if enable_background_monitor:
-                        from interactive.message_dispatcher import MessageDispatcher
-                        dispatcher = MessageDispatcher()
-                        dispatcher.unsubscribe("iflow_tool")
-                        print(f"{COLOR_SYSTEM}✓ 已取消消息分发器注册{COLOR_RESET}")
-                    
                     break
 
                 if user_input == 'clear':
@@ -369,7 +320,7 @@ class IFlowTester:
                     continue
 
                 if user_input == 'status':
-                    self._print_status(enable_background_monitor)
+                    self._print_status()
                     continue
 
                 if user_input == 'help':
@@ -430,12 +381,8 @@ class IFlowTester:
         print(f"  iflow        - iflow 模拟模式：模拟 iflow 交互界面，合并发送企业微信")
         print()
 
-    def _print_status(self, enable_background_monitor=False):
-        """打印状态信息。
-        
-        Args:
-            enable_background_monitor: 是否启用了后台监控
-        """
+    def _print_status(self):
+        """打印状态信息。"""
         print(f"\n{COLOR_SYSTEM}=== 状态信息 ==={COLOR_RESET}")
         
         # 测试模式
@@ -446,10 +393,6 @@ class IFlowTester:
         # iflow 状态
         session_info = self.controller.get_session_info()
         print(f"tmux 会话: {session_info['tmux_session']} ({'运行' if session_info['iflow_running'] else '未运行'})")
-        if enable_background_monitor:
-            print(f"后台监控: 运行中")
-        else:
-            print(f"后台监控: 未启用")
         print(f"发送消息: {self.message_count} 条")
         print(f"接收消息: {self.mock_channel.message_count} 条")
         print(f"日志文件: {log_file}")
@@ -470,14 +413,14 @@ async def main():
     
     parser = argparse.ArgumentParser(
         description="iflow 交互式测试工具（使用 BotIntegration）",
-        epilog="示例:\n  %(prog)s                    # 交互模式\n  %(prog)s \"1+1等于几？\"      # 命令行模式\n  %(prog)s --wechat            # 模拟企业微信模式（含后台监控）\n  %(prog)s --wechat \"测试\"    # 命令行模式 + 后台监控\n  %(prog)s --monitor           # 纯监听模式（只监听 iflow 交互界面消息）\n  %(prog)s --all-messages \"测试\"  # 提取全部消息",
+        epilog="示例:\n  %(prog)s                    # 交互模式\n  %(prog)s \"1+1等于几？\"      # 命令行模式（tool来源）\n  %(prog)s -u \"测试\"          # 命令行模式（无标记，模拟 iflow 交互界面）\n  %(prog)s -m                  # 纯监听模式（只监听 iflow 交互界面消息）\n  %(prog)s -a \"测试\"          # 提取全部消息",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--tmux-session", "-t", default="iflow", help="tmux 会话名称")
     parser.add_argument("--workspace", "-w", default="~/.iflow", help="iflow 工作目录")
     parser.add_argument("--all-messages", "-a", action="store_true", help="提取全部消息（包括非✦标记的消息）")
-    parser.add_argument("--wechat", action="store_true", help="模拟企业微信模式（启动后台监控，接收 iflow 交互界面消息）")
     parser.add_argument("--monitor", "-m", action="store_true", help="纯监听模式（只监听 iflow 交互界面消息，不发送任何消息）")
+    parser.add_argument("--unmarked", "-u", action="store_true", help="发送无标记消息（模拟直接在 iflow 交互界面输入）")
     parser.add_argument("message", nargs="?", help="要发送的消息（可选，不提供则进入交互模式）")
     
     args = parser.parse_args()
@@ -495,10 +438,16 @@ async def main():
     # 如果提供了消息，使用命令行模式
     elif args.message:
         print(f"{COLOR_USER}[你]{COLOR_RESET} {args.message}")
-        await tester.test_message(args.message, enable_background_monitor=args.wechat)
+        
+        # 确定消息来源
+        source = "tool"  # 默认为 tool
+        if args.unmarked:
+            source = ""  # 无标记消息，模拟直接在 iflow 交互界面输入
+        
+        await tester.test_message(args.message, source=source)
     else:
         # 否则进入交互模式
-        await tester.interactive_mode(enable_background_monitor=args.wechat)
+        await tester.interactive_mode()
 
 
 if __name__ == "__main__":

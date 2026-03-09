@@ -621,6 +621,562 @@ iflow CLI 生成回复
 - `/status`：查看服务状态
 - `/help`：显示帮助
 
+#### 2.5.1 消息提取方案（基于标记的改进版）
+
+**设计目标**：
+- 准确提取 iflow 的完整回复
+- 避免消息截断和遗漏
+- 支持长消息和多行消息
+- 提供可靠的去重机制
+
+**核心原理**：
+以标记（✦ 和 ✻）作为消息边界，通过标记行的完整内容作为唯一标识（修复了前10字符重复的问题）。
+
+**实现步骤**：
+
+**1. 捕获 tmux 输出**
+```bash
+tmux capture-pane -t iflow -S -1000 -p
+```
+- `-S -1000`：从底部开始捕获最后1000行
+- `-p`：输出到标准输出
+
+**2. 定位当前对话**
+扫描捕获的内容，查找用户提问（以 `>` 开头的行），保留提问之后的内容，过滤掉历史对话。
+
+**3. 提取标记消息**
+在当前对话范围内，扫描所有标记行：
+- ✦ 标记：实际回复消息
+- ✻ 标记：思考、工具调用等（根据配置过滤）
+
+**4. 消息唯一标识**
+从每个标记行提取完整内容作为唯一标识（修复版本）：
+```python
+def extract_marker_id(line):
+    # 清理标记符号和空白
+    clean = line.replace('✦', '').replace('✻', '').strip()
+    # 使用完整内容作为唯一标识
+    return clean if clean else ''
+```
+
+**5. 消息绑定**
+两条标记之间的内容是前一条消息的扩展内容，应该与前面的消息绑定在一起：
+```
+✦ 第一条消息
+  扩展内容1
+  扩展内容2
+✦ 第二条消息
+```
+结果：
+- 消息1：✦ 第一条消息\n  扩展内容1\n  扩展内容2
+- 消息2：✦ 第二条消息
+
+**6. 发送逻辑**
+
+**场景1：没有发送记录**
+- 生成完成后，发送所有消息（包括最后一条）
+
+**场景2：有发送记录**
+- 从 tmux 消息中定位到已发送的消息标识
+- 发送其后所有未发送的消息（包括最后一条）
+
+**7. 完整示例**
+
+**iflow 输出**：
+```
+> 用户提问
+
+✻ 思考中...
+  思考内容
+
+✦ 第一条回复
+  扩展内容1
+
+✦ 第二条回复
+  扩展内容2
+```
+
+**提取结果**：
+```python
+messages = [
+    {
+        'marker_id': '第一条回复',
+        'content': '✦ 第一条回复\n  扩展内容1',
+        'full_marker': '✦ 第一条回复'
+    },
+    {
+        'marker_id': '第二条回复',
+        'content': '✦ 第二条回复\n  扩展内容2',
+        'full_marker': '✦ 第二条回复'
+    }
+]
+```
+
+**优势对比**：
+
+| 维度 | 旧方案 | 新方案 |
+|------|--------|--------|
+| 捕获范围 | 不确定 | 固定1000行 |
+| 对话定位 | 无 | 扫描用户提问 |
+| 唯一标识 | 前10字符 | 完整内容 |
+| 消息扩展 | 不明确 | 明确绑定 |
+| 发送逻辑 | 复杂 | 清晰 |
+| 可靠性 | 一般 | 高 |
+
+#### 2.5.2 消息来源差异化处理
+
+**设计目标**：
+实现三种消息来源的差异化处理，支持工具调用、企业微信交互和 iflow 交互界面的不同需求。
+
+**技术方案**：
+
+**1. 参数设计**
+在 `BotIntegration._run_command` 方法中添加 `source` 参数：
+
+```python
+async def _run_command(
+    self,
+    chat_id: str,
+    is_group: bool,
+    command: str,
+    source: str = "wechat"  # 新增参数：消息来源
+) -> None:
+```
+
+**source 参数取值**：
+- `"wechat"`：企业微信来源（默认）
+- `"tool"`：工具来源
+- `""`：未知来源（iflow 交互界面）
+
+**2. 来源跟踪**
+在 `BotIntegration` 类中添加实例变量：
+
+```python
+self._current_source: str = ""  # 当前正在处理的请求来源
+self._pending_messages: list = []  # 待处理的未知来源消息
+```
+
+**3. 消息发送逻辑**
+
+根据来源决定发送方式：
+
+| 来源 | 发送方式 | 说明 |
+|------|---------|------|
+| `tool` | 只返回给工具，不发企业微信 | 用于工具调用场景 |
+| `wechat` | 逐条发送到企业微信 | 支持连续对话 |
+| `""` | 合并发送到企业微信 | 检测 iflow 交互界面消息 |
+
+**4. 未知来源消息检测**
+在监控循环中，检测不在 `_sent_marker_ids` 中的消息，判断为 iflow 交互界面的消息。
+
+**5. 消息合并方法**
+```python
+def _merge_messages(self, messages: list) -> str:
+    """合并多条消息为一条。只合并 ✦ 标记的消息。"""
+    merged_lines = []
+    for msg in messages:
+        if '✦' in msg.get('full_marker', '') and '✻' not in msg.get('full_marker', ''):
+            content = msg.get('content', '').strip()
+            if content:
+                merged_lines.append(content)
+    return '\n'.join(merged_lines)
+```
+
+**处理流程图**：
+
+```
+收到 iflow 回复
+    ↓
+提取所有消息
+    ↓
+检查消息来源
+    ↓
+┌─────────────────────────────────────┐
+│ source = "tool"                    │
+│ → 只返回给工具，不发企业微信          │
+└─────────────────────────────────────┘
+
+┌─────────────────────────────────────┐
+│ source = "wechat"                  │
+│ → 逐条发送到企业微信                 │
+│ → 添加完成提示                      │
+└─────────────────────────────────────┘
+
+┌─────────────────────────────────────┐
+│ source = "" (未知来源)              │
+│ → 检测到 iflow 交互界面消息          │
+│ → 合并所有 ✦ 标记消息               │
+│ → 发送合并后的一条消息到企业微信      │
+└─────────────────────────────────────┘
+```
+
+**使用示例**：
+
+```python
+# 工具调用
+await self.bot.handle_message("test_user", False, "run", command, source="tool")
+
+# 企业微信调用（使用默认值）
+await self.bot.handle_message("test_user", False, "run", command, source="wechat")
+```
+
+**关键改动点**：
+
+| 文件 | 改动内容 |
+|------|---------|
+| `interactive/bot_integration.py` | 1. 添加 `source` 参数<br>2. 添加 `_current_source` 和 `_pending_messages` 变量<br>3. 修改消息发送逻辑，根据来源决定发送方式<br>4. 添加未知来源消息检测<br>5. 添加 `_merge_messages` 方法 |
+| `tool/iflow_interactive.py` | 修改调用方式，传入 `source="tool"` |
+
+**注意事项**：
+1. **来源清理**：每次 `_run_command` 完成后，需要清理 `_current_source`
+2. **避免重复发送**：确保 `_sent_marker_ids` 正确更新
+3. **消息合并**：只合并 ✦ 标记的消息，过滤 ✻ 标记的消息
+4. **企业微信配置**：需要确保 `wechat_channel.user_id` 有值，用于发送 iflow 交互界面的消息
+5. **向后兼容**：`source` 参数有默认值 "wechat"，不影响现有调用
+
+#### 2.5.3 消息清理机制
+
+**设计目标**：
+去除 iflow 输出中的 UI 元素，只保留有用的消息内容，提升用户体验。
+
+**技术方案**：
+
+**1. 检测分隔符**
+查找以下分隔符：
+```
+---
+══
+────────
+────────────────
+════════════════
+══════════════════════════
+══════════════════════════════════════
+══════════════════════════════════════════════════
+══════════════════════════════════════════════════════════════
+══════════════════════════════════════════════════════════════════════════
+```
+
+**2. 清理逻辑**
+- 找到第一个分隔符的位置
+- 只保留分隔符之前的内容
+- 去除首尾空白字符
+
+**3. 实现代码**
+```python
+def _clean_message_content(self, content: str) -> str:
+    """清理消息内容，去除 iflow 的 UI 元素。"""
+    if not content:
+        return content
+
+    # 类型检查
+    if not isinstance(content, str):
+        logger.error(f"收到非字符串类型: {type(content)}")
+        return ''
+
+    # 查找分隔符
+    separators = [
+        '---', '══', '────────', '────────────────',
+        '════════════════', '══════════════════════════',
+        '══════════════════════════════════════',
+        '══════════════════════════════════════════════════',
+        '══════════════════════════════════════════════════════════════',
+        '══════════════════════════════════════════════════════════════════════════',
+    ]
+
+    # 找到第一个分隔符的位置
+    first_separator_pos = -1
+    for sep in separators:
+        pos = content.find(sep)
+        if pos != -1 and (first_separator_pos == -1 or pos < first_separator_pos):
+            first_separator_pos = pos
+
+    # 如果找到分隔符，只保留之前的内容
+    if first_separator_pos != -1:
+        cleaned_content = content[:first_separator_pos].strip()
+        logger.debug(f"清理消息：移除 {len(content) - len(cleaned_content)} 个字符")
+        return cleaned_content
+
+    return content.strip()
+```
+
+**4. 应用场景**
+- 发送消息前清理内容
+- 合并消息时清理内容
+- 过滤空消息
+
+**优势**：
+- 提升用户体验，去除冗余信息
+- 减少消息长度，避免超限
+- 保持消息内容简洁清晰
+
+#### 2.5.4 测试模式切换
+
+**设计目标**：
+支持测试模式，可以提取全部消息（包括非✦标记的消息），便于调试和测试。
+
+**技术方案**：
+
+**1. 参数设计**
+在 `BotIntegration.__init__` 方法中添加 `extract_all_messages` 参数：
+
+```python
+def __init__(
+    self,
+    wechat_channel: Any,
+    tmux_session: str = "iflow",
+    workspace: str = "~/.iflow",
+    filter_thinking: bool = True,
+    extract_all_messages: bool = False  # 新增参数
+):
+```
+
+**2. 消息提取逻辑**
+根据 `extract_all_messages` 参数决定提取哪些消息：
+
+```python
+# 在 _extract_reply_from_tmux 方法中
+if self.extract_all_messages:
+    # 提取全部消息（包括非✦标记的消息）
+    filtered_messages = current_messages
+else:
+    # 只提取 ✦ 标记的消息
+    filtered_messages = [
+        msg for msg in current_messages
+        if '✦' in msg.get('full_marker', '')
+    ]
+```
+
+**3. 使用场景**
+- **正常模式（extract_all_messages=False）**：只提取 ✦ 标记的消息，过滤思考和工具调用
+- **测试模式（extract_all_messages=True）**：提取全部消息，包括思考和工具调用，便于调试
+
+**4. 配置方式**
+```python
+# 正常模式
+bot = BotIntegration(
+    wechat_channel=channel,
+    extract_all_messages=False
+)
+
+# 测试模式
+bot = BotIntegration(
+    wechat_channel=channel,
+    extract_all_messages=True
+)
+```
+
+**优势**：
+- 灵活的消息提取策略
+- 便于调试和测试
+- 不影响正常使用
+
+#### 2.5.5 iflow 交互式测试工具
+
+**设计目标**：
+提供一个交互式测试工具，可以直接在命令行中测试 iflow 功能，无需企业微信环境。
+
+**技术方案**：
+
+**1. 模拟企业微信渠道**
+创建 `MockWeChatChannel` 类，模拟企业微信渠道：
+
+```python
+class MockWeChatChannel:
+    """模拟企业微信渠道，用于测试。"""
+    
+    def __init__(self):
+        self.message_count = 0
+    
+    async def send(self, content, chat_id, is_group=False, **kwargs):
+        """模拟发送消息（打印到控制台）"""
+        self.message_count += 1
+        time_str = datetime.now().strftime("%H:%M:%S")
+        
+        print()
+        print(f"[iflow 回复] #{self.message_count} ({time_str})")
+        print(f"{content}")
+        print()
+        
+        return True
+    
+    def set_message_handler(self, handler):
+        """设置消息处理器（测试模式不需要）"""
+        pass
+```
+
+**2. 测试器类**
+创建 `IFlowTester` 类，封装测试逻辑：
+
+```python
+class IFlowTester:
+    """iflow 测试器（使用 BotIntegration）。"""
+    
+    def __init__(self, tmux_session="iflow", workspace="~/.iflow", extract_all_messages=False):
+        """初始化测试器。"""
+        self.tmux_session = tmux_session
+        self.workspace = workspace
+        self.extract_all_messages = extract_all_messages
+        
+        # 创建模拟渠道
+        self.mock_channel = MockWeChatChannel()
+        
+        # 创建 BotIntegration（与企业微信使用相同的逻辑）
+        self.bot = BotIntegration(
+            wechat_channel=self.mock_channel,
+            tmux_session=tmux_session,
+            workspace=workspace,
+            filter_thinking=True,
+            extract_all_messages=extract_all_messages
+        )
+        
+        # 测试模式：tool（工具模式）/ iflow（模拟 iflow 交互界面）
+        self.mode = "tool"
+```
+
+**3. 交互式命令**
+支持以下内置命令：
+- `quit/exit/q`：退出程序
+- `clear`：清屏
+- `status`：查看状态
+- `mode`：切换测试模式（tool/iflow）
+- `help`：显示帮助
+
+**4. 命令行功能**
+- ↑↓ 方向键：浏览历史记录
+- ←→ 方向键：移动光标
+- Backspace：删除字符
+- Home/End：跳到行首/行尾
+- Tab：命令自动补全
+
+**5. 使用方式**
+```bash
+# 启动测试工具
+python tool/iflow_interactive.py
+
+# 在测试工具中输入命令
+> 帮我写一个 Python 脚本
+
+# 查看状态
+> status
+
+# 切换模式
+> mode
+
+# 退出
+> quit
+```
+
+**优势**：
+- 无需企业微信环境
+- 与实际使用相同的逻辑
+- 支持命令行编辑和历史记录
+- 便于调试和测试
+
+#### 2.5.6 后台监控功能
+
+**设计目标**：
+检测用户在 tmux iflow 交互界面中直接输入的消息，并将这些消息合并后自动发送到企业微信。
+
+**技术方案**：
+
+**1. 监控逻辑**
+在后台持续运行，定期检查 iflow 的输出：
+
+```python
+async def start_background_monitor(self) -> None:
+    """启动后台监控，检测 iflow 交互界面的消息。"""
+    logger.info("[BotIntegration] 启动后台监控")
+    
+    last_known_messages = set()
+    
+    while True:
+        try:
+            # 等待一段时间再检查（避免频繁检查）
+            await asyncio.sleep(5)
+            
+            # 提取当前所有消息
+            current_messages, is_generating, generation_time, user_question = self._extract_reply_from_tmux()
+            
+            # 获取当前所有消息的 marker_id
+            current_marker_ids = set()
+            for msg in current_messages:
+                marker_id = msg.get('marker_id', '')
+                if marker_id:
+                    current_marker_ids.add(marker_id)
+            
+            # 检测新的消息（不在 last_known_messages 中）
+            new_messages = []
+            for msg in current_messages:
+                marker_id = msg.get('marker_id', '')
+                if marker_id and marker_id not in last_known_messages:
+                    new_messages.append(msg)
+            
+            # 如果有新消息且不在处理中
+            if new_messages and not is_generating and self._current_source == "":
+                logger.info(f"[BotIntegration] 后台监控检测到新消息: {len(new_messages)} 条")
+                
+                # 合并所有 ✦ 标记的消息
+                merged_content = self._merge_messages(new_messages)
+                
+                if merged_content.strip():
+                    # 构造开头标记
+                    header = f"🔔 iflow交互模式请求：原消息=[{user_question}]，当前回复完成，回复结果如下：\n\n"
+                    # 合并开头标记和内容
+                    full_message = header + merged_content
+                    
+                    # 发送到企业微信
+                    await self.wechat_channel.send(full_message, self.wechat_channel.config.user_id, is_group=False)
+                    logger.info(f"[BotIntegration] 已发送 iflow 交互界面消息到企业微信")
+                
+                # 更新已知消息
+                last_known_messages.update(current_marker_ids)
+            else:
+                # 定期更新已知消息（避免内存泄漏）
+                if len(last_known_messages) > 1000:
+                    last_known_messages = current_marker_ids
+                else:
+                    last_known_messages = current_marker_ids
+            
+        except Exception as e:
+            logger.error(f"[BotIntegration] 后台监控错误: {e}", exc_info=True)
+            await asyncio.sleep(10)  # 出错后等待一段时间再继续
+```
+
+**2. 检测条件**
+同时满足以下条件才会发送消息：
+1. 有新消息（不在 last_known_messages 中）
+2. 不在生成中（is_generating=False）
+3. 没有当前请求来源（self._current_source=""）
+
+**3. 消息格式**
+发送的消息包含开头标记：
+```
+🔔 iflow交互模式请求：原消息=[用户问题]，当前回复完成，回复结果如下：
+
+[合并后的回复内容]
+```
+
+**4. 内存管理**
+定期清理 last_known_messages，避免内存泄漏：
+- 当已知消息数量超过 1000 时，使用当前消息替换
+- 否则，合并当前消息
+
+**5. 错误处理**
+- 捕获所有异常，避免监控循环中断
+- 出错后等待 10 秒再继续
+- 记录详细错误日志
+
+**6. 使用场景**
+- 用户在 tmux iflow 中直接输入问题
+- AI 回复后自动发送到企业微信
+- 无需手动触发，实现双向同步
+
+**优势**：
+- 自动检测和同步
+- 无需手动干预
+- 支持完整的消息追踪
+- 包含原始问题信息
+
 ### 3. Config 层
 
 #### 3.1 Schema（配置模型）

@@ -12,7 +12,9 @@ Ling-iflow 是一个 iflow CLI 交互模式管理工具，支持通过 tmux 启�
 4. **命令系统**：支持 `/run`, `/new`, `/sessions`, `/status`, `/help` 等命令
 5. **连续对话**：自动保持上下文，支持连续对话
 6. **会话管理**：提供会话查询、创建、切换等功能
-7. **测试工具**：提供多个测试程序，支持不同测试场景
+7. **消息来源差异化处理**：支持工具消息、企业微信消息、iflow 交互界面消息的差异化处理
+8. **后台监控功能**：检测 iflow 交互界面的消息并自动同步到企业微信
+9. **测试工具**：提供 iflow 交互式测试工具和企业微信测试工具
 
 ## 目录结构
 
@@ -36,19 +38,17 @@ Ling-iflow/
 │   ├── session_manager.py  # 会话管理器
 │   ├── session_monitor.py  # 会话监控器
 │   └── sync_manager.py     # 同步管理器
+├── tool/              # 测试工具模块
+│   ├── iflow_interactive.py # iflow 交互式测试工具
+│   └── wechat_debug.py     # 企业微信调试工具
 ├── utils/             # 工具函数模块
 │   ├── __init__.py
 │   └── helpers.py     # 工具函数
 ├── config.example.json  # 配置示例文件
 ├── pyproject.toml      # 项目依赖配置
 ├── wechat_bot.py       # 企业微信 Bot 主程序
-├── test_wechat.py      # 企业微信测试程序
-├── test_callback.py    # 回调测试程序
-├── test_http.py        # HTTP 测试程序
-├── test_wechat_fixed.py # 修复版测试程序
-├── test_wechat_with_log.py # 带日志的测试程序
-├── send_test.py        # 发送测试程序
-├── interactive_chat.py # 交互式聊天程序
+├── manage.py           # 项目管理脚本
+├── logs_view.py        # 日志查看工具
 ├── WECHAT_SETUP.md     # 企业微信配置说明文档
 ├── README.md           # 项目说明文档
 └── AGENTS.md           # 本文档
@@ -111,26 +111,17 @@ ling-iflow status
 ### 运行测试
 
 ```bash
-# 运行企业微信测试程序
-python test_wechat.py
+# 运行 iflow 交互式测试工具
+python tool/iflow_interactive.py
 
-# 运行回调测试
-python test_callback.py
+# 运行企业微信调试工具（监听模式）
+python tool/wechat_debug.py listen
 
-# 运行 HTTP 测试
-python test_http.py
+# 运行企业微信调试工具（发送消息）
+python tool/wechat_debug.py send "测试消息"
 
-# 运行修复版测试
-python test_wechat_fixed.py
-
-# 运行带日志的测试
-python test_wechat_with_log.py
-
-# 运行发送测试
-python send_test.py
-
-# 启动交互式聊天
-python interactive_chat.py
+# 运行企业微信调试工具（测试配置）
+python tool/wechat_debug.py test
 ```
 
 ### 启动企业微信 Bot
@@ -157,6 +148,9 @@ python wechat_bot.py
 - 调用 iflow CLI 执行命令
 - 发送回复到企业微信
 - 支持连续对话，自动保持上下文
+- **消息来源差异化处理**：支持工具消息、企业微信消息、iflow 交互界面消息的差异化处理
+- **后台监控功能**：检测 iflow 交互界面的消息并自动同步到企业微信
+- **测试模式切换**：支持提取全部消息（包括非✦标记的消息）用于测试
 
 **主要方法：**
 - `handle_message(...)`: 处理入站消息
@@ -164,6 +158,24 @@ python wechat_bot.py
 - `_handle_command(...)`: 处理不同类型的命令
 - `_run_command(...)`: 运行 iFlow 命令并获取回复
 - `_extract_reply_from_tmux()`: 从 tmux 输出中提取回复
+- `_merge_messages(messages)`: 合并多条消息为一条
+- `_clean_message_content(content)`: 清理消息内容，去除 iflow 的 UI 元素
+
+**消息来源差异化处理：**
+
+1. **工具消息（source="tool"）**：
+   - 只返回给工具，不发企业微信
+   - 用于工具调用场景
+
+2. **企业微信消息（source="wechat"）**：
+   - 逐条发送到企业微信
+   - 添加完成提示
+   - 支持连续对话
+
+3. **iflow 交互界面消息（source=""）**：
+   - 检测未知来源的消息
+   - 合并所有 ✦ 标记的消息
+   - 发送合并后的一条消息到企业微信
 
 ### SessionManager
 
@@ -455,13 +467,8 @@ iflow CLI 生成回复
    - 完整安装：`pip install -e ".[dev,wechat]"`
 
 5. **测试程序**：
-   - `test_wechat.py`: 企业微信测试程序
-   - `test_callback.py`: 回调测试程序
-   - `test_http.py`: HTTP 测试程序
-   - `test_wechat_fixed.py`: 修复版测试程序
-   - `test_wechat_with_log.py`: 带日志的测试程序
-   - `send_test.py`: 发送测试程序
-   - `interactive_chat.py`: 交互式聊天程序
+   - `tool/iflow_interactive.py`: iflow 交互式测试工具
+   - `tool/wechat_debug.py`: 企业微信调试工具
 
 ## 开发规范
 
@@ -511,3 +518,128 @@ iflow CLI 生成回复
 6. 优化命令解析和执行逻辑
 7. 添加会话持久化功能
 8. 支持更多 iflow 命令和参数
+
+## 消息来源差异化处理方案
+
+### 方案概述
+
+实现三种消息来源的差异化处理：
+
+1. **工具消息**：只返回给工具，不发企业微信
+2. **企业微信消息**：逐条返回企业微信（保持原有逻辑）
+3. **iflow 交互界面消息**：合并成一条返回企业微信
+
+### 技术实现
+
+#### 1. 参数设计
+
+在 `BotIntegration._run_command` 方法中添加 `source` 参数：
+
+```python
+async def _run_command(
+    self,
+    chat_id: str,
+    is_group: bool,
+    command: str,
+    source: str = "wechat"  # 新增参数：消息来源
+) -> None:
+```
+
+**source 参数取值**：
+- `"wechat"`：企业微信来源（默认）
+- `"tool"`：工具来源
+- `""`：未知来源（iflow 交互界面）
+
+#### 2. 来源跟踪
+
+在 `BotIntegration` 类中添加实例变量：
+
+```python
+self._current_source: str = ""  # 当前正在处理的请求来源
+self._pending_messages: list = []  # 待处理的未知来源消息
+```
+
+#### 3. 消息发送逻辑
+
+根据来源决定发送方式：
+
+- **工具消息（source="tool"）**：只返回给工具，不发企业微信
+- **企业微信消息（source="wechat"）**：逐条发送到企业微信
+- **iflow 交互界面消息（source=""）**：合并所有 ✦ 标记的消息，发送合并后的一条消息
+
+#### 4. 未知来源消息检测
+
+在监控循环中，检测不在 `_sent_marker_ids` 中的消息，判断为 iflow 交互界面的消息。
+
+#### 5. 消息合并方法
+
+```python
+def _merge_messages(self, messages: list) -> str:
+    """合并多条消息为一条。只合并 ✦ 标记的消息。"""
+    merged_lines = []
+    for msg in messages:
+        if '✦' in msg.get('full_marker', '') and '✻' not in msg.get('full_marker', ''):
+            content = msg.get('content', '').strip()
+            if content:
+                merged_lines.append(content)
+    return '\n'.join(merged_lines)
+```
+
+### 处理流程图
+
+```
+收到 iflow 回复
+    ↓
+提取所有消息
+    ↓
+检查消息来源
+    ↓
+┌─────────────────────────────────────┐
+│ source = "tool"                    │
+│ → 只返回给工具，不发企业微信          │
+└─────────────────────────────────────┘
+
+┌─────────────────────────────────────┐
+│ source = "wechat"                  │
+│ → 逐条发送到企业微信                 │
+│ → 添加完成提示                      │
+└─────────────────────────────────────┘
+
+┌─────────────────────────────────────┐
+│ source = "" (未知来源)              │
+│ → 检测到 iflow 交互界面消息          │
+│ → 合并所有 ✦ 标记消息               │
+│ → 发送合并后的一条消息到企业微信      │
+└─────────────────────────────────────┘
+```
+
+### 使用示例
+
+#### 工具调用
+
+```python
+# tool/iflow_interactive.py
+await self.bot.handle_message("test_user", False, "run", command, source="tool")
+```
+
+#### 企业微信调用
+
+```python
+# wechat_bot.py（使用默认值）
+await self.bot.handle_message("test_user", False, "run", command, source="wechat")
+```
+
+### 关键改动点
+
+| 文件 | 改动内容 |
+|------|---------|
+| `interactive/bot_integration.py` | 1. 添加 `source` 参数<br>2. 添加 `_current_source` 和 `_pending_messages` 变量<br>3. 修改消息发送逻辑，根据来源决定发送方式<br>4. 添加未知来源消息检测<br>5. 添加 `_merge_messages` 方法 |
+| `tool/iflow_interactive.py` | 修改调用方式，传入 `source="tool"` |
+
+### 注意事项
+
+1. **来源清理**：每次 `_run_command` 完成后，需要清理 `_current_source`
+2. **避免重复发送**：确保 `_sent_marker_ids` 正确更新
+3. **消息合并**：只合并 ✦ 标记的消息，过滤 ✻ 标记的消息
+4. **企业微信配置**：需要确保 `wechat_channel.user_id` 有值，用于发送 iflow 交互界面的消息
+5. **向后兼容**：`source` 参数有默认值 "wechat"，不影响现有调用
