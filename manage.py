@@ -1060,6 +1060,677 @@ def bot_logs(
         subprocess.run(["tail", "-n", "50", str(log_file)])
 
 
+# ==================== 机器人管理命令 ====================
+
+@app.command()
+def bot_add(
+    name: str = typer.Option(..., "--name", "-n", help="机器人名称"),
+    corp_id: str = typer.Option(..., "--corp-id", help="企业 ID"),
+    agent_id: str = typer.Option(..., "--agent-id", help="应用 AgentId"),
+    secret: str = typer.Option(..., "--secret", help="应用 Secret"),
+    user_id: str = typer.Option(..., "--user-id", help="用户 ID"),
+    token: str = typer.Option("", "--token", help="Token"),
+    encoding_aes_key: str = typer.Option("", "--encoding-aes-key", help="EncodingAESKey"),
+    callback_port: int = typer.Option(8788, "--callback-port", "-p", help="回调端口"),
+    tmux_session: str = typer.Option("", "--tmux-session", "-t", help="tmux 会话名称"),
+    interactive: bool = typer.Option(False, "--interactive", "-i", help="交互式添加"),
+):
+    """添加机器人。"""
+    print_header("添加机器人")
+    
+    # 加载机器人配置
+    try:
+        bots_config = load_bots_config()
+    except FileNotFoundError:
+        print_error("机器人配置文件不存在: bots.json")
+        sys.exit(1)
+    except Exception as e:
+        print_error(f"加载机器人配置失败: {e}")
+        sys.exit(1)
+    
+    # 检查机器人名称是否已存在
+    if not interactive:
+        if bots_config.get_bot_by_name(name):
+            print_error(f"机器人名称已存在: {name}")
+            sys.exit(1)
+    else:
+        # 交互式模式
+        print_info("交互式添加机器人")
+        print()
+        
+        if bots_config.get_bot_by_name(name):
+            print_warning(f"机器人名称已存在: {name}")
+            return
+    
+    # 如果是交互式模式，提示用户输入必需参数
+    if interactive:
+        print_info("请输入机器人配置：")
+        print()
+        
+        if not name:
+            name = input("机器人名称: ").strip()
+            if not name:
+                print_error("机器人名称不能为空")
+                sys.exit(1)
+        
+        if not corp_id:
+            corp_id = input("企业 ID: ").strip()
+        
+        if not agent_id:
+            agent_id = input("应用 AgentId: ").strip()
+        
+        if not secret:
+            secret = input("应用 Secret: ").strip()
+        
+        if not user_id:
+            user_id = input("用户 ID: ").strip()
+        
+        token = input("Token (可选，留空跳过): ").strip()
+        encoding_aes_key = input("EncodingAESKey (可选，留空跳过): ").strip()
+        
+        callback_port_str = input(f"回调端口 (默认 {callback_port}): ").strip()
+        if callback_port_str:
+            try:
+                callback_port = int(callback_port_str)
+            except ValueError:
+                print_error("回调端口必须是数字")
+                sys.exit(1)
+        
+        tmux_session = input(f"tmux 会话名称 (可选，留空跳过): ").strip()
+        
+        print()
+    
+    # 验证必需参数
+    if not corp_id:
+        print_error("企业 ID 不能为空")
+        sys.exit(1)
+    
+    if not agent_id:
+        print_error("应用 AgentId 不能为空")
+        sys.exit(1)
+    
+    if not secret:
+        print_error("应用 Secret 不能为空")
+        sys.exit(1)
+    
+    if not user_id:
+        print_error("用户 ID 不能为空")
+        sys.exit(1)
+    
+    # 创建新机器人配置
+    from config.bots_schema import BotConfig
+    
+    new_bot = BotConfig(
+        name=name,
+        enabled=True,
+        corp_id=corp_id,
+        agent_id=agent_id,
+        secret=secret,
+        user_id=user_id,
+        token=token,
+        encoding_aes_key=encoding_aes_key,
+        callback_host="0.0.0.0",
+        callback_port=callback_port,
+        stream_mode=False,
+        poll_interval=5,
+        allow_from=[],
+        group_policy="mention",
+        group_allow_from=[],
+        tmux_session=tmux_session or f"iflow{name[-1:]}"  # 如果未指定，使用 iflow + 序号
+    )
+    
+    # 添加到配置
+    bots_config.bots.append(new_bot)
+    
+    # 保存配置
+    try:
+        from config.bots_loader import save_bots_config
+        save_bots_config(bots_config)
+        print_success(f"机器人已添加: {name}")
+        print()
+        print_info(f"使用以下命令启动机器人:")
+        print(f"  {COLOR_CYAN}python manage.py bot-start {name}{COLOR_RESET}")
+    except Exception as e:
+        print_error(f"保存配置失败: {e}")
+        sys.exit(1)
+
+
+@app.command()
+def bot_remove(
+    bot: str = typer.Argument(..., help="机器人名称或序号"),
+    force: bool = typer.Option(False, "--force", "-f", help="强制删除（不确认）"),
+):
+    """删除机器人。"""
+    print_header("删除机器人")
+    
+    # 加载机器人配置
+    try:
+        bots_config = load_bots_config()
+    except FileNotFoundError:
+        print_error("机器人配置文件不存在: bots.json")
+        sys.exit(1)
+    except Exception as e:
+        print_error(f"加载机器人配置失败: {e}")
+        sys.exit(1)
+    
+    # 解析机器人参数
+    bot_config = _resolve_bot(bots_config, bot)
+    if not bot_config:
+        print_error(f"机器人不存在: {bot}")
+        sys.exit(1)
+    
+    bot_name = bot_config.name
+    
+    # 检查机器人是否在运行
+    process_manager = ProcessManager(PROJECT_ROOT)
+    if process_manager.is_running(bot_name):
+        print_warning(f"机器人正在运行: {bot_name}")
+        print_info("请先停止机器人，或使用 --force 参数强制删除")
+        sys.exit(1)
+    
+    # 确认删除
+    if not force:
+        print_warning(f"确认删除机器人: {bot_name}?")
+        print_info(f"此操作将永久删除机器人配置，无法恢复")
+        print_info(f"请输入 'yes' 确认删除，或按 Ctrl+C 取消")
+        
+        confirm = input(f"\n确认删除 [{bot_name}]: ").strip()
+        if confirm.lower() != 'yes':
+            print_info("已取消删除")
+            return
+    
+    # 从配置中移除
+    bots_config.bots.remove(bot_config)
+    
+    # 保存配置
+    try:
+        from config.bots_loader import save_bots_config
+        save_bots_config(bots_config)
+        print_success(f"机器人已删除: {bot_name}")
+    except Exception as e:
+        print_error(f"保存配置失败: {e}")
+        sys.exit(1)
+
+
+@app.command()
+def bot_edit(
+    bot: str = typer.Argument(..., help="机器人名称或序号"),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="新机器人名称"),
+    corp_id: Optional[str] = typer.Option(None, "--corp-id", help="新企业 ID"),
+    agent_id: Optional[str] = typer.Option(None, "--agent-id", help="新应用 AgentId"),
+    secret: Optional[str] = typer.Option(None, "--secret", help="新应用 Secret"),
+    user_id: Optional[str] = typer.Option(None, "--user-id", help="新用户 ID"),
+    token: Optional[str] = typer.Option(None, "--token", help="新 Token"),
+    encoding_aes_key: Optional[str] = typer.Option(None, "--encoding-aes-key", help="新 EncodingAESKey"),
+    callback_port: Optional[int] = typer.Option(None, "--callback-port", "-p", help="新回调端口"),
+    tmux_session: Optional[str] = typer.Option(None, "--tmux-session", "-t", help="新 tmux 会话"),
+    enabled: Optional[bool] = typer.Option(None, "--enabled/--disabled", help="启用/禁用机器人"),
+):
+    """编辑机器人。"""
+    print_header("编辑机器人")
+    
+    # 加载机器人配置
+    try:
+        bots_config = load_bots_config()
+    except FileNotFoundError:
+        print_error("机器人配置文件不存在: bots.json")
+        sys.exit(1)
+    except Exception as e:
+        print_error(f"加载机器人配置失败: {e}")
+        sys.exit(1)
+    
+    # 解析机器人参数
+    bot_config = _resolve_bot(bots_config, bot)
+    if not bot_config:
+        print_error(f"机器人不存在: {bot}")
+        sys.exit(1)
+    
+    bot_name = bot_config.name
+    
+    # 显示当前配置
+    print_info(f"机器人: {bot_name}")
+    print()
+    print(f"  名称: {bot_config.name}")
+    print(f"  状态: {'启用' if bot_config.enabled else '禁用'}")
+    print(f"  企业 ID: {bot_config.corp_id}")
+    print(f"  应用 ID: {bot_config.agent_id}")
+    print(f"  用户 ID: {bot_config.user_id}")
+    print(f"  回调端口: {bot_config.callback_port}")
+    print(f"  tmux 会话: {bot_config.tmux_session}")
+    print()
+    
+    # 更新配置
+    updated = False
+    
+    if name is not None and name != bot_config.name:
+        # 检查新名称是否已存在
+        if bots_config.get_bot_by_name(name) and name != bot_config.name:
+            print_error(f"机器人名称已存在: {name}")
+            sys.exit(1)
+        bot_config.name = name
+        updated = True
+    
+    if corp_id is not None:
+        bot_config.corp_id = corp_id
+        updated = True
+    
+    if agent_id is not None:
+        bot_config.agent_id = agent_id
+        updated = True
+    
+    if secret is not None:
+        bot_config.secret = secret
+        updated = True
+    
+    if user_id is not None:
+        bot_config.user_id = user_id
+        updated = True
+    
+    if token is not None:
+        bot_config.token = token
+        updated = True
+    
+    if encoding_aes_key is not None:
+        bot_config.encoding_aes_key = encoding_aes_key
+        updated = True
+    
+    if callback_port is not None:
+        bot_config.callback_port = callback_port
+        updated = True
+    
+    if tmux_session is not None:
+        bot_config.tmux_session = tmux_session
+        updated = True
+    
+    if enabled is not None:
+        bot_config.enabled = enabled
+        updated = True
+    
+    if not updated:
+        print_warning("没有配置被更新")
+        return
+    
+    # 保存配置
+    try:
+        from config.bots_loader import save_bots_config
+        save_bots_config(bots_config)
+        print_success(f"机器人配置已更新: {bot_name}")
+    except Exception as e:
+        print_error(f"保存配置失败: {e}")
+        sys.exit(1)
+
+
+@app.command()
+def bot_show(
+    bot: str = typer.Argument(..., help="机器人名称或序号"),
+):
+    """查看机器人详情。"""
+    print_header("机器人详情")
+    
+    # 加载机器人配置
+    try:
+        bots_config = load_bots_config()
+    except FileNotFoundError:
+        print_error("机器人配置文件不存在: bots.json")
+        sys.exit(1)
+    except Exception as e:
+        print_error(f"加载机器人配置失败: {e}")
+        sys.exit(1)
+    
+    # 解析机器人参数
+    bot_config = _resolve_bot(bots_config, bot)
+    if not bot_config:
+        print_error(f"机器人不存在: {bot}")
+        sys.exit(1)
+    
+    # 显示机器人详情
+    print_info(f"名称: {bot_config.name}")
+    print(f"  状态: {'启用' if bot_config.enabled else '禁用'}")
+    print()
+    print(f"企业微信配置:")
+    print(f"  企业 ID: {bot_config.corp_id}")
+    print(f"  应用 ID: {bot_config.agent_id}")
+    print(f"  用户 ID: {bot_config.user_id}")
+    print()
+    print(f"回调配置:")
+    print(f"  回调端口: {bot_config.callback_port}")
+    print(f"  回调地址: {bot_config.callback_host}")
+    print(f"  Token: {'已配置' if bot_config.token else '未配置'}")
+    print(f"  EncodingAESKey: {'已配置' if bot_config.encoding_aes_key else '未配置'}")
+    print()
+    print(f"其他配置:")
+    print(f"  tmux 会话: {bot_config.tmux_session}")
+    print(f"  流模式: {'启用' if bot_config.stream_mode else '禁用'}")
+    print(f"  轮询间隔: {bot_config.poll_interval} 秒")
+    print(f"  群聊策略: {bot_config.group_policy}")
+    print()
+    
+    # 检查运行状态
+    process_manager = ProcessManager(PROJECT_ROOT)
+    is_running = process_manager.is_running(bot_config.name)
+    
+    print(f"运行状态:")
+    if is_running:
+        pid = process_manager.get_pid(bot_config.name)
+        print(f"  状态: 运行中 ✓")
+        print(f"  PID: {pid}")
+    else:
+        print(f"  状态: 未运行")
+    print()
+
+
+# ==================== tmux 会话管理命令 ====================
+
+@app.command()
+def tmux_add(
+    name: str = typer.Option(..., "--name", "-n", help="会话名称"),
+    workspace: str = typer.Option(..., "--workspace", "-w", help="工作目录"),
+    model: str = typer.Option("kimi-k2.5", "--model", "-m", help="模型名称"),
+    interactive: bool = typer.Option(False, "--interactive", "-i", help="交互式添加"),
+):
+    """添加 tmux 会话。"""
+    print_header("添加 tmux 会话")
+    
+    # 加载主配置
+    try:
+        main_config = load_config()
+    except Exception as e:
+        print_error(f"加载主配置失败: {e}")
+        sys.exit(1)
+    
+    # 确保有 tmux_sessions 属性
+    if not hasattr(main_config, 'tmux_sessions'):
+        main_config.tmux_sessions = []
+    
+    # 检查会话名称是否已存在
+    if not interactive:
+        for session in main_config.tmux_sessions:
+            if session.get("name") == name:
+                print_error(f"tmux 会话名称已存在: {name}")
+                sys.exit(1)
+    else:
+        # 交互式模式
+        print_info("交互式添加 tmux 会话")
+        print()
+        
+        if not name:
+            name = input("会话名称: ").strip()
+            if not name:
+                print_error("会话名称不能为空")
+                sys.exit(1)
+            
+            # 检查名称是否已存在
+            for session in main_config.tmux_sessions:
+                if session.get("name") == name:
+                    print_warning(f"会话名称已存在: {name}")
+                    return
+        
+        if not workspace:
+            workspace = input("工作目录 (例如 ~/.iflow): ").strip()
+        
+        model_input = input(f"模型名称 (默认 {model}): ").strip()
+        if model_input:
+            model = model_input
+        
+        print()
+    
+    # 验证必需参数
+    if not name:
+        print_error("会话名称不能为空")
+        sys.exit(1)
+    
+    if not workspace:
+        print_error("工作目录不能为空")
+        sys.exit(1)
+    
+    # 创建新 tmux 会话配置
+    new_session = {
+        "name": name,
+        "workspace": workspace,
+        "model": model
+    }
+    
+    # 添加到配置
+    main_config.tmux_sessions.append(new_session)
+    
+    # 保存配置
+    try:
+        from config.loader import save_config
+        save_config(main_config, PROJECT_ROOT / "config.json")
+        print_success(f"tmux 会话已添加: {name}")
+        print()
+        print_info(f"使用以下命令启动:")
+        print(f"  {COLOR_CYAN}python manage.py start 2{COLOR_RESET}")
+    except Exception as e:
+        print_error(f"保存配置失败: {e}")
+        sys.exit(1)
+
+
+@app.command()
+def tmux_remove(
+    session: str = typer.Argument(..., help="会话名称或序号"),
+    force: bool = typer.Option(False, "--force", "-f", help="强制删除（不确认）"),
+):
+    """删除 tmux 会话。"""
+    print_header("删除 tmux 会话")
+    
+    # 加载主配置
+    try:
+        main_config = load_config()
+    except Exception as e:
+        print_error(f"加载主配置失败: {e}")
+        sys.exit(1)
+    
+    # 确保有 tmux_sessions 属性
+    if not hasattr(main_config, 'tmux_sessions'):
+        print_error("没有配置的 tmux 会话")
+        sys.exit(1)
+    
+    # 解析会话参数
+    session_config = _resolve_tmux_session(main_config, session)
+    if not session_config:
+        print_error(f"tmux 会话不存在: {session}")
+        sys.exit(1)
+    
+    session_name = session_config.get("name", "iflow")
+    
+    # 检查会话是否在运行
+    if check_tmux_session(session_name):
+        print_warning(f"tmux 会话正在运行: {session_name}")
+        print_info("请先停止会话，或使用 --force 参数强制删除")
+        print_info(f"停止命令: tmux kill-session -t {session_name}")
+        sys.exit(1)
+    
+    # 检查是否有机器人连接到此会话
+    try:
+        bots_config = load_bots_config()
+        connected_bots = []
+        for bot in bots_config.bots:
+            if bot.tmux_session == session_name:
+                connected_bots.append(bot.name)
+        
+        if connected_bots and not force:
+            print_warning(f"以下机器人连接到此会话: {', '.join(connected_bots)}")
+            print_info("请先断开连接，或使用 --force 参数强制删除")
+            sys.exit(1)
+        elif connected_bots and force:
+            print_info(f"正在断开机器人连接: {', '.join(connected_bots)}")
+            for bot in bots_config.bots:
+                if bot.tmux_session == session_name:
+                    bot.tmux_session = ""
+            
+            # 保存机器人配置
+            try:
+                from config.bots_loader import save_bots_config
+                save_bots_config(bots_config)
+                print_success("已断开机器人连接")
+            except Exception as e:
+                print_error(f"保存机器人配置失败: {e}")
+                sys.exit(1)
+    except FileNotFoundError:
+        pass  # 忽略机器人配置不存在的情况
+    
+    # 确认删除
+    if not force:
+        print_warning(f"确认删除 tmux 会话: {session_name}?")
+        print_info(f"此操作将永久删除会话配置，无法恢复")
+        print_info(f"请输入 'yes' 确认删除，或按 Ctrl+C 取消")
+        
+        confirm = input(f"\n确认删除 [{session_name}]: ").strip()
+        if confirm.lower() != 'yes':
+            print_info("已取消删除")
+            return
+    
+    # 从配置中移除
+    main_config.tmux_sessions.remove(session_config)
+    
+    # 保存配置
+    try:
+        from config.loader import save_config
+        save_config(main_config, PROJECT_ROOT / "config.json")
+        print_success(f"tmux 会话已删除: {session_name}")
+    except Exception as e:
+        print_error(f"保存配置失败: {e}")
+        sys.exit(1)
+
+
+@app.command()
+def tmux_edit(
+    session: str = typer.Argument(..., help="会话名称或序号"),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="新会话名称"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="新工作目录"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="新模型名称"),
+):
+    """编辑 tmux 会话。"""
+    print_header("编辑 tmux 会话")
+    
+    # 加载主配置
+    try:
+        main_config = load_config()
+    except Exception as e:
+        print_error(f"加载主配置失败: {e}")
+        sys.exit(1)
+    
+    # 确保有 tmux_sessions 属性
+    if not hasattr(main_config, 'tmux_sessions'):
+        print_error("没有配置的 tmux 会话")
+        sys.exit(1)
+    
+    # 解析会话参数
+    session_config = _resolve_tmux_session(main_config, session)
+    if not session_config:
+        print_error(f"tmux 会话不存在: {session}")
+        sys.exit(1)
+    
+    session_name = session_config.get("name", "iflow")
+    
+    # 显示当前配置
+    print_info(f"tmux 会话: {session_name}")
+    print()
+    print(f"  名称: {session_config.get('name', 'iflow')}")
+    print(f"  工作目录: {session_config.get('workspace', '~/.iflow')}")
+    print(f"  模型: {session_config.get('model', 'kimi-k2.5')}")
+    print()
+    
+    # 更新配置
+    updated = False
+    
+    if name is not None and name != session_config.get("name"):
+        # 检查新名称是否已存在
+        for s in main_config.tmux_sessions:
+            if s.get("name") == name and s != session_config:
+                print_error(f"会话名称已存在: {name}")
+                sys.exit(1)
+        session_config["name"] = name
+        updated = True
+    
+    if workspace is not None:
+        session_config["workspace"] = workspace
+        updated = True
+    
+    if model is not None:
+        session_config["model"] = model
+        updated = True
+    
+    if not updated:
+        print_warning("没有配置被更新")
+        return
+    
+    # 保存配置
+    try:
+        from config.loader import save_config
+        save_config(main_config, PROJECT_ROOT / "config.json")
+        print_success(f"tmux 会话配置已更新: {session_name}")
+    except Exception as e:
+        print_error(f"保存配置失败: {e}")
+        sys.exit(1)
+
+
+@app.command()
+def tmux_show(
+    session: str = typer.Argument(..., help="会话名称或序号"),
+):
+    """查看 tmux 会话详情。"""
+    print_header("tmux 会话详情")
+    
+    # 加载主配置
+    try:
+        main_config = load_config()
+    except Exception as e:
+        print_error(f"加载主配置失败: {e}")
+        sys.exit(1)
+    
+    # 确保有 tmux_sessions 属性
+    if not hasattr(main_config, 'tmux_sessions'):
+        print_error("没有配置的 tmux 会话")
+        sys.exit(1)
+    
+    # 解析会话参数
+    session_config = _resolve_tmux_session(main_config, session)
+    if not session_config:
+        print_error(f"tmux 会话不存在: {session}")
+        sys.exit(1)
+    
+    session_name = session_config.get("name", "iflow")
+    
+    # 显示会话详情
+    print_info(f"名称: {session_name}")
+    print(f"  工作目录: {session_config.get('workspace', '~/.iflow')}")
+    print(f"  模型: {session_config.get('model', 'kimi-k2.5')}")
+    print()
+    
+    # 检查运行状态
+    is_running = check_tmux_session(session_name)
+    
+    print(f"运行状态:")
+    if is_running:
+        print(f"  状态: 运行中 ✓")
+    else:
+        print(f"  状态: 未运行")
+    print()
+    
+    # 查找连接到此会话的机器人
+    try:
+        bots_config = load_bots_config()
+        connected_bots = []
+        for bot in bots_config.bots:
+            if bot.tmux_session == session_name:
+                connected_bots.append(bot.name)
+        
+        if connected_bots:
+            print(f"连接的机器人:")
+            for bot_name in connected_bots:
+                process_manager = ProcessManager(PROJECT_ROOT)
+                bot_running = process_manager.is_running(bot_name)
+                status = "运行中 ✓" if bot_running else "未运行"
+                print(f"  - {bot_name} ({status})")
+        else:
+            print(f"连接的机器人: 无")
+    except FileNotFoundError:
+        print(f"连接的机器人: 未知（配置文件不存在）")
+    print()
+
+
 # ==================== 辅助函数 ====================
 
 def _resolve_bot(bots_config, bot: str):
