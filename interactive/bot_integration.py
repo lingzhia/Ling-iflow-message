@@ -522,9 +522,9 @@ class BotIntegration:
         """
         
         try:
-            # 捕获最后300行 tmux 输出
+            # 捕获最后500行 tmux 输出
             result = subprocess.run(
-                ["tmux", "capture-pane", "-t", self.tmux_session, "-S", "-300", "-p"],
+                ["tmux", "capture-pane", "-t", self.tmux_session, "-S", "-500", "-p"],
                 capture_output=True,
                 text=True
             )
