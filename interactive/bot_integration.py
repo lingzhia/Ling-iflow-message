@@ -543,6 +543,16 @@ class BotIntegration:
         if not content:
             return content
 
+        # 类型检查：确保 content 是字符串
+        if not isinstance(content, str):
+            logger.error(f"[BotIntegration] _clean_message_content 收到非字符串类型: {type(content)}, 值: {content}")
+            # 尝试转换为字符串
+            try:
+                content = str(content)
+            except Exception as e:
+                logger.error(f"[BotIntegration] 无法转换为字符串: {e}")
+                return ''
+
         # 查找分隔符（虚线、横线等）
         separators = [
             '---',
