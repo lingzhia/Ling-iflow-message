@@ -32,7 +32,7 @@ class BotIntegration:
         extract_all_messages: bool = False
     ):
         """初始化机器人集成。
-        
+
         Args:
             wechat_channel: 企业微信渠道实例
             tmux_session: tmux 会话名称
@@ -45,9 +45,15 @@ class BotIntegration:
         self.workspace = workspace
         self.filter_thinking = filter_thinking
         self.extract_all_messages = extract_all_messages
-        
+
         # 初始化组件
         self.session_manager = SessionManager(workspace)
+
+        # 消息缓冲区（用于延迟发送）
+        self._message_buffer: Dict[str, str] = {}  # {marker: content}
+        self._sent_marker_ids: set = set()  # 已发送的消息标识（前10字符）
+        self._last_sent_marker_id: str = ""  # 最后发送的消息标识
+        self._current_marker: Optional[str] = None  # 当前正在处理的标记
         self.iflow_controller = IFlowController(tmux_session)
         
         # 命令前缀
@@ -250,20 +256,20 @@ class BotIntegration:
         await self.wechat_channel.send(message, chat_id, is_group=is_group)
     
     async def _run_command(self, chat_id: str, is_group: bool, command: str) -> None:
-        """运行 iFlow 命令。
-        
+        """运行 iFlow 命令（基于标记的延迟发送版本）。
+
         Args:
             chat_id: 聊天 ID
             is_group: 是否为群聊
             command: 要执行的命令
         """
         logger.info(f"[BotIntegration] 执行命令: chat_id={chat_id}, is_group={is_group}, command={command[:100]}")
-        
+
         if not command:
             logger.warning("[BotIntegration] 命令为空")
             await self.wechat_channel.send("❌ 命令不能为空", chat_id, is_group=is_group)
             return
-        
+
         # 检查 iflow 是否运行
         if not self.iflow_controller.check_tmux_session():
             logger.error(f"[BotIntegration] iflow 未运行，tmux_session={self.tmux_session}")
@@ -273,18 +279,26 @@ class BotIntegration:
                 is_group=is_group
             )
             return
-        
+
         try:
             # 在发送命令之前，先提取初始回复（作为基准）
             logger.debug(f"[BotIntegration] 获取发送前的初始回复")
             initial_messages, initial_generating, _ = self._extract_reply_from_tmux()
             initial_count = len(initial_messages)
             logger.debug(f"[BotIntegration] 初始回复数量: {initial_count}, 生成中: {initial_generating}")
-            
+
+            # 如果 iflow 正在生成，等待完成
+            if initial_generating:
+                logger.info(f"[BotIntegration] iflow 正在生成中，等待完成...")
+                await asyncio.sleep(2)
+                initial_messages, initial_generating, _ = self._extract_reply_from_tmux()
+                initial_count = len(initial_messages)
+                logger.debug(f"[BotIntegration] 等待后初始回复数量: {initial_count}, 生成中: {initial_generating}")
+
             # 发送命令到 iflow
             logger.info(f"[BotIntegration] 发送命令到 iflow")
             success = self.iflow_controller.send_message(command)
-            
+
             if not success:
                 logger.error(f"[BotIntegration] 命令发送失败")
                 await self.wechat_channel.send(
@@ -293,155 +307,171 @@ class BotIntegration:
                     is_group=is_group
                 )
                 return
-            
+
             logger.info(f"[BotIntegration] 命令发送成功，等待 iflow 处理")
             # 等待 iflow 处理
             await asyncio.sleep(3)
-            
-            # 记录已发送的消息内容（使用内容作为键）
-            sent_message_contents = {}
-            # 将初始消息标记为已发送，避免发送旧消息
+
+            # 重置缓冲区
+            self._message_buffer.clear()
+            self._sent_marker_ids.clear()
+            self._last_sent_marker_id = ""
+            self._current_marker = None
+
+            # 记录初始消息的标识，避免发送旧消息
             for message in initial_messages:
-                msg_content_hash = hash(message.strip())
-                sent_message_contents[msg_content_hash] = True
+                marker_id = message.get('marker_id', '')
+                if marker_id:
+                    self._sent_marker_ids.add(marker_id)
+                    logger.debug(f"[BotIntegration] 标记初始消息为已发送: {marker_id}")
             
-            last_message_count = initial_count  # 初始化为初始消息数
+            # 设置最后发送的标记（用于后续发送逻辑）
+            if initial_messages:
+                self._last_sent_marker_id = initial_messages[-1].get('marker_id', '')
+                logger.info(f"[BotIntegration] 设置最后发送的标记: {self._last_sent_marker_id}")
+
+            last_message_count = initial_count
             last_generating = False
-            self._stable_count = 0  # 初始化稳定计数器
-            
+            self._stable_count = 0
+
             # 实时监控并发送新消息
             timeout = 60  # 60 秒超时
-            
+
             logger.info(f"[BotIntegration] 开始实时监控 iflow 回复，超时时间: {timeout}秒")
-            
+
             for i in range(timeout):
                 await asyncio.sleep(1)
-                
+
                 # 获取当前回复和生成状态
                 current_messages, is_generating, generation_time = self._extract_reply_from_tmux()
                 current_count = len(current_messages)
-                
-                # 每次循环都检查所有消息，只发送未发送的新消息
-                new_message_count = 0
-                for j, message in enumerate(current_messages, start=1):
-                    # 使用消息内容的 hash 作为唯一标识
-                    msg_content_hash = hash(message.strip())
-                    
-                    # 检查是否已发送
-                    if msg_content_hash in sent_message_contents:
-                        logger.debug(f"[BotIntegration] 消息已发送，跳过: {j}")
-                        continue
-                    
-                    sent_message_contents[msg_content_hash] = True
-                    new_message_count += 1
-                    logger.debug(f"[BotIntegration] 发送新消息 {j}: {message[:50]}")
-                    
-                    # 根据配置过滤思考消息
-                    if self.filter_thinking:
-                        filtered_message = self._filter_thinking_messages(message)
-                        logger.info(f"[BotIntegration] 消息 {j} 过滤后长度: {len(filtered_message)}")
-                    else:
-                        filtered_message = message
-                    
-                    if filtered_message.strip():
-                        # 分段发送（避免超过长度限制）
-                        chunks = self._split_message(filtered_message)
-                        logger.info(f"[BotIntegration] 消息 {j} 分段发送，共 {len(chunks)} 段")
-                        
-                        for k, chunk in enumerate(chunks):
-                            if k > 0:
-                                await asyncio.sleep(0.3)
-                            
-                            await self.wechat_channel.send(chunk, chat_id, is_group=is_group)
-                
-                if new_message_count > 0:
-                    logger.info(f"[BotIntegration] 发送 {new_message_count} 条新消息")
-                
-                # 更新最后的消息计数
-                last_message_count = current_count
-                
+
                 # 检查是否在生成中
                 if is_generating:
                     logger.debug(f"[BotIntegration] iflow 正在生成中... (时间: {generation_time})")
                     last_generating = True
-                    self._stable_count = 0  # 重置稳定计数器
+                    self._stable_count = 0
                     continue
-                
-                # "生成中"消失了，检查是否之前在生成中
+
+                # 检测生成完成
                 if last_generating and not is_generating:
-                    logger.info(f"[BotIntegration] 检测到生成中消失，回复可能完成")
-                    
+                    logger.info(f"[BotIntegration] 检测到生成完成")
+
                     # 等待一下，确保不会有新消息
                     await asyncio.sleep(1)
-                    
-                    # 再次检查，确保"生成中"仍然消失
+
+                    # 再次检查，确保生成完成
                     final_messages, final_generating, _ = self._extract_reply_from_tmux()
                     final_count = len(final_messages)
-                    
+
                     if not final_generating:
-                        logger.info(f"[BotIntegration] 确认回复完成（生成中消失），消息数量: {final_count}")
+                        logger.info(f"[BotIntegration] 确认生成完成，消息数量: {final_count}")
                         
-                        # 检查是否有新消息出现（防止tmux缓冲区更新导致的消息丢失）
-                        new_message_count = 0
-                        for j, message in enumerate(final_messages, start=1):
-                            msg_content_hash = hash(message.strip())
-                            
-                            if msg_content_hash not in sent_message_contents:
-                                sent_message_contents[msg_content_hash] = True
-                                logger.debug(f"[BotIntegration] 补充发送新消息 {j}: {message[:50]}")
+                        # 应用新的发送规则
+                        if len(self._sent_marker_ids) == 0:
+                            # 场景1：没有发送记录
+                            if final_count >= 2:
+                                # 除最后一条不发送外，前面的每一条都发送
+                                for i in range(final_count - 1):
+                                    msg = final_messages[i]
+                                    marker_id = msg.get('marker_id', '')
+                                    
+                                    logger.info(f"[BotIntegration] 发送消息 {i+1}/{final_count-1}: 标识={marker_id}")
+                                    await self._send_message_content(msg['content'], chat_id, is_group)
+                                    self._sent_marker_ids.add(marker_id)
                                 
-                                # 过滤思考消息
-                                if self.filter_thinking:
-                                    filtered_message = self._filter_thinking_messages(message)
-                                else:
-                                    filtered_message = message
+                                # 记录倒数第二个标记（最后一条消息的唯一标识）
+                                if final_count >= 2:
+                                    last_marker_id = final_messages[final_count - 2].get('marker_id', '')
+                                    self._last_sent_marker_id = last_marker_id
+                                    logger.info(f"[BotIntegration] 记录最后发送的标记: {last_marker_id}")
+                        else:
+                            # 场景2：有发送记录
+                            if final_count >= 2 and hasattr(self, '_last_sent_marker_id'):
+                                # 从 tmux 消息中定位到已发送的消息标识
+                                sent_index = -1
+                                for i, msg in enumerate(final_messages):
+                                    if msg.get('marker_id', '') == self._last_sent_marker_id:
+                                        sent_index = i
+                                        break
                                 
-                                if filtered_message.strip():
-                                    # 分段发送
-                                    chunks = self._split_message(filtered_message)
-                                    for k, chunk in enumerate(chunks):
-                                        if k > 0:
-                                            await asyncio.sleep(0.3)
-                                        await self.wechat_channel.send(chunk, chat_id, is_group=is_group)
-                                    new_message_count += 1
+                                # 如果找到已发送的消息，检查其后的标记数量
+                                if sent_index >= 0:
+                                    remaining_count = final_count - sent_index - 1
+                                    if remaining_count >= 2:
+                                        # 保留最后一个，发送其他消息
+                                        for i in range(sent_index + 1, final_count - 1):
+                                            msg = final_messages[i]
+                                            marker_id = msg.get('marker_id', '')
+                                            
+                                            logger.info(f"[BotIntegration] 发送消息 {i+1}/{final_count}: 标识={marker_id}")
+                                            await self._send_message_content(msg['content'], chat_id, is_group)
+                                            self._sent_marker_ids.add(marker_id)
+                                        
+                                        # 更新最后发送的标记
+                                        new_last_marker_id = final_messages[final_count - 2].get('marker_id', '')
+                                        self._last_sent_marker_id = new_last_marker_id
+                                        logger.info(f"[BotIntegration] 更新最后发送的标记: {new_last_marker_id}")
                         
-                        if new_message_count > 0:
-                            logger.info(f"[BotIntegration] 补充发送了 {new_message_count} 条新消息")
-                        
-                        # 在最后一条消息结尾添加"回答完毕"提示
-                        if sent_message_contents:
-                            completion_message = "\n\n✅ 当前问题回答完毕"
-                            await self.wechat_channel.send(completion_message, chat_id, is_group=is_group)
-                            logger.info(f"[BotIntegration] 已发送回答完毕提示")
+                        # 发送完成提示
+                        completion_message = "\n\n✅ 当前问题回答完毕"
+                        await self.wechat_channel.send(completion_message, chat_id, is_group=is_group)
+                        logger.info(f"[BotIntegration] 已发送回答完毕提示")
                         break
                     else:
-                        # "生成中"又出现了，继续监控
+                        # 生成中又出现了，继续监控
                         logger.debug(f"[BotIntegration] 生成中又出现，继续监控")
                         last_generating = True
-                        continue
-                
+
+                # 处理新消息（延迟发送逻辑）
+                if current_count > last_message_count:
+                    logger.info(f"[BotIntegration] 检测到新消息: {last_message_count} -> {current_count}")
+
+                    # 发送新增的消息（从 last_message_count 到 current_count-1）
+                    for i in range(last_message_count, current_count):
+                        if i < len(current_messages):
+                            message = current_messages[i]
+                            msg_hash = hash(message.strip())
+
+                            if msg_hash not in self._sent_message_hashes:
+                                logger.info(f"[BotIntegration] 发送消息 {i+1}: {message[:50]}")
+                                await self._send_message_content(message, chat_id, is_group)
+                                self._sent_message_hashes.add(msg_hash)
+
+                # 更新最后的消息计数
+                last_message_count = current_count
+
                 # 如果从来没有检测到"生成中"，使用稳定检测作为 fallback
                 if not last_generating and current_count == last_message_count:
                     # 消息数量稳定（fallback 机制）
                     logger.debug(f"[BotIntegration] 消息数量稳定（未检测到生成中）")
-                    
+
                     # 增加稳定计数
                     self._stable_count += 1
-                    
+
                     # 如果连续 3 秒稳定，认为完成
                     if self._stable_count >= 3:
                         logger.info(f"[BotIntegration] 回复完成（消息数量稳定且无生成中）")
-                        
-                        # 在最后一条消息结尾添加"回答完毕"提示
-                        if sent_message_contents:
-                            completion_message = "\n\n✅ 当前问题回答完毕"
-                            await self.wechat_channel.send(completion_message, chat_id, is_group=is_group)
-                            logger.info(f"[BotIntegration] 已发送回答完毕提示")
-                        
+
+                        # 发送最后一个消息
+                        if current_messages:
+                            last_message = current_messages[-1]
+                            last_marker_hash = hash(last_message.strip())
+
+                            if last_marker_hash not in self._sent_markers:
+                                logger.info(f"[BotIntegration] 发送最后一个消息: {last_message[:50]}")
+                                await self._send_message_content(last_message, chat_id, is_group)
+                                self._sent_markers.add(last_marker_hash)
+
+                        # 发送完成提示
+                        completion_message = "\n\n✅ 当前问题回答完毕"
+                        await self.wechat_channel.send(completion_message, chat_id, is_group=is_group)
+                        logger.info(f"[BotIntegration] 已发送回答完毕提示")
+
                         # 重置计数器
                         self._stable_count = 0
                         break
-            
+
         except Exception as e:
             logger.error(f"[BotIntegration] 运行命令错误: {e}", exc_info=True)
             await self.wechat_channel.send(
@@ -449,19 +479,52 @@ class BotIntegration:
                 chat_id,
                 is_group=is_group
             )
+
+    async def _send_message_content(self, content: str, chat_id: str, is_group: bool) -> None:
+        """发送消息内容（包含过滤和分段）。
+
+        Args:
+            content: 消息内容
+            chat_id: 聊天 ID
+            is_group: 是否为群聊
+        """
+        # 根据配置过滤思考消息
+        if self.filter_thinking:
+            filtered_message = self._filter_thinking_messages(content)
+            logger.info(f"[BotIntegration] 消息过滤后长度: {len(filtered_message)}")
+        else:
+            filtered_message = content
+
+        if filtered_message.strip():
+            # 分段发送（避免超过长度限制）
+            chunks = self._split_message(filtered_message)
+            logger.info(f"[BotIntegration] 消息分段发送，共 {len(chunks)} 段")
+
+            for k, chunk in enumerate(chunks):
+                if k > 0:
+                    await asyncio.sleep(0.3)
+                await self.wechat_channel.send(chunk, chat_id, is_group=is_group)
     
     def _extract_reply_from_tmux(self) -> tuple:
-        """从 tmux 输出中提取回复和生成状态。
+        """从 tmux 输出中提取回复和生成状态（基于标记的改进版）。
+        
+        改进版逻辑：
+        1. 捕获最后300行 tmux 输出
+        2. 扫描用户提问，定位当前对话范围
+        3. 提取标记消息，前10字符作为唯一标识
+        4. 绑定标记之间的内容作为消息扩展
         
         Returns:
             (messages: list, is_generating: bool, generation_time: str)
-            - messages: 提取到的回复列表
+            - messages: 提取到的回复列表，每个元素为字典 {'marker_id': str, 'content': str, 'full_marker': str}
             - is_generating: 是否正在生成中
             - generation_time: 生成时间记录（如果有）
         """
+        
         try:
+            # 捕获最后300行 tmux 输出
             result = subprocess.run(
-                ["tmux", "capture-pane", "-t", self.tmux_session, "-p"],
+                ["tmux", "capture-pane", "-t", self.tmux_session, "-S", "-300", "-p"],
                 capture_output=True,
                 text=True
             )
@@ -470,20 +533,30 @@ class BotIntegration:
             lines = output.split('\n')
             
             messages = []
-            in_thinking = False
             is_generating = False
             generation_time = None
             
-            # 当前正在处理的消息（用于多行消息）
-            current_message = []
-            
+            # 步骤1：扫描用户提问，定位当前对话范围
+            current_conversation_start = 0
             for i, line in enumerate(lines):
-                curr_line_stripped = line.strip()
-                
+                if line.strip().startswith('>') and len(line.strip()) > 1:
+                    current_conversation_start = i
+                    logger.debug(f"[BotIntegration] 找到用户提问，从第{i+1}行开始")
+                    break
+            
+            # 只处理当前对话范围
+            conversation_lines = lines[current_conversation_start:]
+            
+            # 步骤2：提取标记消息并绑定扩展内容
+            current_message = []
+            current_marker = None
+            current_marker_id = None
+            
+            for line in conversation_lines:
                 # 检测"生成中"标识
                 if '生成中' in line:
                     is_generating = True
-                    # 尝试提取时间记录（格式类似：生成中 12:34:56）
+                    # 尝试提取时间记录
                     import re
                     time_match = re.search(r'(\d{1,2}:\d{2}:\d{2})', line)
                     if time_match:
@@ -491,147 +564,88 @@ class BotIntegration:
                     logger.debug(f"[BotIntegration] 检测到生成中: {generation_time}")
                     continue
                 
-                # 根据配置决定提取逻辑
-                if self.extract_all_messages:
-                    # 提取所有消息（包括思考过程、工具调用、AI回复）
+                # 检测标记
+                marker = self._detect_marker(line)
+                
+                if marker:
+                    # 保存前一条消息（如果有）
+                    if current_marker and current_message:
+                        messages.append({
+                            'marker_id': current_marker_id,
+                            'content': '\n'.join(current_message),
+                            'full_marker': current_marker
+                        })
                     
-                    # 排除状态栏信息（包含多个 | 或特定关键词）
-                    if curr_line_stripped.count('|') >= 2 and (
-                        '上下文' in curr_line_stripped or 
-                        '思考' in curr_line_stripped or 
-                        'cwd:' in curr_line_stripped or 
-                        '%' in curr_line_stripped
-                    ):
-                        continue
+                    # 开始新消息
+                    current_marker = line.strip()
+                    # 提取前10个字符作为唯一标识
+                    clean_marker = line.replace('✦', '').replace('✻', '').strip()
+                    current_marker_id = clean_marker[:10] if clean_marker else ''
+                    current_message = [line.strip()]
                     
-                    # 排除用户输入（以 > 开头）
-                    if curr_line_stripped.startswith('>'):
-                        continue
-                    
-                    # 排除分割线等装饰性内容（完全匹配）
-                    if line.strip() and all(c in '─=-' for c in line.strip()):
-                        continue
-                    
-                    # 排除输入提示行
-                    if '输入消息或@文件路径' in line:
-                        continue
-                    
-                    # 检测是否是新消息的开始（包含特殊标记）
-                    has_special_marker = (
-                        ('✻' in curr_line_stripped or 
-                         '✦' in curr_line_stripped or 
-                         '✔' in curr_line_stripped) and
-                        '✹' not in curr_line_stripped
-                    )
-                    
-                    # 如果遇到新消息的开始，保存之前的消息并开始新消息
-                    if has_special_marker and current_message:
-                        # 移除包含状态栏信息的行
-                        filtered_lines = []
-                        for msg_line in current_message:
-                            # 跳过状态栏信息
-                            if 'cwd:' in msg_line and '|' in msg_line:
-                                continue
-                            # 跳过其他状态栏信息
-                            if msg_line.count('|') >= 2 and ('%' in msg_line or '上下文' in msg_line or '思考' in msg_line):
-                                continue
-                            filtered_lines.append(msg_line)
-                        
-                        message_text = '\n'.join(filtered_lines).strip()
-                        if message_text:
-                            messages.append(message_text)
-                            logger.debug(f"[BotIntegration] 提取消息 {len(messages)}: {message_text[:50]}")
-                        current_message = []
-                    
-                    # 只有当前有消息或遇到特殊标记时，才添加行
-                    if current_message or has_special_marker:
-                        current_message.append(curr_line_stripped)
-                    
-                else:
-                    # 只提取带有"✦"标记的消息（默认模式）
-                    
-                    # 检测思考区域的开始
-                    if '✻ 思考中' in line:
-                        in_thinking = True
-                        continue
-                    
-                    # 检测思考区域的结束（遇到"✦"标记，表示开始实际回复）
-                    if in_thinking and '✦' in line and '✻' not in line and '✹' not in line:
-                        in_thinking = False
-                        # 继续处理这条消息
-                    
-                    # 如果在思考区域中，跳过
-                    if in_thinking:
-                        continue
-                    
-                    # 检测是否是新消息的开始（包含✦标记）
-                    if '✦' in line and '✻' not in line and '✹' not in line:
-                        # 保存之前的消息（如果有）
-                        if current_message:
-                            message_text = '\n'.join(current_message).strip()
-                            if message_text:
-                                messages.append(message_text)
-                                logger.debug(f"[BotIntegration] 提取消息 {len(messages)}: {message_text[:50]}")
-                            current_message = []
-                        
-                        # 去掉所有"✦"符号
-                        clean_line = curr_line_stripped.replace('✦', '').strip()
-                        
-                        # 排除用户输入（以 > 开头）
-                        if clean_line.startswith('>'):
-                            current_message = []  # 重置，跳过用户输入
-                            continue
-                        
-                        # 排除空行
-                        if not clean_line:
-                            current_message = []  # 重置，跳过空行
-                            continue
-                        
-                        # 添加到当前消息
-                        current_message.append(clean_line)
-                    elif current_message:
-                        # 如果已经在消息中，检查是否应该继续收集
-                        # 只收集属于同一条消息的行（缩进的行或空行）
-                        # 遇到非空行且非缩进行时，停止收集
-                        if not curr_line_stripped or line.startswith(' ') or line.startswith('\t'):
-                            # 这是消息的后续行（缩进行或空行），添加到消息中
-                            current_message.append(curr_line_stripped)
-                        else:
-                            # 遇到非空行且非缩进行，停止收集，保存当前消息
-                            message_text = '\n'.join(current_message).strip()
-                            if message_text:
-                                messages.append(message_text)
-                                logger.debug(f"[BotIntegration] 提取消息 {len(messages)}: {message_text[:50]}")
-                            current_message = []
+                    logger.debug(f"[BotIntegration] 检测到标记: {marker}, 标识: {current_marker_id}")
+                elif current_marker:
+                    # 收集当前消息的扩展内容
+                    current_message.append(line.strip())
             
             # 保存最后一条消息（如果有）
-            if current_message:
-                # 如果是 extract_all_messages 模式，应用过滤逻辑
+            if current_marker and current_message:
+                messages.append({
+                    'marker_id': current_marker_id,
+                    'content': '\n'.join(current_message),
+                    'full_marker': current_marker
+                })
+                logger.debug(f"[BotIntegration] 提取最后一条消息: 标识={current_marker_id}")
+            
+            # 根据配置过滤消息
+            filtered_messages = []
+            for msg in messages:
                 if self.extract_all_messages:
-                    # 移除包含状态栏信息的行
-                    filtered_lines = []
-                    for msg_line in current_message:
-                        # 跳过状态栏信息
-                        if 'cwd:' in msg_line and '|' in msg_line:
-                            continue
-                        # 跳过其他状态栏信息
-                        if msg_line.count('|') >= 2 and ('%' in msg_line or '上下文' in msg_line or '思考' in msg_line):
-                            continue
-                        filtered_lines.append(msg_line)
-                    message_text = '\n'.join(filtered_lines).strip()
+                    # 返回所有标记的消息
+                    filtered_messages.append(msg)
                 else:
-                    message_text = '\n'.join(current_message).strip()
-                
-                if message_text:
-                    messages.append(message_text)
-                    logger.debug(f"[BotIntegration] 提取消息 {len(messages)}: {message_text[:50]}")
+                    # 只返回 ✦ 标记的消息
+                    if '✦' in msg['full_marker'] and '✻' not in msg['full_marker']:
+                        # 清理 ✦ 符号
+                        clean_content = msg['content'].replace('✦', '').strip()
+                        if clean_content:
+                            filtered_messages.append({
+                                'marker_id': msg['marker_id'],
+                                'content': clean_content,
+                                'full_marker': msg['full_marker']
+                            })
             
-            logger.debug(f"[BotIntegration] 提取完成，共 {len(messages)} 条消息，生成中: {is_generating}")
+            logger.debug(f"[BotIntegration] 提取完成，共 {len(messages)} 条消息，过滤后 {len(filtered_messages)} 条，生成中: {is_generating}")
             
-            return messages, is_generating, generation_time
+            return filtered_messages, is_generating, generation_time
+            
         except Exception as e:
             logger.error(f"[BotIntegration] 提取 tmux 回复失败: {e}")
             return [], False, None
+    def _detect_marker(self, line: str) -> str:
+        """检测行中的标记类型。
+
+        Args:
+            line: 要检测的行
+
+        Returns:
+            标记类型（'✦' 或 '✻'），如果没有标记返回 None
+        """
+        curr_line_stripped = line.strip()
+
+        # 排除用户输入和状态栏
+        if curr_line_stripped.startswith('>') or curr_line_stripped.count('|') >= 2:
+            return None
+
+        # 检测 ✦ 标记（实际回复）
+        if '✦' in curr_line_stripped and '✻' not in curr_line_stripped and '✹' not in curr_line_stripped:
+            return '✦'
+
+        # 检测 ✻ 标记（思考、工具调用等）
+        if '✻' in curr_line_stripped:
+            return '✻'
+
+        return None
     
     def _filter_thinking_messages(self, message: str) -> str:
         """过滤思考消息（以 * 开头的行）。
