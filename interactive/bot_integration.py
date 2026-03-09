@@ -612,7 +612,12 @@ class BotIntegration:
             # 步骤1：扫描用户提问，定位当前对话范围（找到最后一个用户提问）
             current_conversation_start = 0
             for i in range(len(lines) - 1, -1, -1):
-                if lines[i].strip().startswith('>') and len(lines[i].strip()) > 1:
+                line_stripped = lines[i].strip()
+                # 检查是否是用户提问（以 > 开头，并且不是输入提示符）
+                if line_stripped.startswith('>') and len(line_stripped) > 1:
+                    # 跳过输入提示符
+                    if line_stripped == '>   输入消息或@文件路径':
+                        continue
                     current_conversation_start = i
                     logger.debug(f"[BotIntegration] 找到最后一个用户提问，从第{i+1}行开始")
                     break
