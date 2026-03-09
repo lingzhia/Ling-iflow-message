@@ -54,6 +54,8 @@ class BotIntegration:
         self._sent_marker_ids: set = set()  # 已发送的消息标识（前10字符）
         self._last_sent_marker_id: str = ""  # 最后发送的消息标识
         self._current_marker: Optional[str] = None  # 当前正在处理的标记
+        self._sent_message_hashes: set = set()  # 已发送的消息哈希（用于去重）
+        self._sent_markers: set = set()  # 已发送的标记哈希（用于 fallback 机制）
         self.iflow_controller = IFlowController(tmux_session)
         
         # 命令前缀
@@ -328,6 +330,8 @@ class BotIntegration:
             self._sent_marker_ids.clear()
             self._last_sent_marker_id = ""
             self._current_marker = None
+            self._sent_message_hashes.clear()
+            self._sent_markers.clear()
 
             # 记录初始消息的标识，避免发送旧消息
             for message in initial_messages:
