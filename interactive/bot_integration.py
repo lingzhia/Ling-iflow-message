@@ -903,7 +903,10 @@ class BotIntegration:
             if '✦' in msg.get('full_marker', '') and '✻' not in msg.get('full_marker', ''):
                 content = msg.get('content', '').strip()
                 if content:
-                    merged_lines.append(content)
+                    # 清理消息内容，去除 iflow 的 UI 元素
+                    cleaned_content = self._clean_message_content(content)
+                    if cleaned_content.strip():
+                        merged_lines.append(cleaned_content)
 
         # 直接换行连接，无分隔符
         return '\n'.join(merged_lines)
