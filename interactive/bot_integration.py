@@ -726,7 +726,17 @@ class BotIntegration:
                             })
             
             logger.debug(f"[BotIntegration] 提取完成，共 {len(messages)} 条消息，过滤后 {len(filtered_messages)} 条，生成中: {is_generating}")
-            
+
+            # 验证所有消息的 content 都是字符串
+            for i, msg in enumerate(filtered_messages):
+                if not isinstance(msg.get('content'), str):
+                    logger.error(f"[BotIntegration] 消息 {i+1} 的 content 不是字符串: type={type(msg.get('content'))}, value={msg.get('content')}")
+                    # 尝试转换为字符串
+                    try:
+                        msg['content'] = str(msg['content'])
+                    except Exception as e:
+                        logger.error(f"[BotIntegration] 无法转换消息 {i+1} 的 content 为字符串: {e}")
+
             return filtered_messages, is_generating, generation_time
             
         except Exception as e:
