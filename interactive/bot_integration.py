@@ -741,9 +741,9 @@ class BotIntegration:
                     
                     # 开始新消息
                     current_marker = line.strip()
-                    # 提取前10个字符作为唯一标识
+                    # 使用完整内容作为唯一标识（避免前10字符重复的问题）
                     clean_marker = line.replace('✦', '').replace('✻', '').strip()
-                    current_marker_id = clean_marker[:10] if clean_marker else ''
+                    current_marker_id = clean_marker if clean_marker else ''
                     current_message = [line.strip()]
                     
                     logger.debug(f"[BotIntegration] 检测到标记: {marker}, 标识: {current_marker_id}")
