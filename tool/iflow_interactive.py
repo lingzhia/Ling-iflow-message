@@ -99,6 +99,9 @@ class IFlowTester:
 
         # 配置 readline 历史记录
         self._setup_readline()
+        
+        # 测试模式：tool（工具模式）/ iflow（模拟 iflow 交互界面）
+        self.mode = "tool"
     
     def _setup_readline(self):
         """配置 readline 模块，提供命令行编辑功能。"""
@@ -131,7 +134,7 @@ class IFlowTester:
 
     def _setup_autocomplete(self):
         """配置命令自动补全。"""
-        commands = ['quit', 'exit', 'q', 'clear', 'status', 'help']
+        commands = ['quit', 'exit', 'q', 'clear', 'status', 'help', 'mode']
 
         def completer(text, state):
             """命令补全函数。"""
@@ -172,7 +175,7 @@ class IFlowTester:
         is_group = False
 
         try:
-            await self.bot.handle_message(message, "test_user", chat_id, is_group, source="tool")
+            await self.bot.handle_message(message, "test_user", chat_id, is_group, source=self.mode)
         except Exception as e:
             print(f"{COLOR_SYSTEM}✗ 处理失败: {e}{COLOR_RESET}")
             logger.error(f"处理消息失败: {e}", exc_info=True)
@@ -187,6 +190,7 @@ class IFlowTester:
         print(f"  quit/exit/q  - 退出程序")
         print(f"  clear        - 清屏")
         print(f"  status       - 查看状态")
+        print(f"  mode         - 切换测试模式（tool/iflow）")
         print(f"  help         - 显示帮助")
         print()
         print(f"{COLOR_SYSTEM}命令行功能:{COLOR_RESET}")
@@ -196,6 +200,9 @@ class IFlowTester:
         print(f"  Home/End     - 跳到行首/行尾")
         print(f"  Tab          - 命令补全")
         print(f"  Ctrl+C       - 退出程序")
+        print()
+        print(f"{COLOR_SYSTEM}当前模式: 工具模式（不发企业微信）{COLOR_RESET}")
+        print(f"{COLOR_SYSTEM}输入 'mode' 切换到 iflow 模拟模式（合并发送企业微信）{COLOR_RESET}")
         print("=" * 70)
         print()
         
@@ -227,6 +234,13 @@ class IFlowTester:
                 if user_input == 'help':
                     self._print_help()
                     continue
+                
+                if user_input == 'mode':
+                    # 切换模式
+                    self.mode = "iflow" if self.mode == "tool" else "tool"
+                    mode_name = "工具模式（不发企业微信）" if self.mode == "tool" else "iflow 模拟模式（合并发送企业微信）"
+                    print(f"{COLOR_SYSTEM}✓ 已切换到：{mode_name}{COLOR_RESET}")
+                    continue
 
                 if not user_input:
                     continue
@@ -255,6 +269,7 @@ class IFlowTester:
         print(f"  quit/exit/q  - 退出程序")
         print(f"  clear        - 清屏")
         print(f"  status       - 查看状态")
+        print(f"  mode         - 切换测试模式（tool/iflow）")
         print(f"  help         - 显示此帮助")
         print()
         print(f"{COLOR_SYSTEM}命令行功能:{COLOR_RESET}")
@@ -265,10 +280,19 @@ class IFlowTester:
         print(f"  Tab          - 命令补全")
         print(f"  Ctrl+C       - 退出程序")
         print()
+        print(f"{COLOR_SYSTEM}测试模式说明:{COLOR_RESET}")
+        print(f"  tool（默认） - 工具模式：消息只返回工具，不发企业微信")
+        print(f"  iflow        - iflow 模拟模式：模拟 iflow 交互界面，合并发送企业微信")
+        print()
 
     def _print_status(self):
         """打印状态信息。"""
         print(f"\n{COLOR_SYSTEM}=== 状态信息 ==={COLOR_RESET}")
+        
+        # 测试模式
+        mode_name = "工具模式（不发企业微信）" if self.mode == "tool" else "iflow 模拟模式（合并发送企业微信）"
+        print(f"测试模式: {mode_name}")
+        print()
 
         # iflow 状态
         session_info = self.controller.get_session_info()
