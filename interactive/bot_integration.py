@@ -295,6 +295,17 @@ class BotIntegration:
                 initial_count = len(initial_messages)
                 logger.debug(f"[BotIntegration] 等待后初始回复数量: {initial_count}, 生成中: {initial_generating}")
 
+            # 检查 iflow 是否正在生成中
+            if initial_generating:
+                logger.warning(f"[BotIntegration] iflow 正在生成中，无法发送新消息")
+                generation_time_msg = f" ({generation_time})" if generation_time else ""
+                await self.wechat_channel.send(
+                    f"⚠️ 当前正在生成中{generation_time_msg}，请稍后再试",
+                    chat_id,
+                    is_group=is_group
+                )
+                return
+
             # 发送命令到 iflow
             logger.info(f"[BotIntegration] 发送命令到 iflow")
             success = self.iflow_controller.send_message(command)
@@ -335,12 +346,19 @@ class BotIntegration:
             self._stable_count = 0
 
             # 实时监控并发送新消息
-            timeout = 120  # 120 次，每次 0.5 秒，总共 60 秒超时
+            max_timeout = 600  # 最大超时时间 10 分钟（绝对超时保险）
+            loop_count = 0
 
-            logger.info(f"[BotIntegration] 开始实时监控 iflow 回复，超时时间: {timeout}秒")
+            logger.info(f"[BotIntegration] 开始实时监控 iflow 回复，最大超时: {max_timeout}秒")
 
-            for i in range(timeout):
+            while True:
+                # 检查绝对超时
+                if loop_count * 0.5 >= max_timeout:
+                    logger.warning(f"[BotIntegration] 超时 ({max_timeout}秒)，停止监控")
+                    break
+
                 await asyncio.sleep(0.5)
+                loop_count += 1
 
                 # 获取当前回复和生成状态
                 current_messages, is_generating, generation_time = self._extract_reply_from_tmux()
@@ -556,11 +574,11 @@ class BotIntegration:
                 # 检测"生成中"标识
                 if '生成中' in line:
                     is_generating = True
-                    # 尝试提取时间记录
+                    # 尝试提取时间记录（支持 "1s", "2s" 等格式）
                     import re
-                    time_match = re.search(r'(\d{1,2}:\d{2}:\d{2})', line)
+                    time_match = re.search(r'(\d+)s', line)
                     if time_match:
-                        generation_time = time_match.group(1)
+                        generation_time = time_match.group(1) + 's'
                     logger.debug(f"[BotIntegration] 检测到生成中: {generation_time}")
                     continue
                 
