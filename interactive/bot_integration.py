@@ -473,7 +473,7 @@ class BotIntegration:
                                         logger.info(f"[BotIntegration] 更新最后发送的标记: {new_last_marker_id}")
                         
                         # 发送完成提示
-                        completion_message = "\n✅ 当前问题回答完毕"
+                        completion_message = "✅ 当前问题回答完毕"
                         await self.wechat_channel.send(completion_message, chat_id, is_group=is_group)
                         logger.info(f"[BotIntegration] 已发送回答完毕提示")
                         break
@@ -525,7 +525,7 @@ class BotIntegration:
                                 self._sent_markers.add(last_marker_hash)
 
                         # 发送完成提示
-                        completion_message = "\n✅ 当前问题回答完毕"
+                        completion_message = "✅ 当前问题回答完毕"
                         await self.wechat_channel.send(completion_message, chat_id, is_group=is_group)
                         logger.info(f"[BotIntegration] 已发送回答完毕提示")
                         # 重置计数器
