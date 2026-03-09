@@ -854,8 +854,32 @@ def bind(
     print_info(f"目标连接: {bot_config.name} → {tmux_session_name}")
     print()
     
+    # 检查目标 tmux 是否已有其他机器人连接
+    existing_bot = None
+    for b in bots_config.bots:
+        if b.tmux_session == tmux_session_name and b.name != bot_config.name:
+            existing_bot = b
+            break
+    
+    if existing_bot:
+        print_warning(f"检测到已有连接: {existing_bot.name} → {tmux_session_name}")
+        print_info(f"将断开旧连接: {existing_bot.name} → {tmux_session_name}")
+        
+        # 检查旧连接的机器人是否在运行
+        process_manager = ProcessManager(PROJECT_ROOT)
+        if process_manager.is_running(existing_bot.name):
+            print_info(f"  正在停止机器人: {existing_bot.name}")
+            if not process_manager.stop_bot(existing_bot.name):
+                print_error(f"停止机器人失败: {existing_bot.name}")
+                sys.exit(1)
+            time.sleep(1)
+        
+        # 断开旧连接（设置为空字符串）
+        existing_bot.tmux_session = ""
+        print_success(f"已断开连接: {existing_bot.name}")
+        print()
+    
     # 检查是否正在运行
-    process_manager = ProcessManager(PROJECT_ROOT)
     bot_running = process_manager.is_running(bot_config.name)
     tmux_running = check_tmux_session(tmux_session_name)
     
