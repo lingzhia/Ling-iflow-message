@@ -56,6 +56,8 @@ class BotIntegration:
         self._current_marker: Optional[str] = None  # 当前正在处理的标记
         self._sent_message_hashes: set = set()  # 已发送的消息哈希（用于去重）
         self._sent_markers: set = set()  # 已发送的标记哈希（用于 fallback 机制）
+        self._current_source: str = ""  # 当前正在处理的请求来源（wechat/tool/""）
+        self._pending_messages: list = []  # 待处理的未知来源消息
         self.iflow_controller = IFlowController(tmux_session)
         
         # 命令前缀
@@ -69,16 +71,18 @@ class BotIntegration:
         sender_id: str,
         chat_id: str,
         is_group: bool,
-        metadata: Optional[dict] = None
+        metadata: Optional[dict] = None,
+        source: str = "wechat"  # 新增参数：消息来源
     ) -> None:
         """处理入站消息。
-        
+
         Args:
             content: 消息内容
             sender_id: 发送者 ID
             chat_id: 聊天 ID
             is_group: 是否为群聊
             metadata: 元数据
+            source: 消息来源（wechat/tool）
         """
         try:
             # 解析命令
@@ -95,7 +99,8 @@ class BotIntegration:
                 is_group,
                 parsed["type"],
                 parsed.get("command"),
-                parsed.get("args")
+                parsed.get("args"),
+                source
             )            
         except Exception as e:
             logger.error(f"[BotIntegration] 处理消息错误: {e}", exc_info=True)
@@ -153,31 +158,33 @@ class BotIntegration:
         is_group: bool,
         cmd_type: str,
         command: Optional[str] = None,
-        args: Optional[str] = None
+        args: Optional[str] = None,
+        source: str = "wechat"  # 新增参数：消息来源
     ) -> None:
         """处理命令。
-        
+
         Args:
             chat_id: 聊天 ID
             is_group: 是否为群聊
             cmd_type: 命令类型
             command: 命令内容（仅 run 类型）
             args: 命令参数
+            source: 消息来源（wechat/tool）
         """
         if cmd_type == "help":
             await self._send_help(chat_id, is_group)
-        
+
         elif cmd_type == "status":
             await self._send_status(chat_id, is_group)
-        
+
         elif cmd_type == "new":
             await self._create_new_session(chat_id, is_group)
-        
+
         elif cmd_type == "sessions":
             await self._send_sessions(chat_id, is_group)
-        
+
         elif cmd_type == "run":
-            await self._run_command(chat_id, is_group, command)
+            await self._run_command(chat_id, is_group, command, source)
         
         else:
             await self._send_help(chat_id, is_group)
@@ -257,15 +264,19 @@ class BotIntegration:
         message = self.session_manager.get_sessions_message()
         await self.wechat_channel.send(message, chat_id, is_group=is_group)
     
-    async def _run_command(self, chat_id: str, is_group: bool, command: str) -> None:
+    async def _run_command(self, chat_id: str, is_group: bool, command: str, source: str = "wechat") -> None:
         """运行 iFlow 命令（基于标记的延迟发送版本）。
 
         Args:
             chat_id: 聊天 ID
             is_group: 是否为群聊
             command: 要执行的命令
+            source: 消息来源（wechat/tool）
         """
-        logger.info(f"[BotIntegration] 执行命令: chat_id={chat_id}, is_group={is_group}, command={command[:100]}")
+        logger.info(f"[BotIntegration] 执行命令: chat_id={chat_id}, is_group={is_group}, command={command[:100]}, source={source}")
+
+        # 设置当前来源
+        self._current_source = source
 
         if not command:
             logger.warning("[BotIntegration] 命令为空")
@@ -491,15 +502,45 @@ class BotIntegration:
                         if i < len(current_messages):
                             message_dict = current_messages[i]
                             message = message_dict['content']
+                            marker_id = message_dict['marker_id']
                             msg_hash = hash(message.strip())
 
-                            if msg_hash not in self._sent_message_hashes:
-                                logger.info(f"[BotIntegration] 发送消息 {i+1}: {message[:50]}")
-                                await self._send_message_content(message, chat_id, is_group)
-                                self._sent_message_hashes.add(msg_hash)
+                            # 根据来源决定是否发送
+                            if self._current_source == "tool":
+                                # 工具来源：只返回给工具，不发企业微信
+                                logger.debug(f"[BotIntegration] 工具来源消息，不发送到企业微信")
+                            elif self._current_source == "wechat":
+                                # 企业微信来源：逐条发送
+                                if msg_hash not in self._sent_message_hashes:
+                                    logger.info(f"[BotIntegration] 发送消息 {i+1}: {message[:50]}")
+                                    await self._send_message_content(message, chat_id, is_group)
+                                    self._sent_message_hashes.add(msg_hash)
 
                 # 更新最后的消息计数
                 last_message_count = current_count
+
+                # 检测未知来源的消息（iflow 交互界面）
+                unknown_messages = []
+                for msg in current_messages:
+                    marker_id = msg.get('marker_id', '')
+                    if marker_id and marker_id not in self._sent_marker_ids:
+                        unknown_messages.append(msg)
+
+                if unknown_messages and self._current_source == "":
+                    # 没有当前请求来源，判断为 iflow 交互界面的消息
+                    logger.info(f"[BotIntegration] 检测到 iflow 交互界面消息，共 {len(unknown_messages)} 条")
+
+                    # 合并所有 ✦ 标记的消息
+                    merged_content = self._merge_messages(unknown_messages)
+
+                    # 发送到企业微信
+                    await self.wechat_channel.send(merged_content, self.wechat_channel.user_id, is_group=False)
+
+                    # 标记为已发送
+                    for msg in unknown_messages:
+                        marker_id = msg.get('marker_id', '')
+                        if marker_id:
+                            self._sent_marker_ids.add(marker_id)
 
                 # 如果从来没有检测到"生成中"，使用稳定检测作为 fallback
                 if not last_generating and current_count == last_message_count:
@@ -539,6 +580,9 @@ class BotIntegration:
                 chat_id,
                 is_group=is_group
             )
+        finally:
+            # 清理当前来源
+            self._current_source = ""
 
     def _clean_message_content(self, content: str) -> str:
         """清理消息内容，去除 iflow 的 UI 元素。
@@ -832,7 +876,7 @@ class BotIntegration:
     
     async def _send_error(self, chat_id: str, is_group: bool, error_message: str) -> None:
         """发送错误消息。
-        
+
         Args:
             chat_id: 聊天 ID
             is_group: 是否为群聊
@@ -840,3 +884,26 @@ class BotIntegration:
         """
         message = f"❌ {error_message}"
         await self.wechat_channel.send(message, chat_id, is_group=is_group)
+
+    def _merge_messages(self, messages: list) -> str:
+        """合并多条消息为一条。
+
+        只合并 ✦ 标记的消息，消息之间直接换行连接。
+
+        Args:
+            messages: 消息列表
+
+        Returns:
+            合并后的消息
+        """
+        merged_lines = []
+
+        for msg in messages:
+            # 只处理 ✦ 标记的消息
+            if '✦' in msg.get('full_marker', '') and '✻' not in msg.get('full_marker', ''):
+                content = msg.get('content', '').strip()
+                if content:
+                    merged_lines.append(content)
+
+        # 直接换行连接，无分隔符
+        return '\n'.join(merged_lines)

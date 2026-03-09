@@ -172,7 +172,7 @@ class IFlowTester:
         is_group = False
 
         try:
-            await self.bot.handle_message(message, "test_user", chat_id, is_group)
+            await self.bot.handle_message(message, "test_user", chat_id, is_group, source="tool")
         except Exception as e:
             print(f"{COLOR_SYSTEM}✗ 处理失败: {e}{COLOR_RESET}")
             logger.error(f"处理消息失败: {e}", exc_info=True)
