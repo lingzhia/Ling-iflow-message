@@ -481,7 +481,8 @@ class BotIntegration:
                     # 发送新增的消息（从 last_message_count 到 current_count-1）
                     for i in range(last_message_count, current_count):
                         if i < len(current_messages):
-                            message = current_messages[i]
+                            message_dict = current_messages[i]
+                            message = message_dict['content']
                             msg_hash = hash(message.strip())
 
                             if msg_hash not in self._sent_message_hashes:
