@@ -497,6 +497,47 @@ class BotIntegration:
                 is_group=is_group
             )
 
+    def _clean_message_content(self, content: str) -> str:
+        """清理消息内容，去除 iflow 的 UI 元素。
+
+        Args:
+            content: 原始消息内容
+
+        Returns:
+            清理后的消息内容
+        """
+        if not content:
+            return content
+
+        # 查找分隔符（虚线、横线等）
+        separators = [
+            '---',
+            '══',
+            '────────',
+            '────────────────',
+            '════════════════',
+            '══════════════════════════',
+            '══════════════════════════════════════',
+            '══════════════════════════════════════════════════',
+            '══════════════════════════════════════════════════════════════',
+            '══════════════════════════════════════════════════════════════════════════',
+        ]
+
+        # 找到第一个分隔符的位置
+        first_separator_pos = -1
+        for sep in separators:
+            pos = content.find(sep)
+            if pos != -1 and (first_separator_pos == -1 or pos < first_separator_pos):
+                first_separator_pos = pos
+
+        # 如果找到分隔符，只保留之前的内容
+        if first_separator_pos != -1:
+            cleaned_content = content[:first_separator_pos].strip()
+            logger.debug(f"[BotIntegration] 清理消息：移除 {len(content) - len(cleaned_content)} 个字符")
+            return cleaned_content
+
+        return content.strip()
+
     async def _send_message_content(self, content: str, chat_id: str, is_group: bool) -> None:
         """发送消息内容（包含过滤和分段）。
 
@@ -505,12 +546,15 @@ class BotIntegration:
             chat_id: 聊天 ID
             is_group: 是否为群聊
         """
+        # 清理消息内容，去除 iflow 的 UI 元素
+        cleaned_content = self._clean_message_content(content)
+        
         # 根据配置过滤思考消息
         if self.filter_thinking:
-            filtered_message = self._filter_thinking_messages(content)
+            filtered_message = self._filter_thinking_messages(cleaned_content)
             logger.info(f"[BotIntegration] 消息过滤后长度: {len(filtered_message)}")
         else:
-            filtered_message = content
+            filtered_message = cleaned_content
 
         if filtered_message.strip():
             # 分段发送（避免超过长度限制）
