@@ -208,6 +208,10 @@ class WechatWorkChannel(BaseChannel):
         # 后台任务
         self._background_tasks: Set[asyncio.Task] = set()
         
+        # 消息去重缓存（使用 MsgId）
+        self._processed_msg_ids: Dict[str, float] = {}  # msg_id -> timestamp
+        self._msg_id_cache_ttl = 3600  # 消息ID缓存保留1小时
+        
         # 回调服务
         self._callback_runner = None
     
@@ -336,17 +340,44 @@ class WechatWorkChannel(BaseChannel):
             return web.Response(text=f"error: {e}", status=500)
     
     async def _handle_callback_message(self, request: "web.Request") -> "web.Response":
-        """处理企业微信消息回调（POST 请求）。"""
+        """处理企业微信消息回调（POST 请求）。
+        
+        重要：立即返回 "success" 响应，避免触发企业微信重试。
+        消息处理在后台任务中异步执行。
+        """
         from aiohttp import web
         
         try:
             body = await request.read()
             query_params = dict(request.query)
-            result = await self.handle_callback(body, query_params)
-            return web.Response(text=result)
-        except Exception as e:
-            logger.error(f"[{self.name}] Error handling callback: {e}")
+            
+            # 立即创建后台任务处理消息
+            # 这样可以快速返回响应，避免企业微信重试
+            task = asyncio.create_task(self._process_callback_async(body, query_params))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+            
+            # 立即返回 success，告诉企业微信已收到消息
+            logger.debug(f"[{self.name}] Returning success immediately")
             return web.Response(text="success")
+            
+        except Exception as e:
+            logger.error(f"[{self.name}] Error in callback handler: {e}")
+            # 即使出错也要返回 success，避免企业微信重试
+            return web.Response(text="success")
+    
+    async def _process_callback_async(self, body: bytes, query_params: dict) -> None:
+        """异步处理回调（在后台任务中执行）。
+        
+        Args:
+            body: 请求体
+            query_params: 查询参数
+        """
+        try:
+            result = await self.handle_callback(body, query_params)
+            logger.debug(f"[{self.name}] Callback processed: {result}")
+        except Exception as e:
+            logger.error(f"[{self.name}] Error in async callback processing: {e}", exc_info=True)
     
     async def stop(self) -> None:
         """停止企业微信 Bot。"""
@@ -487,6 +518,26 @@ class WechatWorkChannel(BaseChannel):
         from_user = root.findtext("FromUserName", "")
         to_user = root.findtext("ToUserName", "")
         create_time = root.findtext("CreateTime", "0")
+        msg_id = root.findtext("MsgId", "")
+        
+        # 消息去重检查
+        if msg_id:
+            import time
+            current_time = time.time()
+            
+            # 清理过期的消息ID缓存
+            self._clean_expired_msg_ids(current_time)
+            
+            # 检查是否已经处理过此消息
+            if msg_id in self._processed_msg_ids:
+                logger.info(f"[{self.name}] Ignoring duplicate message: MsgId={msg_id}")
+                return
+            
+            # 记录已处理的消息ID
+            self._processed_msg_ids[msg_id] = current_time
+            logger.debug(f"[{self.name}] New message: MsgId={msg_id}")
+        else:
+            logger.warning(f"[{self.name}] Message without MsgId, cannot deduplicate")
         
         # 解析 chat_id
         chat_type = root.findtext("ChatId", "")  # 群聊 ID
@@ -550,6 +601,27 @@ class WechatWorkChannel(BaseChannel):
             "is_group": is_group,
         })
     
+    def _clean_expired_msg_ids(self, current_time: float) -> None:
+        """清理过期的消息ID缓存。
+        
+        Args:
+            current_time: 当前时间戳
+        """
+        if not self._processed_msg_ids:
+            return
+        
+        # 删除超过TTL的消息ID
+        expired_ids = [
+            msg_id for msg_id, timestamp in self._processed_msg_ids.items()
+            if current_time - timestamp > self._msg_id_cache_ttl
+        ]
+        
+        for msg_id in expired_ids:
+            del self._processed_msg_ids[msg_id]
+        
+        if expired_ids:
+            logger.debug(f"[{self.name}] Cleaned {len(expired_ids)} expired message IDs")
+    
     async def send(self, content: str, chat_id: Optional[str] = None, **kwargs) -> bool:
         """发送消息。
         
@@ -599,16 +671,16 @@ class WechatWorkChannel(BaseChannel):
         
         url = f"{self.API_BASE}/message/send"
         
-        # 构建消息体
+        # 构建消息体（使用 text 格式，避免 Markdown 格式不一致的问题）
         if is_group:
             msg_data = {
                 "touser": "",
                 "toparty": "",
                 "totag": "",
                 "chatid": chat_id,
-                "msgtype": "markdown",
+                "msgtype": "text",
                 "agentid": int(self.config.agent_id),
-                "markdown": {
+                "text": {
                     "content": content,
                 },
                 "safe": 0,
@@ -618,9 +690,9 @@ class WechatWorkChannel(BaseChannel):
                 "touser": chat_id,
                 "toparty": "",
                 "totag": "",
-                "msgtype": "markdown",
+                "msgtype": "text",
                 "agentid": int(self.config.agent_id),
-                "markdown": {
+                "text": {
                     "content": content,
                 },
                 "safe": 0,

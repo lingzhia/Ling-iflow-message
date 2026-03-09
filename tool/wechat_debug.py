@@ -21,6 +21,11 @@ import asyncio
 import argparse
 import sys
 from pathlib import Path
+
+# 添加项目根目录到 sys.path，解决模块导入问题
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root))
+
 from loguru import logger
 
 from config.loader import load_config
@@ -30,13 +35,19 @@ from channels.wechat_work import WechatWorkChannel
 class WechatTester:
     """企业微信测试器。"""
 
-    def __init__(self, config_path: str = "config.json"):
+    def __init__(self, config_path: str = None):
         """初始化测试器。
 
         Args:
-            config_path: 配置文件路径
+            config_path: 配置文件路径（可选，默认使用项目根目录的 config.json）
         """
-        self.config = load_config(Path(config_path))
+        if config_path is None:
+            # 使用项目根目录的 config.json
+            config_path = project_root / "config.json"
+        else:
+            config_path = Path(config_path)
+        
+        self.config = load_config(config_path)
         self.channel = WechatWorkChannel(self.config.wechat_work)
         self.running = False
 
@@ -176,8 +187,8 @@ async def main():
 
     parser.add_argument(
         "--config", "-c",
-        default="config.json",
-        help="配置文件路径（默认: config.json）"
+        default=None,
+        help="配置文件路径（默认: 项目根目录/config.json）"
     )
 
     subparsers = parser.add_subparsers(dest="command", help="测试命令")

@@ -54,7 +54,7 @@ def load_config(config_path: Optional[Path] = None, auto_create: bool = True) ->
 
 
 def _create_default_config(config_path: Path) -> None:
-    """创建默认配置文件。"""
+    """创建默认配置文件（使用原子写入）。"""
     config_path.parent.mkdir(parents=True, exist_ok=True)
     
     default_config = {
@@ -80,15 +80,24 @@ def _create_default_config(config_path: Path) -> None:
         "log_file": ""
     }
     
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(default_config, f, indent=2, ensure_ascii=False)
-    
-    logger.info(f"在 {config_path} 创建默认配置")
+    # 使用临时文件进行原子写入
+    temp_path = config_path.with_suffix('.tmp')
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(default_config, f, indent=2, ensure_ascii=False)
+        # 原子性重命名
+        temp_path.replace(config_path)
+        logger.info(f"在 {config_path} 创建默认配置")
+    except Exception as e:
+        # 如果写入失败，清理临时文件
+        if temp_path.exists():
+            temp_path.unlink()
+        raise e
 
 
 def save_config(config: InteractiveConfig, config_path: Optional[Path] = None) -> None:
     """
-    保存配置到文件。
+    保存配置到文件（使用原子写入）。
     
     Args:
         config: 要保存的配置对象。
@@ -99,7 +108,17 @@ def save_config(config: InteractiveConfig, config_path: Optional[Path] = None) -
     
     config_path.parent.mkdir(parents=True, exist_ok=True)
     
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(config.model_dump(), f, indent=2, ensure_ascii=False)
-    
-    logger.info(f"配置已保存到 {config_path}")
+    # 使用临时文件进行原子写入
+    temp_path = config_path.with_suffix('.tmp')
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(config.model_dump(), f, indent=2, ensure_ascii=False)
+        # 原子性重命名
+        temp_path.replace(config_path)
+        logger.info(f"配置已保存到 {config_path}")
+    except Exception as e:
+        # 如果写入失败，清理临时文件
+        if temp_path.exists():
+            temp_path.unlink()
+        logger.error(f"保存配置失败: {e}")
+        raise

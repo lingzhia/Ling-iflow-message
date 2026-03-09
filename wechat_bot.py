@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from loguru import logger
 
-from config.loader import ConfigLoader
+from config.loader import load_config as load_project_config
 from config.schema import WechatWorkConfig
 from channels.wechat_work import WechatWorkChannel
 from interactive.bot_integration import BotIntegration
@@ -33,8 +33,7 @@ class WechatBot:
             config_path: 配置文件路径
         """
         # 加载配置
-        self.config_loader = ConfigLoader(config_path)
-        self.config = self.config_loader.load()
+        self.config = load_project_config(Path(config_path))
         
         # 初始化组件
         self.wechat_channel = None
@@ -77,7 +76,8 @@ class WechatBot:
         self.bot_integration = BotIntegration(
             wechat_channel=self.wechat_channel,
             tmux_session=self.config.tmux_session,
-            workspace=self.config.workspace
+            workspace=self.config.workspace,
+            filter_thinking=self.config.filter_thinking
         )
         
         # 设置消息处理器
@@ -91,6 +91,9 @@ class WechatBot:
         
         # 显示启动信息
         self._print_startup_info(wechat_config)
+        
+        # 发送启动通知
+        await self._send_startup_notification(wechat_config)
         
         logger.info("[WechatBot] 启动完成，等待企业微信消息...")
         print(f"{COLOR_GREEN}[成功] iFlow 企业微信机器人已启动！{COLOR_RESET}")
@@ -128,8 +131,43 @@ class WechatBot:
         print("=" * 70)
         print()
     
+    async def _send_startup_notification(self, wechat_config: WechatWorkConfig) -> None:
+        """发送启动通知。"""
+        from datetime import datetime
+        
+        try:
+            if self.wechat_channel and wechat_config.user_id:
+                startup_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                notification = f"""**🤖 iFlow 企业微信机器人已启动**
+
+📅 启动时间: {startup_time}
+📁 工作目录: {self.config.workspace}
+💻 tmux 会话: {self.config.tmux_session}
+🌐 回调端口: {wechat_config.callback_port}
+
+✅ 服务运行正常，可以开始使用！
+
+---
+可用命令:
+- 直接发送消息：执行 iFlow 命令
+- /run <命令>：执行 iFlow 命令
+- /new：开始新会话
+- /sessions：查看历史会话
+- /status：查看服务状态
+- /help：显示帮助
+"""
+                
+                await self.wechat_channel.send(notification, wechat_config.user_id, is_group=False)
+                logger.info("[WechatBot] 启动通知已发送")
+        except Exception as e:
+            logger.error(f"[WechatBot] 发送启动通知失败: {e}")
+    
     async def stop(self) -> None:
         """停止机器人。"""
+        # 发送关闭通知
+        await self._send_shutdown_notification()
+        
         self.running = False
         
         if self.wechat_channel:
@@ -137,6 +175,32 @@ class WechatBot:
         
         logger.info("[WechatBot] 已停止")
         print(f"{COLOR_YELLOW}[停止] iFlow 企业微信机器人已停止{COLOR_RESET}")
+    
+    async def _send_shutdown_notification(self) -> None:
+        """发送关闭通知。"""
+        from datetime import datetime
+        
+        try:
+            if self.wechat_channel and self.config.wechat_work and self.config.wechat_work.user_id:
+                shutdown_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                notification = f"""**🛑 iFlow 企业微信机器人已停止**
+
+📅 关闭时间: {shutdown_time}
+📁 工作目录: {self.config.workspace}
+💻 tmux 会话: {self.config.tmux_session}
+
+---
+如需重新启动，请执行:
+```bash
+python manage.py start
+```
+"""
+                
+                await self.wechat_channel.send(notification, self.config.wechat_work.user_id, is_group=False)
+                logger.info("[WechatBot] 关闭通知已发送")
+        except Exception as e:
+            logger.error(f"[WechatBot] 发送关闭通知失败: {e}")
     
     async def _handle_shutdown(self) -> None:
         """处理关闭信号。"""
@@ -170,6 +234,20 @@ async def main():
     else:
         logger.remove()
         logger.add(sys.stderr, level="INFO")
+    
+    # 添加文件日志
+    from pathlib import Path
+    log_dir = Path(__file__).parent / "logs"
+    log_dir.mkdir(exist_ok=True)
+    
+    logger.add(
+        log_dir / "wechat_bot_{time:YYYY-MM-DD}.log",
+        level="DEBUG",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | {message}",
+        rotation="00:00",
+        retention="7 days",
+        encoding="utf-8"
+    )
     
     # 创建机器人实例
     bot = WechatBot(config_path=args.config)

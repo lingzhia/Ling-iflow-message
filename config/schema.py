@@ -81,6 +81,10 @@ class InteractiveConfig(BaseSettings):
     log_level: str = "INFO"
     log_file: str = ""
     
+    # 消息过滤配置
+    filter_thinking: bool = True
+    """是否过滤 iflow 思考消息（以 * 开头的行）。"""
+    
     def get_workspace_path(self) -> Path:
         """获取工作目录路径。"""
         return Path(self.workspace).expanduser()
