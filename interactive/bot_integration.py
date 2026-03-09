@@ -388,24 +388,23 @@ class BotIntegration:
                         # 应用新的发送规则
                         if len(self._sent_marker_ids) == 0:
                             # 场景1：没有发送记录
-                            if final_count >= 2:
-                                # 除最后一条不发送外，前面的每一条都发送
-                                for i in range(final_count - 1):
-                                    msg = final_messages[i]
-                                    marker_id = msg.get('marker_id', '')
-                                    
-                                    logger.info(f"[BotIntegration] 发送消息 {i+1}/{final_count-1}: 标识={marker_id}")
-                                    await self._send_message_content(msg['content'], chat_id, is_group)
-                                    self._sent_marker_ids.add(marker_id)
+                            # 生成完成后，发送所有消息（包括最后一条）
+                            for i in range(final_count):
+                                msg = final_messages[i]
+                                marker_id = msg.get('marker_id', '')
                                 
-                                # 记录倒数第二个标记（最后一条消息的唯一标识）
-                                if final_count >= 2:
-                                    last_marker_id = final_messages[final_count - 2].get('marker_id', '')
-                                    self._last_sent_marker_id = last_marker_id
-                                    logger.info(f"[BotIntegration] 记录最后发送的标记: {last_marker_id}")
+                                logger.info(f"[BotIntegration] 发送消息 {i+1}/{final_count}: 标识={marker_id}")
+                                await self._send_message_content(msg['content'], chat_id, is_group)
+                                self._sent_marker_ids.add(marker_id)
+                            
+                            # 记录最后一个标记
+                            if final_count > 0:
+                                last_marker_id = final_messages[final_count - 1].get('marker_id', '')
+                                self._last_sent_marker_id = last_marker_id
+                                logger.info(f"[BotIntegration] 记录最后发送的标记: {last_marker_id}")
                         else:
                             # 场景2：有发送记录
-                            if final_count >= 2 and hasattr(self, '_last_sent_marker_id'):
+                            if final_count >= 1 and hasattr(self, '_last_sent_marker_id'):
                                 # 从 tmux 消息中定位到已发送的消息标识
                                 sent_index = -1
                                 for i, msg in enumerate(final_messages):
@@ -413,12 +412,12 @@ class BotIntegration:
                                         sent_index = i
                                         break
                                 
-                                # 如果找到已发送的消息，检查其后的标记数量
+                                # 如果找到已发送的消息，发送其后所有未发送的消息（包括最后一条）
                                 if sent_index >= 0:
                                     remaining_count = final_count - sent_index - 1
-                                    if remaining_count >= 2:
-                                        # 保留最后一个，发送其他消息
-                                        for i in range(sent_index + 1, final_count - 1):
+                                    if remaining_count >= 1:
+                                        # 发送所有未发送的消息（sent_index+1 到 final_count-1）
+                                        for i in range(sent_index + 1, final_count):
                                             msg = final_messages[i]
                                             marker_id = msg.get('marker_id', '')
                                             
@@ -427,7 +426,7 @@ class BotIntegration:
                                             self._sent_marker_ids.add(marker_id)
                                         
                                         # 更新最后发送的标记
-                                        new_last_marker_id = final_messages[final_count - 2].get('marker_id', '')
+                                        new_last_marker_id = final_messages[final_count - 1].get('marker_id', '')
                                         self._last_sent_marker_id = new_last_marker_id
                                         logger.info(f"[BotIntegration] 更新最后发送的标记: {new_last_marker_id}")
                         
