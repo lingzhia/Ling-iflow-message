@@ -506,7 +506,8 @@ class BotIntegration:
 
                         # 发送最后一个消息
                         if current_messages:
-                            last_message = current_messages[-1]
+                            last_message_dict = current_messages[-1]
+                            last_message = last_message_dict['content']
                             last_marker_hash = hash(last_message.strip())
 
                             if last_marker_hash not in self._sent_markers:
