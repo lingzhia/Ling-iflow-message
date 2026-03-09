@@ -89,6 +89,12 @@ class WechatBot:
         
         await self.wechat_channel.start()
         
+        # 启动后台监控（检测 iflow 交互界面的消息）
+        logger.info("[WechatBot] 正在启动后台监控...")
+        print(f"{COLOR_BLUE}[启动] 正在启动后台监控...{COLOR_RESET}")
+        
+        asyncio.create_task(self.bot_integration.start_background_monitor())
+        
         # 显示启动信息
         self._print_startup_info(wechat_config)
         

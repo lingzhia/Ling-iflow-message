@@ -907,3 +907,60 @@ class BotIntegration:
 
         # 直接换行连接，无分隔符
         return '\n'.join(merged_lines)
+
+    async def start_background_monitor(self) -> None:
+        """启动后台监控，检测 iflow 交互界面的消息。
+
+        这个方法会在后台持续运行，检测用户在 tmux iflow 中直接输入的消息，
+        并将这些消息合并后发送到企业微信。
+        """
+        logger.info("[BotIntegration] 启动后台监控")
+        
+        last_known_messages = set()
+        
+        while True:
+            try:
+                # 等待一段时间再检查（避免频繁检查）
+                await asyncio.sleep(5)
+                
+                # 提取当前所有消息
+                current_messages, is_generating, generation_time = self._extract_reply_from_tmux()
+                
+                # 获取当前所有消息的 marker_id
+                current_marker_ids = set()
+                for msg in current_messages:
+                    marker_id = msg.get('marker_id', '')
+                    if marker_id:
+                        current_marker_ids.add(marker_id)
+                
+                # 检测新的消息（不在 last_known_messages 中）
+                new_messages = []
+                for msg in current_messages:
+                    marker_id = msg.get('marker_id', '')
+                    if marker_id and marker_id not in last_known_messages:
+                        new_messages.append(msg)
+                
+                # 如果有新消息且不在处理中
+                if new_messages and not is_generating and self._current_source == "":
+                    logger.info(f"[BotIntegration] 后台监控检测到新消息: {len(new_messages)} 条")
+                    
+                    # 合并所有 ✦ 标记的消息
+                    merged_content = self._merge_messages(new_messages)
+                    
+                    if merged_content.strip():
+                        # 发送到企业微信
+                        await self.wechat_channel.send(merged_content, self.wechat_channel.user_id, is_group=False)
+                        logger.info(f"[BotIntegration] 已发送 iflow 交互界面消息到企业微信")
+                    
+                    # 更新已知消息
+                    last_known_messages.update(current_marker_ids)
+                else:
+                    # 定期更新已知消息（避免内存泄漏）
+                    if len(last_known_messages) > 1000:
+                        last_known_messages = current_marker_ids
+                    else:
+                        last_known_messages = current_marker_ids
+                
+            except Exception as e:
+                logger.error(f"[BotIntegration] 后台监控错误: {e}", exc_info=True)
+                await asyncio.sleep(10)  # 出错后等待一段时间再继续
