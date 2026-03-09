@@ -1,0 +1,22 @@
+{
+  "bots": [
+    {
+      "name": "bot2",
+      "enabled": true,
+      "corp_id": "ww6e6c8f55511c0100",
+      "agent_id": "1000003",
+      "secret": "hs4CXo6rxBE_9a1CRt861VH3SeTVOoDJTD-tzsK6Bvs",
+      "user_id": "YuLingZhi",
+      "token": "cLtI1i0tAG6iB7LJkpT",
+      "encoding_aes_key": "q83ezpTykPQfzNzdfxQJFYCrdYZrImi2aTivK8FjUDB",
+      "callback_port": 8788,
+      "callback_host": "0.0.0.0",
+      "stream_mode": false,
+      "poll_interval": 5,
+      "allow_from": [],
+      "group_policy": "mention",
+      "group_allow_from": [],
+      "tmux_session": "iflow2"
+    }
+  ]
+}

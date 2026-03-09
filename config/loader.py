@@ -9,6 +9,9 @@ from loguru import logger
 
 from .schema import InteractiveConfig
 
+# 项目根目录
+PROJECT_ROOT = Path(__file__).parent.parent
+
 
 def get_config_dir() -> Path:
     """获取配置目录。"""
