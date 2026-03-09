@@ -296,7 +296,7 @@ class BotIntegration:
         try:
             # 在发送命令之前，先提取初始回复（作为基准）
             logger.debug(f"[BotIntegration] 获取发送前的初始回复")
-            initial_messages, initial_generating, generation_time = self._extract_reply_from_tmux()
+            initial_messages, initial_generating, generation_time, _ = self._extract_reply_from_tmux()
             initial_count = len(initial_messages)
             logger.debug(f"[BotIntegration] 初始回复数量: {initial_count}, 生成中: {initial_generating}")
 
@@ -304,7 +304,7 @@ class BotIntegration:
             if initial_generating:
                 logger.info(f"[BotIntegration] iflow 正在生成中，等待完成...")
                 await asyncio.sleep(2)
-                initial_messages, initial_generating, generation_time = self._extract_reply_from_tmux()
+                initial_messages, initial_generating, generation_time, _ = self._extract_reply_from_tmux()
                 initial_count = len(initial_messages)
                 logger.debug(f"[BotIntegration] 等待后初始回复数量: {initial_count}, 生成中: {initial_generating}")
 
@@ -376,7 +376,7 @@ class BotIntegration:
                 loop_count += 1
 
                 # 获取当前回复和生成状态
-                current_messages, is_generating, generation_time = self._extract_reply_from_tmux()
+                current_messages, is_generating, generation_time, _ = self._extract_reply_from_tmux()
                 current_count = len(current_messages)
 
                 # 检查是否在生成中
@@ -394,7 +394,7 @@ class BotIntegration:
                     await asyncio.sleep(1)
 
                     # 再次检查，确保生成完成
-                    final_messages, final_generating, _ = self._extract_reply_from_tmux()
+                    final_messages, final_generating, _, _ = self._extract_reply_from_tmux()
                     final_count = len(final_messages)
 
                     if not final_generating:
@@ -565,10 +565,8 @@ class BotIntegration:
                                 await self._send_message_content(last_message, chat_id, is_group)
                                 self._sent_markers.add(last_marker_hash)
 
-                        # 发送完成提示
-                        completion_message = "✅ 当前问题回答完毕"
-                        await self.wechat_channel.send(completion_message, chat_id, is_group=is_group)
-                        logger.info(f"[BotIntegration] 已发送回答完毕提示")
+                        # 回复完成，退出循环（不发送"回答完毕"提示）
+                        logger.info(f"[BotIntegration] 回复完成，退出等待")
                         # 重置计数器
                         self._stable_count = 0
                         break
@@ -696,6 +694,7 @@ class BotIntegration:
             
             # 步骤1：扫描用户提问，定位当前对话范围（找到最后一个用户提问）
             current_conversation_start = 0
+            user_question = ""  # 用户问题
             for i in range(len(lines) - 1, -1, -1):
                 line_stripped = lines[i].strip()
                 # 检查是否是用户提问（以 > 开头，并且不是输入提示符）
@@ -704,7 +703,9 @@ class BotIntegration:
                     if line_stripped == '>   输入消息或@文件路径':
                         continue
                     current_conversation_start = i
-                    logger.debug(f"[BotIntegration] 找到最后一个用户提问，从第{i+1}行开始")
+                    # 提取用户问题（移除 > 前缀和空白字符）
+                    user_question = lines[i].strip()[1:].strip()
+                    logger.debug(f"[BotIntegration] 找到最后一个用户提问，从第{i+1}行开始: {user_question}")
                     break
             
             # 只处理当前对话范围
@@ -715,16 +716,21 @@ class BotIntegration:
             current_marker = None
             current_marker_id = None
             
-            for line in conversation_lines:
-                # 检测"生成中"标识
+            # 先检测生成中状态（只检查最后 10 行）
+            for line in lines[-10:]:
                 if '生成中' in line:
-                    is_generating = True
-                    # 尝试提取时间记录（支持 "1s", "2s" 等格式）
                     import re
                     time_match = re.search(r'(\d+)s', line)
                     if time_match:
+                        is_generating = True
                         generation_time = time_match.group(1) + 's'
-                    logger.debug(f"[BotIntegration] 检测到生成中: {generation_time}")
+                        logger.debug(f"[BotIntegration] 检测到生成中: {generation_time}")
+                        break
+            
+            # 提取标记消息
+            for line in conversation_lines:
+                # 跳过生成中检测（已经在上面完成了）
+                if '生成中' in line:
                     continue
                 
                 # 检测标记
@@ -790,7 +796,7 @@ class BotIntegration:
                     except Exception as e:
                         logger.error(f"[BotIntegration] 无法转换消息 {i+1} 的 content 为字符串: {e}")
 
-            return filtered_messages, is_generating, generation_time
+            return filtered_messages, is_generating, generation_time, user_question
             
         except Exception as e:
             logger.error(f"[BotIntegration] 提取 tmux 回复失败: {e}")
@@ -927,7 +933,7 @@ class BotIntegration:
                 await asyncio.sleep(5)
                 
                 # 提取当前所有消息
-                current_messages, is_generating, generation_time = self._extract_reply_from_tmux()
+                current_messages, is_generating, generation_time, user_question = self._extract_reply_from_tmux()
                 
                 # 获取当前所有消息的 marker_id
                 current_marker_ids = set()
@@ -951,8 +957,16 @@ class BotIntegration:
                     merged_content = self._merge_messages(new_messages)
                     
                     if merged_content.strip():
+                        # 构造开头标记
+                        header = f"🔔 iflow交互模式请求：原消息=[{user_question}]，当前回复完成，回复结果如下：\n\n"
+                        # 合并开头标记和内容
+                        full_message = header + merged_content
+                        
+                        # 记录发送的消息内容（前100字符）
+                        logger.info(f"[BotIntegration] 发送消息内容预览: {full_message[:100]}...")
+                        
                         # 发送到企业微信
-                        await self.wechat_channel.send(merged_content, self.wechat_channel.config.user_id, is_group=False)
+                        await self.wechat_channel.send(full_message, self.wechat_channel.config.user_id, is_group=False)
                         logger.info(f"[BotIntegration] 已发送 iflow 交互界面消息到企业微信")
                     
                     # 更新已知消息
