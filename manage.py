@@ -168,19 +168,31 @@ def load_config() -> dict:
 @app.command()
 def start(
     index: Optional[int] = typer.Argument(None, help="序号（默认为1），启动对应序号的机器人和 tmux 会话"),
-    iflow: bool = typer.Option(True, "--iflow/--no-iflow", help="启动 iflow CLI"),
-    wechat: bool = typer.Option(True, "--wechat/--no-wechat", help="启动企业微信 Bot"),
-    foreground: bool = typer.Option(False, "--foreground", "-f", help="前台模式：直接显示 iflow 界面"),
-    model: Optional[str] = typer.Option(None, "--model", "-m", help="iflow 模型名称"),
-    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="iflow 工作目录"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="详细日志"),
+    iflow: bool = typer.Option(True, "--iflow/--no-iflow", help="启动 iflow CLI（默认启用）"),
+    wechat: bool = typer.Option(True, "--wechat/--no-wechat", help="启动企业微信 Bot（默认启用）"),
+    foreground: bool = typer.Option(False, "--foreground", "-f", help="前台模式：直接显示 iflow 界面，按 Ctrl+B 然后 D 分离"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="临时覆盖 iflow 模型名称（如：kimi-k2.5）"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="临时覆盖 iflow 工作目录（如：~/.iflow）"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="启用详细日志输出"),
 ):
-    """启动服务。
+    """启动 Ling-iflow 服务（iflow CLI 和企业微信 Bot）。
     
-    后台模式（默认）：服务在后台运行，返回命令行
-    前台模式（--foreground）：直接显示 iflow 界面
+    支持两种模式：
+    • 后台模式（默认）：服务在后台运行，立即返回命令行
+    • 前台模式（--foreground）：直接显示 iflow 界面，适合调试使用
     
-    序号模式：指定序号启动对应序号的机器人和 tmux 会话（默认为1）
+    序号系统：
+    • 每个序号对应一个机器人和一个 tmux 会话
+    • 默认序号为 1
+    • 使用 list-resources 查看所有可用的序号
+    
+    示例：
+    • 启动默认服务（序号1）：python manage.py start
+    • 启动指定序号：python manage.py start 2
+    • 仅启动 iflow：python manage.py start --no-wechat
+    • 仅启动企业微信：python manage.py start --no-iflow
+    • 前台模式：python manage.py start --foreground
+    • 临时指定模型：python manage.py start --model gpt-4
     """
     print_header("启动 Ling-iflow 服务")
     
@@ -343,12 +355,25 @@ def start(
 @app.command()
 def stop(
     index: Optional[int] = typer.Argument(None, help="序号（默认为1），停止对应序号的机器人和 tmux 会话"),
-    iflow: bool = typer.Option(True, "--iflow/--no-iflow", help="停止 iflow CLI"),
-    wechat: bool = typer.Option(True, "--wechat/--no-wechat", help="停止企业微信 Bot"),
+    iflow: bool = typer.Option(True, "--iflow/--no-iflow", help="停止 iflow CLI（默认启用）"),
+    wechat: bool = typer.Option(True, "--wechat/--no-wechat", help="停止企业微信 Bot（默认启用）"),
 ):
-    """停止服务。
+    """停止 Ling-iflow 服务（iflow CLI 和企业微信 Bot）。
     
-    序号模式：指定序号停止对应序号的机器人和 tmux 会话（默认为1）
+    停止操作会优雅地关闭服务：
+    • 企业微信 Bot：停止接收和处理消息
+    • iflow CLI：关闭 tmux 会话
+    
+    序号系统：
+    • 每个序号对应一个机器人和一个 tmux 会话
+    • 默认序号为 1
+    • 使用 list-resources 查看所有可用的序号
+    
+    示例：
+    • 停止默认服务（序号1）：python manage.py stop
+    • 停止指定序号：python manage.py stop 2
+    • 仅停止 iflow：python manage.py stop --no-wechat
+    • 仅停止企业微信：python manage.py stop --no-iflow
     """
     print_header("停止 Ling-iflow 服务")
     
@@ -432,14 +457,27 @@ def stop(
 @app.command()
 def restart(
     index: Optional[int] = typer.Argument(None, help="序号（默认为1），重启对应序号的机器人和 tmux 会话"),
-    iflow: bool = typer.Option(True, "--iflow/--no-iflow", help="重启 iflow CLI"),
-    wechat: bool = typer.Option(True, "--wechat/--no-wechat", help="重启企业微信 Bot"),
-    model: Optional[str] = typer.Option(None, "--model", "-m", help="iflow 模型名称"),
-    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="iflow 工作目录"),
+    iflow: bool = typer.Option(True, "--iflow/--no-iflow", help="重启 iflow CLI（默认启用）"),
+    wechat: bool = typer.Option(True, "--wechat/--no-wechat", help="重启企业微信 Bot（默认启用）"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="临时覆盖 iflow 模型名称（如：kimi-k2.5）"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="临时覆盖 iflow 工作目录（如：~/.iflow）"),
 ):
-    """重启服务。
+    """重启 Ling-iflow 服务（iflow CLI 和企业微信 Bot）。
     
-    序号模式：指定序号重启对应序号的机器人和 tmux 会话（默认为1）
+    重启操作会先停止服务，等待 2 秒后重新启动。
+    适用于应用配置更改后的重启。
+    
+    序号系统：
+    • 每个序号对应一个机器人和一个 tmux 会话
+    • 默认序号为 1
+    • 使用 list-resources 查看所有可用的序号
+    
+    示例：
+    • 重启默认服务（序号1）：python manage.py restart
+    • 重启指定序号：python manage.py restart 2
+    • 仅重启 iflow：python manage.py restart --no-wechat
+    • 仅重启企业微信：python manage.py restart --no-iflow
+    • 重启并切换模型：python manage.py restart --model gpt-4
     """
     print_header("重启 Ling-iflow 服务")
     
@@ -455,7 +493,23 @@ def restart(
 
 @app.command()
 def status():
-    """查看服务状态。"""
+    """查看 Ling-iflow 服务的详细状态。
+    
+    显示信息：
+    • 企业微信机器人状态：
+      - 总数和运行中数量
+      - 每个机器人的状态、端口、tmux 连接、用户
+      - PID（如果运行中）
+    • 机器人与 tmux 会话连接关系：
+      - 显示一对一的连接关系
+      - 标识冲突（多个机器人连接到同一 tmux）
+    • tmux 会话状态：
+      - 总数和运行中数量
+      - 每个会话的状态、工作目录、模型
+    
+    示例：
+    • 查看服务状态：python manage.py status
+    """
     print_header("Ling-iflow 服务状态")
     
     config = load_config()
@@ -560,11 +614,21 @@ def status():
 
 @app.command()
 def logs(
-    iflow: bool = typer.Option(False, "--iflow", help="查看 iflow 日志"),
+    iflow: bool = typer.Option(False, "--iflow", help="查看 iflow CLI 日志（tmux 会话输出）"),
     wechat: bool = typer.Option(False, "--wechat", help="查看企业微信 Bot 日志"),
-    follow: bool = typer.Option(False, "--follow", "-f", help="实时跟踪日志"),
+    follow: bool = typer.Option(False, "--follow", "-f", help="实时跟踪日志（类似 tail -f）"),
 ):
-    """查看日志。"""
+    """查看服务日志。
+    
+    支持查看两种日志：
+    • iflow 日志：tmux 会话的输出，显示 iflow CLI 的交互记录
+    • 企业微信 Bot 日志：机器人进程的日志，显示消息处理情况
+    
+    示例：
+    • 查看 iflow 日志：python manage.py logs --iflow
+    • 查看企业微信日志：python manage.py logs --wechat
+    • 实时跟踪 iflow：python manage.py logs --iflow --follow
+    """
     if not iflow and not wechat:
         print_warning("请指定要查看的日志：--iflow 或 --wechat")
         return
@@ -597,7 +661,20 @@ def logs(
 
 @app.command()
 def clean():
-    """清理临时文件和日志。"""
+    """清理项目中的临时文件和日志。
+    
+    清理内容：
+    • __pycache__ 目录：Python 字节码缓存
+    • 日志文件：logs 目录和 tests 目录中的 *.log 文件
+    
+    此命令不会删除：
+    • 配置文件
+    • PID 文件
+    • 源代码文件
+    
+    示例：
+    • 清理临时文件：python manage.py clean
+    """
     print_header("清理临时文件")
     
     # 清理 __pycache__
@@ -636,7 +713,14 @@ def clean():
 
 @app.command()
 def tmux():
-    """管理 tmux 会话。"""
+    """启动 tmux 管理器（独立脚本）。
+    
+    使用此命令启动 tmux_manager.py 脚本，
+    该脚本提供更高级的 tmux 会话管理功能。
+    
+    示例：
+    • 启动 tmux 管理器：python manage.py tmux
+    """
     tmux_script = PROJECT_ROOT / "tmux_manager.py"
     
     if not tmux_script.exists():
@@ -651,7 +735,16 @@ def tmux():
 
 @app.command()
 def test():
-    """运行测试。"""
+    """运行项目中的所有测试。
+    
+    会自动查找并运行 tests 目录中的所有测试文件：
+    • 测试文件命名格式：test_*.py
+    • 每个测试文件都会独立运行
+    • 测试结果会显示在终端
+    
+    示例：
+    • 运行所有测试：python manage.py test
+    """
     print_header("运行测试")
     
     tests_dir = PROJECT_ROOT / "tests"
@@ -692,7 +785,18 @@ def test():
 
 @app.command()
 def list_resources():
-    """列出所有资源（机器人和 tmux 会话）。"""
+    """列出所有配置的机器人和 tmux 会话。
+    
+    显示信息：
+    • 机器人列表：名称、状态、端口、tmux 连接、用户、PID（如果运行中）
+    • tmux 会话列表：名称、状态、工作目录、模型
+    
+    此命令用于快速查看系统中的所有资源配置，
+    便于确定序号（用于 start/stop/restart 等命令）。
+    
+    示例：
+    • 列出所有资源：python manage.py list-resources
+    """
     print_header("Ling-iflow 资源列表")
     
     # 加载机器人配置
@@ -766,11 +870,27 @@ def list_resources():
 
 @app.command()
 def bot_start(
-    bot: str = typer.Argument(..., help="机器人名称或序号"),
+    bot: str = typer.Argument(..., help="机器人名称或序号（如：bot1、1）"),
     daemon: bool = typer.Option(True, "--foreground", help="前台模式（默认后台运行）"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="详细日志"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="启用详细日志输出"),
 ):
-    """启动机器人。"""
+    """启动指定的企业微信机器人。
+    
+    功能特性：
+    • 独立进程：每个机器人运行在独立的进程中
+    • 后台运行：默认在后台运行，不占用终端
+    • 前台模式：使用 --foreground 在前台运行，便于调试
+    
+    注意：
+    • 机器人必须在配置中存在且已启用
+    • 同一机器人不能重复启动
+    
+    示例：
+    • 按名称启动：python manage.py bot-start bot1
+    • 按序号启动：python manage.py bot-start 1
+    • 前台模式启动：python manage.py bot-start bot1 --foreground
+    • 启用详细日志：python manage.py bot-start bot1 --verbose
+    """
     # 加载机器人配置
     try:
         bots_config = load_bots_config()
@@ -822,9 +942,19 @@ def bot_start(
 
 @app.command()
 def bot_stop(
-    bot: str = typer.Argument(..., help="机器人名称或序号"),
+    bot: str = typer.Argument(..., help="机器人名称或序号（如：bot1、1）"),
 ):
-    """停止机器人。"""
+    """停止指定的企业微信机器人。
+    
+    停止操作会优雅地关闭机器人进程：
+    • 停止接收新的企业微信消息
+    • 等待正在处理的消息完成
+    • 清理进程和 PID 文件
+    
+    示例：
+    • 按名称停止：python manage.py bot-stop bot1
+    • 按序号停止：python manage.py bot-stop 1
+    """
     # 加载机器人配置
     try:
         bots_config = load_bots_config()
@@ -861,14 +991,27 @@ def bot_stop(
 
 @app.command()
 def bind(
-    bot: str = typer.Argument(..., help="机器人名称或序号"),
-    tmux: str = typer.Argument(..., help="tmux 会话名称或序号"),
+    bot: str = typer.Argument(..., help="机器人名称或序号（如：bot1、1）"),
+    tmux: str = typer.Argument(..., help="tmux 会话名称或序号（如：iflow1、1）"),
     force: bool = typer.Option(False, "--force", "-f", help="强制停止正在运行的机器人和 tmux 会话"),
 ):
-    """绑定机器人与 tmux 会话。
+    """绑定机器人与 tmux 会话，调整连接关系。
     
-    调整机器人与 tmux 的连接关系。如果机器人或 tmux 正在运行，
-    会先停止它们，然后更新配置。
+    功能特性：
+    • 一对一对应：每个机器人只能连接到一个 tmux 会话
+    • 自动断开：如果目标 tmux 已有机器人连接，会自动断开旧连接
+    • 安全检查：如果机器人或 tmux 正在运行，需要使用 --force 参数
+    
+    工作流程：
+    1. 检查当前连接关系
+    2. 如果目标 tmux 已有连接，自动断开旧连接
+    3. 如果机器人或 tmux 正在运行，需要先停止（或使用 --force）
+    4. 更新配置，建立新的连接
+    
+    示例：
+    • 按名称绑定：python manage.py bind bot1 iflow1
+    • 按序号绑定：python manage.py bind 1 1
+    • 强制绑定：python manage.py bind bot1 iflow1 --force
     """
     print_header("绑定机器人与 tmux 会话")
     
@@ -1007,11 +1150,20 @@ def bind(
 
 @app.command()
 def bot_restart(
-    bot: str = typer.Argument(..., help="机器人名称或序号"),
+    bot: str = typer.Argument(..., help="机器人名称或序号（如：bot1、1）"),
     daemon: bool = typer.Option(True, "--foreground", help="前台模式（默认后台运行）"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="详细日志"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="启用详细日志输出"),
 ):
-    """重启机器人。"""
+    """重启指定的企业微信机器人。
+    
+    重启操作会先停止机器人，等待 2 秒后重新启动。
+    适用于应用配置更改后的重启。
+    
+    示例：
+    • 按名称重启：python manage.py bot-restart bot1
+    • 按序号重启：python manage.py bot-restart 1
+    • 前台模式重启：python manage.py bot-restart bot1 --foreground
+    """
     # 停止
     bot_stop(bot)
     
@@ -1024,10 +1176,22 @@ def bot_restart(
 
 @app.command()
 def bot_logs(
-    bot: str = typer.Argument(..., help="机器人名称或序号"),
-    follow: bool = typer.Option(False, "--follow", "-f", help="实时跟踪日志"),
+    bot: str = typer.Argument(..., help="机器人名称或序号（如：bot1、1）"),
+    follow: bool = typer.Option(False, "--follow", "-f", help="实时跟踪日志（类似 tail -f）"),
 ):
-    """查看机器人日志。"""
+    """查看指定机器人的日志。
+    
+    功能特性：
+    • 显示最新日志：默认显示最后 50 行日志
+    • 实时跟踪：使用 --follow 参数实时跟踪新日志
+    
+    日志文件位置：
+    • logs/wechat_bot_{机器人名称}_YYYY-MM-DD.log
+    
+    示例：
+    • 查看日志：python manage.py bot-logs bot1
+    • 实时跟踪：python manage.py bot-logs bot1 --follow
+    """
     # 加载机器人配置
     try:
         bots_config = load_bots_config()
@@ -1064,18 +1228,30 @@ def bot_logs(
 
 @app.command()
 def bot_add(
-    name: str = typer.Option(..., "--name", "-n", help="机器人名称"),
-    corp_id: str = typer.Option(..., "--corp-id", help="企业 ID"),
-    agent_id: str = typer.Option(..., "--agent-id", help="应用 AgentId"),
-    secret: str = typer.Option(..., "--secret", help="应用 Secret"),
-    user_id: str = typer.Option(..., "--user-id", help="用户 ID"),
-    token: str = typer.Option("", "--token", help="Token"),
-    encoding_aes_key: str = typer.Option("", "--encoding-aes-key", help="EncodingAESKey"),
-    callback_port: int = typer.Option(8788, "--callback-port", "-p", help="回调端口"),
-    tmux_session: str = typer.Option("", "--tmux-session", "-t", help="tmux 会话名称"),
-    interactive: bool = typer.Option(False, "--interactive", "-i", help="交互式添加"),
+    name: str = typer.Option(..., "--name", "-n", help="机器人名称（唯一标识，如：bot1、dev-bot）"),
+    corp_id: str = typer.Option(..., "--corp-id", help="企业微信企业 ID（如：ww1234567890abcdef）"),
+    agent_id: str = typer.Option(..., "--agent-id", help="企业微信应用 AgentId（如：1000002）"),
+    secret: str = typer.Option(..., "--secret", help="企业微信应用 Secret（如：abc123XYZ789）"),
+    user_id: str = typer.Option(..., "--user-id", help="接收消息的用户 ID（如：zhangsan）"),
+    token: str = typer.Option("", "--token", help="企业微信回调 Token（可选，用于验证回调请求）"),
+    encoding_aes_key: str = typer.Option("", "--encoding-aes-key", help="企业微信消息加解密密钥（可选）"),
+    callback_port: int = typer.Option(8788, "--callback-port", "-p", help="接收企业微信回调的端口（默认：8788）"),
+    tmux_session: str = typer.Option("", "--tmux-session", "-t", help="连接的 tmux 会话名称（可选，留空自动生成）"),
+    interactive: bool = typer.Option(False, "--interactive", "-i", help="交互式添加模式，提供详细提示和示例"),
 ):
-    """添加机器人。"""
+    """添加企业微信机器人配置。
+    
+    企业微信配置信息获取路径：
+    1. 企业 ID：企业微信管理后台 → 我的企业 → 企业信息 → 企业 ID
+    2. 应用 AgentId：企业微信管理后台 → 应用管理 → 选择应用 → AgentId
+    3. 应用 Secret：企业微信管理后台 → 应用管理 → 选择应用 → Secret
+    4. 用户 ID：企业微信管理后台 → 通讯录 → 选择用户 → 成员详情
+    5. Token 和 EncodingAESKey：企业微信管理后台 → 应用管理 → 选择应用 → 接收消息 → 设置
+    
+    示例：
+    • 交互式添加：python manage.py bot-add --interactive
+    • 命令行添加：python manage.py bot-add --name bot1 --corp-id ww123 --agent-id 1000002 --secret abc123 --user-id zhangsan
+    """
     print_header("添加机器人")
     
     # 加载机器人配置
@@ -1106,29 +1282,68 @@ def bot_add(
     if interactive:
         print_info("请输入机器人配置：")
         print()
+        print_info("=" * 70)
+        print_info("配置说明：")
+        print_info("=" * 70)
+        print_info()
+        print_info("1. 机器人名称：用于标识此机器人的名称（如：bot1、dev-bot）")
+        print_info("2. 企业 ID (CorpId)：企业微信企业 ID，在企业微信管理后台可见")
+        print_info("   获取路径：企业微信管理后台 → 我的企业 → 企业信息 → 企业 ID")
+        print_info("   示例：ww1234567890abcdef")
+        print_info()
+        print_info("3. 应用 AgentId：企业微信应用的 Agent ID")
+        print_info("   获取路径：企业微信管理后台 → 应用管理 → 选择应用 → AgentId")
+        print_info("   示例：1000002")
+        print_info()
+        print_info("4. 应用 Secret：企业微信应用的 Secret 密钥")
+        print_info("   获取路径：企业微信管理后台 → 应用管理 → 选择应用 → Secret")
+        print_info("   示例：abc123XYZ789")
+        print_info()
+        print_info("5. 用户 ID (UserId)：接收消息的用户 ID")
+        print_info("   获取路径：企业微信管理后台 → 通讯录 → 选择用户 → 成员详情")
+        print_info("   示例：zhangsan 或 zhangsan@example.com")
+        print_info()
+        print_info("6. Token：用于验证回调请求的 Token（可选）")
+        print_info("   说明：企业微信管理后台 → 应用管理 → 选择应用 → 接收消息 → 设置")
+        print_info("   示例：mySecretToken123")
+        print_info()
+        print_info("7. EncodingAESKey：用于消息加解密的密钥（可选）")
+        print_info("   说明：企业微信管理后台 → 应用管理 → 选择应用 → 接收消息 → 设置")
+        print_info("   示例：abc123XYZ789DEF456GHI789")
+        print_info()
+        print_info("8. 回调端口：接收企业微信回调的端口（默认：8788）")
+        print_info("   说明：确保此端口未被占用且防火墙已开放")
+        print_info("   示例：8788、8789、8790")
+        print_info()
+        print_info("9. tmux 会话名称：连接的 tmux 会话名称（可选，默认自动生成）")
+        print_info("   说明：与 iflow CLI 的 tmux 会话对应")
+        print_info("   示例：iflow1、iflow2、dev")
+        print_info()
+        print_info("=" * 70)
+        print()
         
         if not name:
-            name = input("机器人名称: ").strip()
+            name = input("机器人名称 [例如: bot1, dev-bot]: ").strip()
             if not name:
                 print_error("机器人名称不能为空")
                 sys.exit(1)
         
         if not corp_id:
-            corp_id = input("企业 ID: ").strip()
+            corp_id = input("企业 ID [例如: ww1234567890abcdef]: ").strip()
         
         if not agent_id:
-            agent_id = input("应用 AgentId: ").strip()
+            agent_id = input("应用 AgentId [例如: 1000002]: ").strip()
         
         if not secret:
-            secret = input("应用 Secret: ").strip()
+            secret = input("应用 Secret [例如: abc123XYZ789]: ").strip()
         
         if not user_id:
-            user_id = input("用户 ID: ").strip()
+            user_id = input("用户 ID [例如: zhangsan]: ").strip()
         
-        token = input("Token (可选，留空跳过): ").strip()
-        encoding_aes_key = input("EncodingAESKey (可选，留空跳过): ").strip()
+        token = input("Token (可选，留空跳过) [例如: mySecretToken123]: ").strip()
+        encoding_aes_key = input("EncodingAESKey (可选，留空跳过) [例如: abc123XYZ789DEF456GHI789]: ").strip()
         
-        callback_port_str = input(f"回调端口 (默认 {callback_port}): ").strip()
+        callback_port_str = input(f"回调端口 (默认 {callback_port}) [例如: 8788]: ").strip()
         if callback_port_str:
             try:
                 callback_port = int(callback_port_str)
@@ -1136,7 +1351,7 @@ def bot_add(
                 print_error("回调端口必须是数字")
                 sys.exit(1)
         
-        tmux_session = input(f"tmux 会话名称 (可选，留空跳过): ").strip()
+        tmux_session = input(f"tmux 会话名称 (可选，留空跳过) [例如: iflow1]: ").strip()
         
         print()
     
@@ -1197,10 +1412,21 @@ def bot_add(
 
 @app.command()
 def bot_remove(
-    bot: str = typer.Argument(..., help="机器人名称或序号"),
-    force: bool = typer.Option(False, "--force", "-f", help="强制删除（不确认）"),
+    bot: str = typer.Argument(..., help="机器人名称或序号（如：bot1、1）"),
+    force: bool = typer.Option(False, "--force", "-f", help="强制删除，跳过确认提示"),
 ):
-    """删除机器人。"""
+    """删除企业微信机器人配置。
+    
+    注意：
+    • 机器人必须已停止才能删除，否则需要使用 --force 参数
+    • 删除操作无法撤销，请谨慎操作
+    • 如果机器人连接了 tmux 会话，连接关系将被保留
+    
+    示例：
+    • 按名称删除：python manage.py bot-remove bot1
+    • 按序号删除：python manage.py bot-remove 1
+    • 强制删除：python manage.py bot-remove bot1 --force
+    """
     print_header("删除机器人")
     
     # 加载机器人配置
@@ -1254,19 +1480,32 @@ def bot_remove(
 
 @app.command()
 def bot_edit(
-    bot: str = typer.Argument(..., help="机器人名称或序号"),
-    name: Optional[str] = typer.Option(None, "--name", "-n", help="新机器人名称"),
-    corp_id: Optional[str] = typer.Option(None, "--corp-id", help="新企业 ID"),
-    agent_id: Optional[str] = typer.Option(None, "--agent-id", help="新应用 AgentId"),
-    secret: Optional[str] = typer.Option(None, "--secret", help="新应用 Secret"),
-    user_id: Optional[str] = typer.Option(None, "--user-id", help="新用户 ID"),
-    token: Optional[str] = typer.Option(None, "--token", help="新 Token"),
-    encoding_aes_key: Optional[str] = typer.Option(None, "--encoding-aes-key", help="新 EncodingAESKey"),
-    callback_port: Optional[int] = typer.Option(None, "--callback-port", "-p", help="新回调端口"),
-    tmux_session: Optional[str] = typer.Option(None, "--tmux-session", "-t", help="新 tmux 会话"),
-    enabled: Optional[bool] = typer.Option(None, "--enabled/--disabled", help="启用/禁用机器人"),
+    bot: str = typer.Argument(..., help="机器人名称或序号（如：bot1、1）"),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="新的机器人名称"),
+    corp_id: Optional[str] = typer.Option(None, "--corp-id", help="新的企业 ID"),
+    agent_id: Optional[str] = typer.Option(None, "--agent-id", help="新的应用 AgentId"),
+    secret: Optional[str] = typer.Option(None, "--secret", help="新的应用 Secret"),
+    user_id: Optional[str] = typer.Option(None, "--user-id", help="新的用户 ID"),
+    token: Optional[str] = typer.Option(None, "--token", help="新的 Token"),
+    encoding_aes_key: Optional[str] = typer.Option(None, "--encoding-aes-key", help="新的 EncodingAESKey"),
+    callback_port: Optional[int] = typer.Option(None, "--callback-port", "-p", help="新的回调端口"),
+    tmux_session: Optional[str] = typer.Option(None, "--tmux-session", "-t", help="新的 tmux 会话名称"),
+    enabled: Optional[bool] = typer.Option(None, "--enabled/--disabled", help="启用或禁用机器人"),
 ):
-    """编辑机器人。"""
+    """编辑企业微信机器人配置。
+    
+    可以修改机器人的任何配置参数，包括：
+    • 基本信息：名称、企业 ID、应用 ID、Secret、用户 ID
+    • 回调配置：Token、EncodingAESKey、回调端口
+    • 连接配置：tmux 会话名称
+    • 状态：启用或禁用机器人
+    
+    示例：
+    • 修改端口：python manage.py bot-edit bot1 --callback-port 8789
+    • 修改用户：python manage.py bot-edit bot1 --user-id lisi
+    • 禁用机器人：python manage.py bot-edit bot1 --disabled
+    • 修改 tmux 连接：python manage.py bot-edit bot1 --tmux-session iflow2
+    """
     print_header("编辑机器人")
     
     # 加载机器人配置
@@ -1362,9 +1601,20 @@ def bot_edit(
 
 @app.command()
 def bot_show(
-    bot: str = typer.Argument(..., help="机器人名称或序号"),
+    bot: str = typer.Argument(..., help="机器人名称或序号（如：bot1、1）"),
 ):
-    """查看机器人详情。"""
+    """查看企业微信机器人的详细配置和运行状态。
+    
+    显示信息包括：
+    • 基本信息：名称、状态、企业 ID、应用 ID、用户 ID
+    • 回调配置：回调端口、回调地址、Token、EncodingAESKey
+    • 其他配置：tmux 会话、流模式、轮询间隔、群聊策略
+    • 运行状态：是否运行、进程 ID（如果运行中）
+    
+    示例：
+    • 按名称查看：python manage.py bot-show bot1
+    • 按序号查看：python manage.py bot-show 1
+    """
     print_header("机器人详情")
     
     # 加载机器人配置
@@ -1423,12 +1673,25 @@ def bot_show(
 
 @app.command()
 def tmux_add(
-    name: str = typer.Option(..., "--name", "-n", help="会话名称"),
-    workspace: str = typer.Option(..., "--workspace", "-w", help="工作目录"),
-    model: str = typer.Option("kimi-k2.5", "--model", "-m", help="模型名称"),
-    interactive: bool = typer.Option(False, "--interactive", "-i", help="交互式添加"),
+    name: str = typer.Option(..., "--name", "-n", help="tmux 会话名称（唯一标识，如：iflow1、dev）"),
+    workspace: str = typer.Option(..., "--workspace", "-w", help="iflow CLI 工作目录（如：~/.iflow）"),
+    model: str = typer.Option("kimi-k2.5", "--model", "-m", help="iflow 使用的 AI 模型（默认：kimi-k2.5）"),
+    interactive: bool = typer.Option(False, "--interactive", "-i", help="交互式添加模式，提供详细提示和示例"),
 ):
-    """添加 tmux 会话。"""
+    """添加 tmux 会话配置。
+    
+    tmux 会话用于运行 iflow CLI，每个会话独立运行一个 iflow 实例。
+    工作目录用于存储 iflow 的配置和会话文件。
+    
+    常用模型：
+    • kimi-k2.5：月之暗面 AI 模型
+    • gpt-4：OpenAI GPT-4 模型
+    • claude-3-opus：Anthropic Claude 3 模型
+    
+    示例：
+    • 交互式添加：python manage.py tmux-add --interactive
+    • 命令行添加：python manage.py tmux-add --name iflow1 --workspace ~/.iflow1 --model kimi-k2.5
+    """
     print_header("添加 tmux 会话")
     
     # 加载主配置
@@ -1452,9 +1715,27 @@ def tmux_add(
         # 交互式模式
         print_info("交互式添加 tmux 会话")
         print()
+        print_info("=" * 70)
+        print_info("配置说明：")
+        print_info("=" * 70)
+        print_info()
+        print_info("1. 会话名称：tmux 会话的唯一标识（如：iflow1、dev）")
+        print_info("   说明：此名称将用于管理 tmux 会话，确保唯一性")
+        print_info("   示例：iflow1、iflow2、dev、test")
+        print_info()
+        print_info("2. 工作目录：iflow CLI 的工作目录")
+        print_info("   说明：存储 iflow 配置和会话文件的目录")
+        print_info("   示例：~/.iflow、/home/user/iflow1、~/dev/iflow")
+        print_info()
+        print_info("3. 模型名称：iflow 使用的 AI 模型")
+        print_info("   说明：指定 iflow 使用的模型，不同模型有不同能力")
+        print_info("   示例：kimi-k2.5、gpt-4、claude-3-opus")
+        print_info()
+        print_info("=" * 70)
+        print()
         
         if not name:
-            name = input("会话名称: ").strip()
+            name = input("会话名称 [例如: iflow1, dev]: ").strip()
             if not name:
                 print_error("会话名称不能为空")
                 sys.exit(1)
@@ -1466,9 +1747,9 @@ def tmux_add(
                     return
         
         if not workspace:
-            workspace = input("工作目录 (例如 ~/.iflow): ").strip()
+            workspace = input("工作目录 [例如: ~/.iflow]: ").strip()
         
-        model_input = input(f"模型名称 (默认 {model}): ").strip()
+        model_input = input(f"模型名称 (默认 {model}) [例如: kimi-k2.5]: ").strip()
         if model_input:
             model = model_input
         
@@ -1508,10 +1789,21 @@ def tmux_add(
 
 @app.command()
 def tmux_remove(
-    session: str = typer.Argument(..., help="会话名称或序号"),
-    force: bool = typer.Option(False, "--force", "-f", help="强制删除（不确认）"),
+    session: str = typer.Argument(..., help="会话名称或序号（如：iflow1、1）"),
+    force: bool = typer.Option(False, "--force", "-f", help="强制删除，跳过确认提示和连接检查"),
 ):
-    """删除 tmux 会话。"""
+    """删除 tmux 会话配置。
+    
+    注意：
+    • tmux 会话必须已停止才能删除，否则需要使用 --force 参数
+    • 如果有机器人连接到此会话，会先断开连接
+    • 删除操作无法撤销，请谨慎操作
+    
+    示例：
+    • 按名称删除：python manage.py tmux-remove iflow1
+    • 按序号删除：python manage.py tmux-remove 1
+    • 强制删除：python manage.py tmux-remove iflow1 --force
+    """
     print_header("删除 tmux 会话")
     
     # 加载主配置
@@ -1596,12 +1888,23 @@ def tmux_remove(
 
 @app.command()
 def tmux_edit(
-    session: str = typer.Argument(..., help="会话名称或序号"),
-    name: Optional[str] = typer.Option(None, "--name", "-n", help="新会话名称"),
-    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="新工作目录"),
-    model: Optional[str] = typer.Option(None, "--model", "-m", help="新模型名称"),
+    session: str = typer.Argument(..., help="会话名称或序号（如：iflow1、1）"),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="新的会话名称"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="新的工作目录"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="新的模型名称"),
 ):
-    """编辑 tmux 会话。"""
+    """编辑 tmux 会话配置。
+    
+    可以修改 tmux 会话的任何配置参数：
+    • 会话名称：tmux 会话的唯一标识
+    • 工作目录：iflow CLI 的工作目录
+    • 模型名称：iflow 使用的 AI 模型
+    
+    示例：
+    • 修改模型：python manage.py tmux-edit iflow1 --model gpt-4
+    • 修改工作目录：python manage.py tmux-edit iflow1 --workspace /home/user/iflow1
+    • 重命名会话：python manage.py tmux-edit iflow1 --name dev
+    """
     print_header("编辑 tmux 会话")
     
     # 加载主配置
@@ -1668,9 +1971,19 @@ def tmux_edit(
 
 @app.command()
 def tmux_show(
-    session: str = typer.Argument(..., help="会话名称或序号"),
+    session: str = typer.Argument(..., help="会话名称或序号（如：iflow1、1）"),
 ):
-    """查看 tmux 会话详情。"""
+    """查看 tmux 会话的详细配置和运行状态。
+    
+    显示信息包括：
+    • 基本信息：名称、工作目录、模型
+    • 运行状态：是否运行
+    • 连接的机器人：哪些机器人连接到此会话及其运行状态
+    
+    示例：
+    • 按名称查看：python manage.py tmux-show iflow1
+    • 按序号查看：python manage.py tmux-show 1
+    """
     print_header("tmux 会话详情")
     
     # 加载主配置
