@@ -418,6 +418,10 @@ def status():
             is_running = process_manager.is_running(bot.name)
             status = "运行中 ✓" if is_running else "未运行"
             
+            # 检查 tmux 连接状态
+            tmux_running = check_tmux_session(bot.tmux_session)
+            tmux_status = "✓" if tmux_running else "✗"
+            
             print(f"  {i}. {bot.name}")
             if is_running:
                 pid = process_manager.get_pid(bot.name)
@@ -426,16 +430,36 @@ def status():
                 print(f"    状态: {status}")
             
             print(f"    回调端口: {bot.callback_port}")
-            
-            # 检查 tmux 连接
-            tmux_running = check_tmux_session(bot.tmux_session)
-            tmux_status = "✓" if tmux_running else "✗"
             print(f"    tmux 会话: {bot.tmux_session} {tmux_status}")
-            
             print(f"    用户: {bot.user_id}")
             print()
     else:
         print_warning("未找到机器人配置")
+        print()
+    
+    # 显示连接关系
+    if bots_config and bots_config.bots:
+        print_info(f"机器人与 tmux 会话连接关系")
+        print()
+        
+        # 收集连接信息
+        connections = {}
+        for bot in bots_config.bots:
+            connections[bot.name] = bot.tmux_session
+        
+        # 检查是否有冲突（多个机器人连接到同一个 tmux）
+        tmux_to_bots = {}
+        for bot_name, tmux_session in connections.items():
+            if tmux_session not in tmux_to_bots:
+                tmux_to_bots[tmux_session] = []
+            tmux_to_bots[tmux_session].append(bot_name)
+        
+        # 显示连接关系
+        for tmux_session, bot_names in tmux_to_bots.items():
+            if len(bot_names) > 1:
+                print_warning(f"  ⚠️  {tmux_session}: {', '.join(bot_names)} (多个机器人连接)")
+            else:
+                print_success(f"  ✓ {tmux_session}: {bot_names[0]}")
         print()
     
     # 显示 tmux 会话状态
@@ -469,19 +493,6 @@ def status():
             print(f"    工作目录: {session.get('workspace', '~/.iflow')}")
             print(f"    模型: {session.get('model', 'kimi-k2.5')}")
             print()
-    
-    # 检查配置
-    print_info(f"配置")
-    print(f"  tmux 会话: {tmux_session}")
-    print(f"  工作目录: {config.workspace}")
-    if config.model:
-        print(f"  模型: {config.model}")
-    if config.wechat_work:
-        print(f"  企业微信: {'启用' if config.wechat_work.enabled else '禁用'}")
-        if config.wechat_work.enabled:
-            print(f"  回调端口: {config.wechat_work.callback_port}")
-    
-    print()
 
 
 @app.command()
@@ -783,6 +794,128 @@ def bot_stop(
     else:
         print_error(f"停止机器人失败: {bot_config.name}")
         sys.exit(1)
+
+
+@app.command()
+def bind(
+    bot: str = typer.Argument(..., help="机器人名称或序号"),
+    tmux: str = typer.Argument(..., help="tmux 会话名称或序号"),
+    force: bool = typer.Option(False, "--force", "-f", help="强制停止正在运行的机器人和 tmux 会话"),
+):
+    """绑定机器人与 tmux 会话。
+    
+    调整机器人与 tmux 的连接关系。如果机器人或 tmux 正在运行，
+    会先停止它们，然后更新配置。
+    """
+    print_header("绑定机器人与 tmux 会话")
+    
+    # 加载机器人配置
+    try:
+        bots_config = load_bots_config()
+    except FileNotFoundError:
+        print_error("机器人配置文件不存在: bots.json")
+        sys.exit(1)
+    except Exception as e:
+        print_error(f"加载机器人配置失败: {e}")
+        sys.exit(1)
+    
+    # 加载主配置
+    try:
+        main_config = load_config()
+    except Exception as e:
+        print_error(f"加载主配置失败: {e}")
+        sys.exit(1)
+    
+    # 解析机器人参数
+    bot_config = _resolve_bot(bots_config, bot)
+    if not bot_config:
+        print_error(f"机器人不存在: {bot}")
+        sys.exit(1)
+    
+    # 解析 tmux 会话参数
+    tmux_config = _resolve_tmux_session(main_config, tmux)
+    if not tmux_config:
+        print_error(f"tmux 会话不存在: {tmux}")
+        sys.exit(1)
+    
+    tmux_session_name = tmux_config.get("name", "iflow")
+    
+    print_info(f"机器人: {bot_config.name}")
+    print_info(f"tmux 会话: {tmux_session_name}")
+    print()
+    
+    # 检查当前连接关系
+    current_tmux = bot_config.tmux_session
+    if current_tmux == tmux_session_name:
+        print_warning(f"机器人已连接到此 tmux 会话: {tmux_session_name}")
+        return
+    
+    print_info(f"当前连接: {bot_config.name} → {current_tmux}")
+    print_info(f"目标连接: {bot_config.name} → {tmux_session_name}")
+    print()
+    
+    # 检查是否正在运行
+    process_manager = ProcessManager(PROJECT_ROOT)
+    bot_running = process_manager.is_running(bot_config.name)
+    tmux_running = check_tmux_session(tmux_session_name)
+    
+    if bot_running or tmux_running:
+        if not force:
+            print_warning("机器人或 tmux 会话正在运行")
+            print_info("使用 --force 参数强制停止")
+            print()
+            print(f"  机器人运行中: {'是' if bot_running else '否'}")
+            print(f"  tmux 会话运行中: {'是' if tmux_running else '否'}")
+            sys.exit(1)
+        
+        print_info("正在停止运行中的服务...")
+        
+        # 停止机器人
+        if bot_running:
+            print_info(f"  停止机器人: {bot_config.name}")
+            if not process_manager.stop_bot(bot_config.name):
+                print_error(f"停止机器人失败: {bot_config.name}")
+                sys.exit(1)
+            time.sleep(1)
+        
+        # 停止 tmux 会话
+        if tmux_running:
+            print_info(f"  停止 tmux 会话: {tmux_session_name}")
+            try:
+                subprocess.run(
+                    ["tmux", "kill-session", "-t", tmux_session_name],
+                    check=True,
+                    capture_output=True
+                )
+            except subprocess.CalledProcessError as e:
+                print_error(f"停止 tmux 会话失败: {e}")
+                sys.exit(1)
+            time.sleep(1)
+        
+        print_success("服务已停止")
+        print()
+    
+    # 更新配置
+    print_info("更新机器人配置...")
+    
+    # 更新机器人的 tmux_session
+    bot_config.tmux_session = tmux_session_name
+    
+    # 保存配置
+    try:
+        from config.bots_loader import save_bots_config
+        save_bots_config(bots_config)
+        print_success("配置已保存")
+    except Exception as e:
+        print_error(f"保存配置失败: {e}")
+        sys.exit(1)
+    
+    print()
+    print_success(f"绑定完成: {bot_config.name} → {tmux_session_name}")
+    print()
+    print_info(f"使用以下命令启动机器人:")
+    print(f"  {COLOR_CYAN}python manage.py bot-start {bot_config.name}{COLOR_RESET}")
+    print()
 
 
 @app.command()
