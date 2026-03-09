@@ -534,7 +534,7 @@ class BotIntegration:
                     merged_content = self._merge_messages(unknown_messages)
 
                     # 发送到企业微信
-                    await self.wechat_channel.send(merged_content, self.wechat_channel.user_id, is_group=False)
+                    await self.wechat_channel.send(merged_content, self.wechat_channel.config.user_id, is_group=False)
 
                     # 标记为已发送
                     for msg in unknown_messages:
@@ -949,7 +949,7 @@ class BotIntegration:
                     
                     if merged_content.strip():
                         # 发送到企业微信
-                        await self.wechat_channel.send(merged_content, self.wechat_channel.user_id, is_group=False)
+                        await self.wechat_channel.send(merged_content, self.wechat_channel.config.user_id, is_group=False)
                         logger.info(f"[BotIntegration] 已发送 iflow 交互界面消息到企业微信")
                     
                     # 更新已知消息
