@@ -389,6 +389,10 @@ class BotIntegration:
                     if not final_generating:
                         logger.info(f"[BotIntegration] 确认生成完成，消息数量: {final_count}")
                         
+                        # 打印所有消息的标记ID
+                        for i, msg in enumerate(final_messages):
+                            logger.debug(f"[BotIntegration] 最终消息 {i+1}: marker_id={msg.get('marker_id', '')}, content={msg.get('content', '')[:50]}")
+                        
                         # 应用新的发送规则
                         if len(self._sent_marker_ids) == 0:
                             # 场景1：没有发送记录
