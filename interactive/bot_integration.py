@@ -393,6 +393,12 @@ class BotIntegration:
                                 msg = final_messages[i]
                                 marker_id = msg.get('marker_id', '')
                                 
+                                # 检查消息内容是否为空（清理后）
+                                cleaned_content = self._clean_message_content(msg['content'])
+                                if not cleaned_content.strip():
+                                    logger.debug(f"[BotIntegration] 跳过空消息 {i+1}/{final_count}: 标识={marker_id}")
+                                    continue
+                                
                                 logger.info(f"[BotIntegration] 发送消息 {i+1}/{final_count}: 标识={marker_id}")
                                 await self._send_message_content(msg['content'], chat_id, is_group)
                                 self._sent_marker_ids.add(marker_id)
@@ -420,6 +426,12 @@ class BotIntegration:
                                         for i in range(sent_index + 1, final_count):
                                             msg = final_messages[i]
                                             marker_id = msg.get('marker_id', '')
+                                            
+                                            # 检查消息内容是否为空（清理后）
+                                            cleaned_content = self._clean_message_content(msg['content'])
+                                            if not cleaned_content.strip():
+                                                logger.debug(f"[BotIntegration] 跳过空消息 {i+1}/{final_count}: 标识={marker_id}")
+                                                continue
                                             
                                             logger.info(f"[BotIntegration] 发送消息 {i+1}/{final_count}: 标识={marker_id}")
                                             await self._send_message_content(msg['content'], chat_id, is_group)
@@ -597,12 +609,12 @@ class BotIntegration:
             is_generating = False
             generation_time = None
             
-            # 步骤1：扫描用户提问，定位当前对话范围
+            # 步骤1：扫描用户提问，定位当前对话范围（找到最后一个用户提问）
             current_conversation_start = 0
-            for i, line in enumerate(lines):
-                if line.strip().startswith('>') and len(line.strip()) > 1:
+            for i in range(len(lines) - 1, -1, -1):
+                if lines[i].strip().startswith('>') and len(lines[i].strip()) > 1:
                     current_conversation_start = i
-                    logger.debug(f"[BotIntegration] 找到用户提问，从第{i+1}行开始")
+                    logger.debug(f"[BotIntegration] 找到最后一个用户提问，从第{i+1}行开始")
                     break
             
             # 只处理当前对话范围
