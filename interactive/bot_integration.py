@@ -441,6 +441,28 @@ class BotIntegration:
                                         new_last_marker_id = final_messages[final_count - 1].get('marker_id', '')
                                         self._last_sent_marker_id = new_last_marker_id
                                         logger.info(f"[BotIntegration] 更新最后发送的标记: {new_last_marker_id}")
+                                else:
+                                    # 未找到已发送的消息（可能是新对话），发送所有消息
+                                    logger.warning(f"[BotIntegration] 未找到已发送的消息标识: {self._last_sent_marker_id}，发送所有消息")
+                                    for i in range(final_count):
+                                        msg = final_messages[i]
+                                        marker_id = msg.get('marker_id', '')
+                                        
+                                        # 检查消息内容是否为空（清理后）
+                                        cleaned_content = self._clean_message_content(msg['content'])
+                                        if not cleaned_content.strip():
+                                            logger.debug(f"[BotIntegration] 跳过空消息 {i+1}/{final_count}: 标识={marker_id}")
+                                            continue
+                                        
+                                        logger.info(f"[BotIntegration] 发送消息 {i+1}/{final_count}: 标识={marker_id}")
+                                        await self._send_message_content(msg['content'], chat_id, is_group)
+                                        self._sent_marker_ids.add(marker_id)
+                                    
+                                    # 更新最后发送的标记
+                                    if final_count > 0:
+                                        new_last_marker_id = final_messages[final_count - 1].get('marker_id', '')
+                                        self._last_sent_marker_id = new_last_marker_id
+                                        logger.info(f"[BotIntegration] 更新最后发送的标记: {new_last_marker_id}")
                         
                         # 发送完成提示
                         completion_message = "\n\n✅ 当前问题回答完毕"
