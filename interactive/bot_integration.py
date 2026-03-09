@@ -335,12 +335,12 @@ class BotIntegration:
             self._stable_count = 0
 
             # 实时监控并发送新消息
-            timeout = 60  # 60 秒超时
+            timeout = 120  # 120 次，每次 0.5 秒，总共 60 秒超时
 
             logger.info(f"[BotIntegration] 开始实时监控 iflow 回复，超时时间: {timeout}秒")
 
             for i in range(timeout):
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
 
                 # 获取当前回复和生成状态
                 current_messages, is_generating, generation_time = self._extract_reply_from_tmux()
@@ -522,9 +522,9 @@ class BotIntegration:
         """
         
         try:
-            # 捕获最后500行 tmux 输出
+            # 捕获最后1000行 tmux 输出
             result = subprocess.run(
-                ["tmux", "capture-pane", "-t", self.tmux_session, "-S", "-500", "-p"],
+                ["tmux", "capture-pane", "-t", self.tmux_session, "-S", "-1000", "-p"],
                 capture_output=True,
                 text=True
             )
