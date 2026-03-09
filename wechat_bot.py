@@ -27,14 +27,20 @@ COLOR_BLUE = "\033[36m"
 class WechatBot:
     """企业微信机器人主类。"""
     
-    def __init__(self, config_path: str = "config.json"):
+    def __init__(self, config_path: str = "config.json", bot_name: Optional[str] = None):
         """初始化机器人。
         
         Args:
             config_path: 配置文件路径
+            bot_name: 机器人名称（从 bots.json 加载）
         """
         # 加载配置
         self.config = load_project_config(Path(config_path))
+        self.bot_name = bot_name
+        
+        # 如果指定了机器人名称，从 bots.json 加载配置
+        if bot_name:
+            self.config = self._load_bot_config(bot_name)
         
         # 初始化组件
         self.wechat_channel = None
@@ -42,7 +48,58 @@ class WechatBot:
         self.running = False
         self.dispatcher = None
         
-        logger.info("[WechatBot] 初始化完成")
+        logger.info(f"[WechatBot] 初始化完成 (bot_name={bot_name})")
+    
+    def _load_bot_config(self, bot_name: str):
+        """从 bots.json 加载机器人配置。
+        
+        Args:
+            bot_name: 机器人名称
+            
+        Returns:
+            合并后的配置对象
+        """
+        from config.bots_loader import load_bots_config
+        from config.schema import WechatWorkConfig
+        
+        # 加载机器人配置
+        bots_config = load_bots_config()
+        bot_config = bots_config.get_bot_by_name(bot_name)
+        
+        if not bot_config:
+            raise ValueError(f"机器人配置不存在: {bot_name}")
+        
+        if not bot_config.enabled:
+            raise ValueError(f"机器人未启用: {bot_name}")
+        
+        logger.info(f"[WechatBot] 已加载机器人配置: {bot_name}")
+        
+        # 创建企业微信配置对象
+        wechat_config = WechatWorkConfig(
+            enabled=bot_config.enabled,
+            corp_id=bot_config.corp_id,
+            agent_id=bot_config.agent_id,
+            secret=bot_config.secret,
+            user_id=bot_config.user_id,
+            token=bot_config.token,
+            encoding_aes_key=bot_config.encoding_aes_key,
+            callback_port=bot_config.callback_port,
+            callback_host=bot_config.callback_host,
+            stream_mode=bot_config.stream_mode,
+            poll_interval=bot_config.poll_interval,
+            allow_from=bot_config.allow_from,
+            group_policy=bot_config.group_policy,
+            group_allow_from=bot_config.group_allow_from
+        )
+        
+        # 更新主配置
+        self.config.wechat_work = wechat_config
+        self.config.tmux_session = bot_config.tmux_session
+        
+        # 更新工作目录（如果机器人配置中指定了）
+        # 注意：机器人配置中通常不包含工作目录，使用主配置的工作目录
+        
+        return self.config
     
     async def start(self) -> None:
         """启动机器人。"""
@@ -257,6 +314,10 @@ async def main():
         help="配置文件路径（默认: config.json）"
     )
     parser.add_argument(
+        "--bot", "-b",
+        help="机器人名称（从 bots.json 加载）"
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="详细日志模式"
@@ -277,8 +338,10 @@ async def main():
     log_dir = Path(__file__).parent / "logs"
     log_dir.mkdir(exist_ok=True)
     
+    # 日志文件名包含机器人名称（如果指定）
+    log_suffix = f"_{args.bot}" if args.bot else ""
     logger.add(
-        log_dir / "wechat_bot_{time:YYYY-MM-DD}.log",
+        log_dir / f"wechat_bot{log_suffix}_{{time:YYYY-MM-DD}}.log",
         level="DEBUG",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | {message}",
         rotation="00:00",
@@ -287,7 +350,7 @@ async def main():
     )
     
     # 创建机器人实例
-    bot = WechatBot(config_path=args.config)
+    bot = WechatBot(config_path=args.config, bot_name=args.bot)
     
     # 设置信号处理
     loop = asyncio.get_running_loop()

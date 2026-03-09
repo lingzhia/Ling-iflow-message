@@ -6,6 +6,7 @@
 - 启动/停止企业微信 Bot
 - 查看服务状态
 - 重启服务
+- 多机器人管理
 """
 
 import asyncio
@@ -25,10 +26,10 @@ PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.loader import load_config as load_project_config
-
+from config.bots_loader import load_bots_config
 from config.schema import WechatWorkConfig
-
 from interactive.iflow_controller import IFlowController
+from utils.process_manager import ProcessManager
 
 
 
@@ -395,48 +396,79 @@ def status():
     print_header("Ling-iflow 服务状态")
     
     config = load_config()
-    tmux_session = config.tmux_session
     
-    # 检查 iflow
-    print_info(f"iflow CLI (tmux 会话: {tmux_session})")
-    if check_tmux_session(tmux_session):
-        print_success("  运行中")
+    # 加载机器人配置
+    try:
+        bots_config = load_bots_config()
+    except FileNotFoundError:
+        bots_config = None
+    except Exception as e:
+        print_warning(f"加载机器人配置失败: {e}")
+        bots_config = None
+    
+    # 显示机器人状态
+    if bots_config and bots_config.bots:
+        process_manager = ProcessManager(PROJECT_ROOT)
+        running_bots = process_manager.list_running_bots()
         
-        # 尝试获取更多信息
-        try:
-            result = subprocess.run(
-                ["tmux", "capture-pane", "-t", tmux_session, "-p"],
-                capture_output=True,
-                text=True
-            )
-            output = result.stdout
+        print_info(f"企业微信机器人 (共 {len(bots_config.bots)} 个，运行中: {len(running_bots)})")
+        print()
+        
+        for i, bot in enumerate(bots_config.bots, 1):
+            is_running = process_manager.is_running(bot.name)
+            status = "运行中 ✓" if is_running else "未运行"
             
-            # 检查是否有模型信息
-            if "model" in output.lower():
-                for line in output.split('\n'):
-                    if 'model' in line.lower() and '--model' in line:
-                        print(f"  {COLOR_CYAN}{line.strip()}{COLOR_RESET}")
-                        break
-        except Exception:
-            pass
+            print(f"  {i}. {bot.name}")
+            if is_running:
+                pid = process_manager.get_pid(bot.name)
+                print(f"    状态: {status} (PID: {pid})")
+            else:
+                print(f"    状态: {status}")
+            
+            print(f"    回调端口: {bot.callback_port}")
+            
+            # 检查 tmux 连接
+            tmux_running = check_tmux_session(bot.tmux_session)
+            tmux_status = "✓" if tmux_running else "✗"
+            print(f"    tmux 会话: {bot.tmux_session} {tmux_status}")
+            
+            print(f"    用户: {bot.user_id}")
+            print()
     else:
-        print_warning("  未运行")
+        print_warning("未找到机器人配置")
+        print()
     
-    # 检查企业微信 Bot
-    print_info(f"企业微信 Bot")
-    result = subprocess.run(
-        ["pgrep", "-f", "wechat_bot.py"],
-        capture_output=True,
-        text=True
-    )
+    # 显示 tmux 会话状态
+    try:
+        tmux_sessions = config.tmux_sessions if hasattr(config, 'tmux_sessions') else []
+        
+        # 兼容旧配置格式
+        if not tmux_sessions and hasattr(config, 'tmux_session'):
+            tmux_sessions = [{
+                "name": config.tmux_session,
+                "workspace": config.workspace,
+                "model": config.model if hasattr(config, 'model') else "kimi-k2.5"
+            }]
+    except Exception as e:
+        print_warning(f"加载配置失败: {e}")
+        tmux_sessions = []
     
-    if result.returncode == 0:
-        print_success("  运行中")
-        pids = result.stdout.strip().split('\n')
-        for pid in pids:
-            print(f"  {COLOR_CYAN}PID: {pid}{COLOR_RESET}")
+    print_info(f"tmux 会话 (共 {len(tmux_sessions)} 个，运行中: {sum(1 for s in tmux_sessions if check_tmux_session(s.get('name', 'iflow')))})")
+    print()
+    
+    if not tmux_sessions:
+        print_warning("  没有配置 tmux 会话")
     else:
-        print_warning("  未运行")
+        for i, session in enumerate(tmux_sessions, 1):
+            session_name = session.get("name", "iflow")
+            is_running = check_tmux_session(session_name)
+            status = "运行中 ✓" if is_running else "未运行"
+            
+            print(f"  {i}. {session_name}")
+            print(f"    状态: {status}")
+            print(f"    工作目录: {session.get('workspace', '~/.iflow')}")
+            print(f"    模型: {session.get('model', 'kimi-k2.5')}")
+            print()
     
     # 检查配置
     print_info(f"配置")
@@ -580,6 +612,292 @@ def test():
         except Exception as e:
             print_error(f"测试失败: {e}")
         print()
+
+
+# ==================== 多机器人管理命令 ====================
+
+@app.command()
+def list_resources():
+    """列出所有资源（机器人和 tmux 会话）。"""
+    print_header("Ling-iflow 资源列表")
+    
+    # 加载机器人配置
+    try:
+        bots_config = load_bots_config()
+    except FileNotFoundError:
+        print_warning("机器人配置文件不存在: bots.json")
+        return
+    except Exception as e:
+        print_error(f"加载机器人配置失败: {e}")
+        return
+    
+    # 列出机器人
+    print_info(f"企业微信机器人 (共 {len(bots_config.bots)} 个)")
+    print()
+    
+    if not bots_config.bots:
+        print_warning("  没有配置机器人")
+    else:
+        process_manager = ProcessManager(PROJECT_ROOT)
+        
+        for i, bot in enumerate(bots_config.bots, 1):
+            is_running = process_manager.is_running(bot.name)
+            status = "运行中 ✓" if is_running else "未运行"
+            
+            print(f"  {i}. {bot.name}")
+            print(f"    状态: {status}")
+            print(f"    回调端口: {bot.callback_port}")
+            print(f"    tmux 会话: {bot.tmux_session}")
+            print(f"    用户: {bot.user_id}")
+            
+            if is_running:
+                pid = process_manager.get_pid(bot.name)
+                print(f"    PID: {pid}")
+            
+            print()
+    
+    # 列出 tmux 会话
+    try:
+        config = load_config()
+        tmux_sessions = config.tmux_sessions if hasattr(config, 'tmux_sessions') else []
+        
+        # 兼容旧配置格式
+        if not tmux_sessions and hasattr(config, 'tmux_session'):
+            tmux_sessions = [{
+                "name": config.tmux_session,
+                "workspace": config.workspace,
+                "model": config.model if hasattr(config, 'model') else "kimi-k2.5"
+            }]
+    except Exception as e:
+        print_error(f"加载配置失败: {e}")
+        return
+    
+    print_info(f"tmux 会话 (共 {len(tmux_sessions)} 个)")
+    print()
+    
+    if not tmux_sessions:
+        print_warning("  没有配置 tmux 会话")
+    else:
+        for i, session in enumerate(tmux_sessions, 1):
+            session_name = session.get("name", "iflow")
+            is_running = check_tmux_session(session_name)
+            status = "运行中 ✓" if is_running else "未运行"
+            
+            print(f"  {i}. {session_name}")
+            print(f"    状态: {status}")
+            print(f"    工作目录: {session.get('workspace', '~/.iflow')}")
+            print(f"    模型: {session.get('model', 'kimi-k2.5')}")
+            print()
+
+
+@app.command()
+def bot_start(
+    bot: str = typer.Argument(..., help="机器人名称或序号"),
+    daemon: bool = typer.Option(True, "--foreground", help="前台模式（默认后台运行）"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="详细日志"),
+):
+    """启动机器人。"""
+    # 加载机器人配置
+    try:
+        bots_config = load_bots_config()
+    except FileNotFoundError:
+        print_error("机器人配置文件不存在: bots.json")
+        sys.exit(1)
+    except Exception as e:
+        print_error(f"加载机器人配置失败: {e}")
+        sys.exit(1)
+    
+    # 解析机器人参数
+    bot_config = _resolve_bot(bots_config, bot)
+    if not bot_config:
+        print_error(f"机器人不存在: {bot}")
+        sys.exit(1)
+    
+    if not bot_config.enabled:
+        print_error(f"机器人未启用: {bot}")
+        sys.exit(1)
+    
+    # 创建进程管理器
+    process_manager = ProcessManager(PROJECT_ROOT)
+    
+    # 检查是否已运行
+    if process_manager.is_running(bot_config.name):
+        print_warning(f"机器人已在运行: {bot_config.name}")
+        sys.exit(0)
+    
+    # 启动机器人
+    print_info(f"正在启动机器人: {bot_config.name}")
+    
+    try:
+        pid = process_manager.start_bot(
+            bot_name=bot_config.name,
+            config_path="config.json",
+            daemon=daemon,
+            verbose=verbose
+        )
+        
+        print_success(f"机器人已启动: {bot_config.name} (PID: {pid})")
+        
+        if daemon:
+            print_info(f"使用以下命令查看日志:")
+            print(f"  {COLOR_CYAN}python manage.py logs -r {bot_config.name}{COLOR_RESET}")
+    except Exception as e:
+        print_error(f"启动机器人失败: {e}")
+        sys.exit(1)
+
+
+@app.command()
+def bot_stop(
+    bot: str = typer.Argument(..., help="机器人名称或序号"),
+):
+    """停止机器人。"""
+    # 加载机器人配置
+    try:
+        bots_config = load_bots_config()
+    except FileNotFoundError:
+        print_error("机器人配置文件不存在: bots.json")
+        sys.exit(1)
+    except Exception as e:
+        print_error(f"加载机器人配置失败: {e}")
+        sys.exit(1)
+    
+    # 解析机器人参数
+    bot_config = _resolve_bot(bots_config, bot)
+    if not bot_config:
+        print_error(f"机器人不存在: {bot}")
+        sys.exit(1)
+    
+    # 创建进程管理器
+    process_manager = ProcessManager(PROJECT_ROOT)
+    
+    # 检查是否运行
+    if not process_manager.is_running(bot_config.name):
+        print_warning(f"机器人未运行: {bot_config.name}")
+        sys.exit(0)
+    
+    # 停止机器人
+    print_info(f"正在停止机器人: {bot_config.name}")
+    
+    if process_manager.stop_bot(bot_config.name):
+        print_success(f"机器人已停止: {bot_config.name}")
+    else:
+        print_error(f"停止机器人失败: {bot_config.name}")
+        sys.exit(1)
+
+
+@app.command()
+def bot_restart(
+    bot: str = typer.Argument(..., help="机器人名称或序号"),
+    daemon: bool = typer.Option(True, "--foreground", help="前台模式（默认后台运行）"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="详细日志"),
+):
+    """重启机器人。"""
+    # 停止
+    bot_stop(bot)
+    
+    # 等待一下
+    time.sleep(2)
+    
+    # 启动
+    bot_start(bot, daemon=daemon, verbose=verbose)
+
+
+@app.command()
+def bot_logs(
+    bot: str = typer.Argument(..., help="机器人名称或序号"),
+    follow: bool = typer.Option(False, "--follow", "-f", help="实时跟踪日志"),
+):
+    """查看机器人日志。"""
+    # 加载机器人配置
+    try:
+        bots_config = load_bots_config()
+    except FileNotFoundError:
+        print_error("机器人配置文件不存在: bots.json")
+        sys.exit(1)
+    except Exception as e:
+        print_error(f"加载机器人配置失败: {e}")
+        sys.exit(1)
+    
+    # 解析机器人参数
+    bot_config = _resolve_bot(bots_config, bot)
+    if not bot_config:
+        print_error(f"机器人不存在: {bot}")
+        sys.exit(1)
+    
+    # 查找日志文件
+    log_files = sorted((LOG_DIR / "logs").glob(f"wechat_bot_{bot_config.name}_*.log"), reverse=True)
+    
+    if not log_files:
+        print_warning("未找到日志文件")
+        return
+    
+    log_file = log_files[0]
+    print_info(f"查看日志文件: {log_file.name}")
+    
+    if follow:
+        subprocess.run(["tail", "-f", str(log_file)])
+    else:
+        subprocess.run(["tail", "-n", "50", str(log_file)])
+
+
+# ==================== 辅助函数 ====================
+
+def _resolve_bot(bots_config, bot: str):
+    """解析机器人参数（序号或名称）。
+    
+    Args:
+        bots_config: 机器人配置
+        bot: 机器人序号或名称
+        
+    Returns:
+        机器人配置，如果不存在返回 None
+    """
+    # 尝试按序号查找
+    try:
+        index = int(bot) - 1
+        if 0 <= index < len(bots_config.bots):
+            return bots_config.bots[index]
+    except ValueError:
+        pass
+    
+    # 尝试按名称查找
+    return bots_config.get_bot_by_name(bot)
+
+
+def _resolve_tmux_session(config, session: str):
+    """解析 tmux 会话参数（序号或名称）。
+    
+    Args:
+        config: 配置对象
+        session: tmux 会话序号或名称
+        
+    Returns:
+        tmux 会话配置，如果不存在返回 None
+    """
+    tmux_sessions = config.tmux_sessions if hasattr(config, 'tmux_sessions') else []
+    
+    # 兼容旧配置格式
+    if not tmux_sessions and hasattr(config, 'tmux_session'):
+        tmux_sessions = [{
+            "name": config.tmux_session,
+            "workspace": config.workspace,
+            "model": config.model if hasattr(config, 'model') else "kimi-k2.5"
+        }]
+    
+    # 尝试按序号查找
+    try:
+        index = int(session) - 1
+        if 0 <= index < len(tmux_sessions):
+            return tmux_sessions[index]
+    except ValueError:
+        pass
+    
+    # 尝试按名称查找
+    for s in tmux_sessions:
+        if s.get("name") == session:
+            return s
+    
+    return None
 
 
 def main():
