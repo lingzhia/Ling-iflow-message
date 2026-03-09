@@ -283,7 +283,7 @@ class BotIntegration:
         try:
             # 在发送命令之前，先提取初始回复（作为基准）
             logger.debug(f"[BotIntegration] 获取发送前的初始回复")
-            initial_messages, initial_generating, _ = self._extract_reply_from_tmux()
+            initial_messages, initial_generating, generation_time = self._extract_reply_from_tmux()
             initial_count = len(initial_messages)
             logger.debug(f"[BotIntegration] 初始回复数量: {initial_count}, 生成中: {initial_generating}")
 
@@ -291,7 +291,7 @@ class BotIntegration:
             if initial_generating:
                 logger.info(f"[BotIntegration] iflow 正在生成中，等待完成...")
                 await asyncio.sleep(2)
-                initial_messages, initial_generating, _ = self._extract_reply_from_tmux()
+                initial_messages, initial_generating, generation_time = self._extract_reply_from_tmux()
                 initial_count = len(initial_messages)
                 logger.debug(f"[BotIntegration] 等待后初始回复数量: {initial_count}, 生成中: {initial_generating}")
 
