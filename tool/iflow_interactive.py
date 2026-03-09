@@ -229,6 +229,32 @@ class IFlowTester:
             print(f"{COLOR_SYSTEM}✓ 正在启动后台监控...{COLOR_RESET}")
             background_task = asyncio.create_task(self.bot.start_background_monitor())
             print(f"{COLOR_SYSTEM}✓ 后台监控已启动{COLOR_RESET}")
+            
+            # 注册到消息分发器
+            from interactive.message_dispatcher import MessageDispatcher
+            dispatcher = MessageDispatcher()
+            
+            # 定义回调函数
+            async def monitor_callback(message: str, metadata: dict) -> None:
+                """分发器回调：打印消息到控制台"""
+                try:
+                    self.message_count += 1
+                    time_str = datetime.now().strftime("%H:%M:%S")
+                    
+                    print()
+                    print(f"{COLOR_AI}[iflow 回复] #{self.message_count} ({time_str}){COLOR_RESET}")
+                    print(f"{COLOR_AI}{message}{COLOR_RESET}")
+                    print()
+                    sys.stdout.flush()
+                    
+                    logger.info(f"[MockWeChat] 收到分发器消息 #{self.message_count}: {message[:50]}")
+                except Exception as e:
+                    logger.error(f"[MockWeChat] 分发器回调失败: {e}")
+            
+            # 注册回调
+            dispatcher.subscribe("iflow_monitor", monitor_callback)
+            print(f"{COLOR_SYSTEM}✓ 已注册到消息分发器{COLOR_RESET}")
+            
             print(f"{COLOR_SYSTEM}✓ 正在监听 iflow 交互界面的消息...{COLOR_RESET}")
             print()
             print(f"{COLOR_SYSTEM}提示: 在 tmux 中发送消息，会自动显示在这里{COLOR_RESET}")
@@ -241,6 +267,10 @@ class IFlowTester:
         except KeyboardInterrupt:
             print()
             print(f"{COLOR_SYSTEM}✓ 监听已停止{COLOR_RESET}")
+            
+            # 取消分发器注册
+            dispatcher.unsubscribe("iflow_monitor")
+            print(f"{COLOR_SYSTEM}✓ 已取消消息分发器注册{COLOR_RESET}")
         except Exception as e:
             print(f"{COLOR_SYSTEM}✗ 监听错误: {e}{COLOR_RESET}")
             logger.error(f"监听错误: {e}", exc_info=True)
@@ -288,6 +318,31 @@ class IFlowTester:
             print(f"{COLOR_SYSTEM}✓ 正在启动后台监控...{COLOR_RESET}")
             background_task = asyncio.create_task(self.bot.start_background_monitor())
             print(f"{COLOR_SYSTEM}✓ 后台监控已启动{COLOR_RESET}")
+            
+            # 注册到消息分发器
+            from interactive.message_dispatcher import MessageDispatcher
+            dispatcher = MessageDispatcher()
+            
+            # 定义回调函数
+            async def tool_callback(message: str, metadata: dict) -> None:
+                """分发器回调：打印消息到控制台"""
+                try:
+                    self.message_count += 1
+                    time_str = datetime.now().strftime("%H:%M:%S")
+                    
+                    print()
+                    print(f"{COLOR_AI}[iflow 回复] #{self.message_count} ({time_str}){COLOR_RESET}")
+                    print(f"{COLOR_AI}{message}{COLOR_RESET}")
+                    print()
+                    sys.stdout.flush()
+                    
+                    logger.info(f"[MockWeChat] 收到分发器消息 #{self.message_count}: {message[:50]}")
+                except Exception as e:
+                    logger.error(f"[MockWeChat] 分发器回调失败: {e}")
+            
+            # 注册回调
+            dispatcher.subscribe("iflow_tool", tool_callback)
+            print(f"{COLOR_SYSTEM}✓ 已注册到消息分发器{COLOR_RESET}")
             print()
         
         while self.running:
@@ -298,6 +353,14 @@ class IFlowTester:
                 if user_input in ['quit', 'exit', 'q']:
                     print(f"{COLOR_SYSTEM}再见！{COLOR_RESET}")
                     self.running = False
+                    
+                    # 取消分发器注册
+                    if enable_background_monitor:
+                        from interactive.message_dispatcher import MessageDispatcher
+                        dispatcher = MessageDispatcher()
+                        dispatcher.unsubscribe("iflow_tool")
+                        print(f"{COLOR_SYSTEM}✓ 已取消消息分发器注册{COLOR_RESET}")
+                    
                     break
 
                 if user_input == 'clear':

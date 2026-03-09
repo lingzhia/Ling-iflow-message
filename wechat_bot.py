@@ -14,6 +14,7 @@ from config.loader import load_config as load_project_config
 from config.schema import WechatWorkConfig
 from channels.wechat_work import WechatWorkChannel
 from interactive.bot_integration import BotIntegration
+from interactive.message_dispatcher import MessageDispatcher
 
 
 # 颜色定义
@@ -39,6 +40,7 @@ class WechatBot:
         self.wechat_channel = None
         self.bot_integration = None
         self.running = False
+        self.dispatcher = None
         
         logger.info("[WechatBot] 初始化完成")
     
@@ -94,6 +96,29 @@ class WechatBot:
         print(f"{COLOR_BLUE}[启动] 正在启动后台监控...{COLOR_RESET}")
         
         asyncio.create_task(self.bot_integration.start_background_monitor())
+        
+        # 注册到消息分发器
+        logger.info("[WechatBot] 正在注册到消息分发器...")
+        print(f"{COLOR_BLUE}[启动] 正在注册到消息分发器...{COLOR_RESET}")
+        
+        self.dispatcher = MessageDispatcher()
+        
+        # 定义回调函数
+        async def wechat_callback(message: str, metadata: dict) -> None:
+            """分发器回调：发送消息到企业微信"""
+            try:
+                user_id = wechat_config.user_id
+                is_group = metadata.get("is_group", False)
+                
+                await self.wechat_channel.send(message, user_id, is_group=is_group)
+                logger.info(f"[WechatBot] 通过分发器发送消息到企业微信: {message[:50]}")
+            except Exception as e:
+                logger.error(f"[WechatBot] 分发器回调失败: {e}")
+        
+        # 注册回调
+        self.dispatcher.subscribe("wechat_bot", wechat_callback)
+        logger.info("[WechatBot] 已注册到消息分发器")
+        print(f"{COLOR_GREEN}[启动] 已注册到消息分发器{COLOR_RESET}")
         
         # 显示启动信息
         self._print_startup_info(wechat_config)
@@ -173,6 +198,12 @@ class WechatBot:
         """停止机器人。"""
         # 发送关闭通知
         await self._send_shutdown_notification()
+        
+        # 取消分发器注册
+        if self.dispatcher:
+            logger.info("[WechatBot] 正在取消消息分发器注册...")
+            self.dispatcher.unsubscribe("wechat_bot")
+            logger.info("[WechatBot] 已取消消息分发器注册")
         
         self.running = False
         

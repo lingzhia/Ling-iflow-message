@@ -8,6 +8,7 @@ import logging
 import subprocess
 from typing import Optional, Dict, Any
 from loguru import logger
+from .message_dispatcher import MessageDispatcher
 
 from .session_manager import SessionManager
 from .iflow_controller import IFlowController
@@ -965,9 +966,17 @@ class BotIntegration:
                         # 记录发送的消息内容（前100字符）
                         logger.info(f"[BotIntegration] 发送消息内容预览: {full_message[:100]}...")
                         
-                        # 发送到企业微信
-                        await self.wechat_channel.send(full_message, self.wechat_channel.config.user_id, is_group=False)
-                        logger.info(f"[BotIntegration] 已发送 iflow 交互界面消息到企业微信")
+                        # 使用消息分发器广播消息
+                        dispatcher = MessageDispatcher()
+                        await dispatcher.broadcast(
+                            full_message,
+                            {
+                                "source": "iflow_interactive",
+                                "user_question": user_question,
+                                "message_count": len(new_messages)
+                            }
+                        )
+                        logger.info(f"[BotIntegration] 已通过分发器发送 iflow 交互界面消息")
                     
                     # 更新已知消息
                     last_known_messages.update(current_marker_ids)
