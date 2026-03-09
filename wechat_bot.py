@@ -8,6 +8,7 @@ import asyncio
 import signal
 import sys
 from pathlib import Path
+from typing import Optional
 from loguru import logger
 
 from config.loader import load_config as load_project_config
