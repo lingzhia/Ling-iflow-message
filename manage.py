@@ -167,6 +167,7 @@ def load_config() -> dict:
 
 @app.command()
 def start(
+    index: Optional[int] = typer.Argument(None, help="序号（默认为1），启动对应序号的机器人和 tmux 会话"),
     iflow: bool = typer.Option(True, "--iflow/--no-iflow", help="启动 iflow CLI"),
     wechat: bool = typer.Option(True, "--wechat/--no-wechat", help="启动企业微信 Bot"),
     foreground: bool = typer.Option(False, "--foreground", "-f", help="前台模式：直接显示 iflow 界面"),
@@ -178,36 +179,72 @@ def start(
     
     后台模式（默认）：服务在后台运行，返回命令行
     前台模式（--foreground）：直接显示 iflow 界面
+    
+    序号模式：指定序号启动对应序号的机器人和 tmux 会话（默认为1）
     """
     print_header("启动 Ling-iflow 服务")
+    
+    # 默认序号为1
+    if index is None:
+        index = 1
+    
+    print_info(f"操作序号: {index}")
+    print()
+    
+    # 加载机器人配置
+    try:
+        bots_config = load_bots_config()
+    except FileNotFoundError:
+        print_error("机器人配置文件不存在: bots.json")
+        sys.exit(1)
+    except Exception as e:
+        print_error(f"加载机器人配置失败: {e}")
+        sys.exit(1)
+    
+    # 加载主配置
+    try:
+        main_config = load_config()
+    except Exception as e:
+        print_error(f"加载主配置失败: {e}")
+        sys.exit(1)
+    
+    # 获取对应序号的机器人和 tmux 会话
+    bot_config = _resolve_bot(bots_config, str(index))
+    tmux_config = _resolve_tmux_session(main_config, str(index))
+    
+    if not bot_config:
+        print_error(f"机器人不存在: 序号 {index}")
+        sys.exit(1)
+    
+    if not tmux_config:
+        print_error(f"tmux 会话不存在: 序号 {index}")
+        sys.exit(1)
+    
+    bot_name = bot_config.name
+    tmux_session = tmux_config.get("name", "iflow")
+    tmux_workspace = tmux_config.get("workspace", "~/.iflow")
+    tmux_model = tmux_config.get("model", "kimi-k2.5")
+    
+    print_info(f"机器人: {bot_name}")
+    print_info(f"tmux 会话: {tmux_session}")
+    print()
     
     if foreground:
         print_info("前台模式：将直接显示 iflow 界面")
         print_info("退出方式：按 Ctrl+B 然后按 D 分离会话")
         print()
     
-    config = load_config()
-    tmux_session = config.tmux_session
-    config_path = PROJECT_ROOT / "config.json"
-    
     # 更新工作目录（如果指定）
     if workspace:
         print_info(f"更新工作目录: {workspace}")
-        config.workspace = workspace
-        
-        # 保存配置（使用原子写入）
-        try:
-            from config.loader import save_config
-            save_config(config, config_path)
-            print_success(f"工作目录已保存到配置文件")
-        except Exception as e:
-            print_error(f"保存配置失败: {e}")
-            sys.exit(1)
-    
-    workspace = config.workspace
+        tmux_workspace = workspace
+        tmux_config["workspace"] = workspace
+        print_success(f"工作目录已更新: {workspace}")
+        print()
     
     if verbose:
-        print_info(f"使用工作目录: {workspace}")
+        print_info(f"使用工作目录: {tmux_workspace}")
+        print_info(f"使用模型: {tmux_model}")
         print()
     
     # 启动 iflow
@@ -219,7 +256,7 @@ def start(
         else:
             print_info(f"启动 iflow CLI...")
             
-            model_arg = model if model else config.model
+            model_arg = model if model else tmux_model
             cmd = f"iflow --model {model_arg}"
             
             try:
@@ -271,53 +308,27 @@ def start(
     
     # 启动企业微信 Bot
     if wechat:
-        print_info(f"检查企业微信 Bot...")
+        print_info(f"检查企业微信 Bot ({bot_name})...")
         
-        if config.wechat_work and config.wechat_work.enabled:
-            # 检查进程是否已运行
-            result = subprocess.run(
-                ["pgrep", "-f", "wechat_bot.py"],
-                capture_output=True,
-                text=True
-            )
-            
-            if result.returncode == 0:
-                print_warning("企业微信 Bot 已在运行")
-            else:
-                print_info("启动企业微信 Bot...")
-                
-                bot_script = PROJECT_ROOT / "wechat_bot.py"
-                if not bot_script.exists():
-                    print_error(f"Bot 脚本不存在: {bot_script}")
-                    sys.exit(1)
-                
-                # 启动 bot
-                cmd = [sys.executable, str(bot_script), "--config", str(config_path)]
-                if verbose:
-                    cmd.append("--verbose")
-                
-                try:
-                    # 在后台启动
-                    process = subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        start_new_session=True
-                    )
-                    
-                    time.sleep(2)
-                    
-                    # 检查进程是否仍在运行
-                    if process.poll() is None:
-                        print_success("企业微信 Bot 已启动")
-                    else:
-                        print_error("企业微信 Bot 启动失败")
-                        sys.exit(1)
-                except Exception as e:
-                    print_error(f"启动企业微信 Bot 失败: {e}")
-                    sys.exit(1)
+        # 检查机器人是否已运行
+        process_manager = ProcessManager(PROJECT_ROOT)
+        if process_manager.is_running(bot_name):
+            print_warning(f"企业微信 Bot 已在运行: {bot_name}")
         else:
-            print_warning("企业微信未启用")
+            print_info(f"启动企业微信 Bot ({bot_name})...")
+            
+            try:
+                pid = process_manager.start_bot(
+                    bot_name=bot_name,
+                    config_path="config.json",
+                    daemon=True,
+                    verbose=verbose
+                )
+                
+                print_success(f"企业微信 Bot 已启动: {bot_name} (PID: {pid})")
+            except Exception as e:
+                print_error(f"启动企业微信 Bot 失败: {e}")
+                sys.exit(1)
     else:
         print_info("跳过企业微信 Bot 启动")
     
@@ -331,23 +342,71 @@ def start(
 
 @app.command()
 def stop(
+    index: Optional[int] = typer.Argument(None, help="序号（默认为1），停止对应序号的机器人和 tmux 会话"),
     iflow: bool = typer.Option(True, "--iflow/--no-iflow", help="停止 iflow CLI"),
     wechat: bool = typer.Option(True, "--wechat/--no-wechat", help="停止企业微信 Bot"),
 ):
-    """停止服务。"""
+    """停止服务。
+    
+    序号模式：指定序号停止对应序号的机器人和 tmux 会话（默认为1）
+    """
     print_header("停止 Ling-iflow 服务")
     
-    config = load_config()
-    tmux_session = config.tmux_session
+    # 默认序号为1
+    if index is None:
+        index = 1
+    
+    print_info(f"操作序号: {index}")
+    print()
+    
+    # 加载机器人配置
+    try:
+        bots_config = load_bots_config()
+    except FileNotFoundError:
+        print_error("机器人配置文件不存在: bots.json")
+        sys.exit(1)
+    except Exception as e:
+        print_error(f"加载机器人配置失败: {e}")
+        sys.exit(1)
+    
+    # 加载主配置
+    try:
+        main_config = load_config()
+    except Exception as e:
+        print_error(f"加载主配置失败: {e}")
+        sys.exit(1)
+    
+    # 获取对应序号的机器人和 tmux 会话
+    bot_config = _resolve_bot(bots_config, str(index))
+    tmux_config = _resolve_tmux_session(main_config, str(index))
+    
+    if not bot_config:
+        print_error(f"机器人不存在: 序号 {index}")
+        sys.exit(1)
+    
+    if not tmux_config:
+        print_error(f"tmux 会话不存在: 序号 {index}")
+        sys.exit(1)
+    
+    bot_name = bot_config.name
+    tmux_session = tmux_config.get("name", "iflow")
+    
+    print_info(f"机器人: {bot_name}")
+    print_info(f"tmux 会话: {tmux_session}")
+    print()
     
     # 停止企业微信 Bot
     if wechat:
-        print_info("停止企业微信 Bot...")
+        print_info(f"停止企业微信 Bot ({bot_name})...")
         
-        if kill_process_by_name("wechat_bot.py"):
-            print_success("企业微信 Bot 已停止")
+        process_manager = ProcessManager(PROJECT_ROOT)
+        if process_manager.is_running(bot_name):
+            if process_manager.stop_bot(bot_name):
+                print_success(f"企业微信 Bot 已停止: {bot_name}")
+            else:
+                print_error(f"停止企业微信 Bot 失败: {bot_name}")
         else:
-            print_warning("企业微信 Bot 未运行或停止失败")
+            print_warning(f"企业微信 Bot 未运行: {bot_name}")
     
     # 停止 iflow
     if iflow:
@@ -359,11 +418,11 @@ def stop(
                     ["tmux", "kill-session", "-t", tmux_session],
                     check=True
                 )
-                print_success(f"iflow CLI 已停止")
+                print_success(f"iflow CLI 已停止: {tmux_session}")
             except subprocess.CalledProcessError as e:
                 print_error(f"停止 iflow CLI 失败: {e}")
         else:
-            print_warning(f"iflow CLI 未运行")
+            print_warning(f"iflow CLI 未运行: {tmux_session}")
     
     print()
     print_success("服务停止完成！")
@@ -372,22 +431,26 @@ def stop(
 
 @app.command()
 def restart(
+    index: Optional[int] = typer.Argument(None, help="序号（默认为1），重启对应序号的机器人和 tmux 会话"),
     iflow: bool = typer.Option(True, "--iflow/--no-iflow", help="重启 iflow CLI"),
     wechat: bool = typer.Option(True, "--wechat/--no-wechat", help="重启企业微信 Bot"),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="iflow 模型名称"),
     workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="iflow 工作目录"),
 ):
-    """重启服务。"""
+    """重启服务。
+    
+    序号模式：指定序号重启对应序号的机器人和 tmux 会话（默认为1）
+    """
     print_header("重启 Ling-iflow 服务")
     
     # 先停止
-    stop(iflow=iflow, wechat=wechat)
+    stop(index, iflow=iflow, wechat=wechat)
     
     # 等待一下
     time.sleep(2)
     
     # 再启动
-    start(iflow=iflow, wechat=wechat, model=model, workspace=workspace)
+    start(index, iflow=iflow, wechat=wechat, model=model, workspace=workspace)
 
 
 @app.command()
