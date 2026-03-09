@@ -374,6 +374,7 @@ def restart(
     iflow: bool = typer.Option(True, "--iflow/--no-iflow", help="重启 iflow CLI"),
     wechat: bool = typer.Option(True, "--wechat/--no-wechat", help="重启企业微信 Bot"),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="iflow 模型名称"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="iflow 工作目录"),
 ):
     """重启服务。"""
     print_header("重启 Ling-iflow 服务")
@@ -385,7 +386,7 @@ def restart(
     time.sleep(2)
     
     # 再启动
-    start(iflow=iflow, wechat=wechat, model=model)
+    start(iflow=iflow, wechat=wechat, model=model, workspace=workspace)
 
 
 @app.command()
