@@ -492,6 +492,274 @@ def restart(
 
 
 @app.command()
+def start_all(
+    iflow: bool = typer.Option(True, "--iflow/--no-iflow", help="启动 iflow CLI（默认启用）"),
+    wechat: bool = typer.Option(True, "--wechat/--no-wechat", help="启动企业微信 Bot（默认启用）"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="启用详细日志输出"),
+):
+    """启动所有机器人和 tmux 会话。
+    
+    功能特性：
+    • 遍历所有配置的机器人，依次启动
+    • 同时启动对应的 tmux 会话
+    • 显示启动进度和结果
+    
+    注意：
+    • 已运行的机器人会被跳过
+    • 已运行的 tmux 会话会被跳过
+    • 启动失败不会影响其他服务的启动
+    
+    示例：
+    • 启动所有服务：python manage.py start-all
+    • 仅启动 iflow：python manage.py start-all --no-wechat
+    • 仅启动企业微信：python manage.py start-all --no-iflow
+    • 启用详细日志：python manage.py start-all --verbose
+    """
+    print_header("启动所有服务")
+    
+    # 加载机器人配置
+    try:
+        bots_config = load_bots_config()
+    except FileNotFoundError:
+        print_error("机器人配置文件不存在")
+        sys.exit(1)
+    except Exception as e:
+        print_error(f"加载机器人配置失败: {e}")
+        sys.exit(1)
+    
+    # 加载主配置
+    try:
+        main_config = load_config()
+    except Exception as e:
+        print_error(f"加载主配置失败: {e}")
+        sys.exit(1)
+    
+    if not bots_config.bots:
+        print_warning("没有配置机器人")
+        return
+    
+    print_info(f"将启动 {len(bots_config.bots)} 个机器人")
+    print()
+    
+    success_count = 0
+    fail_count = 0
+    
+    # 遍历所有机器人
+    for i, bot in enumerate(bots_config.bots, 1):
+        print_info(f"[{i}/{len(bots_config.bots)}] 启动: {bot.name}")
+        
+        try:
+            # 查找对应的 tmux 会话
+            tmux_config = None
+            for session in main_config.tmux_sessions if hasattr(main_config, 'tmux_sessions') else []:
+                if session.get("name") == bot.tmux_session:
+                    tmux_config = session
+                    break
+            
+            if not tmux_config:
+                print_warning(f"  未找到 tmux 会话: {bot.tmux_session}，跳过")
+                fail_count += 1
+                print()
+                continue
+            
+            # 启动 iflow
+            if iflow:
+                tmux_session = tmux_config.get("name")
+                if check_tmux_session(tmux_session):
+                    print_info(f"  iflow 已运行: {tmux_session}")
+                else:
+                    print_info(f"  启动 iflow: {tmux_session}")
+                    model_arg = tmux_config.get("model", "kimi-k2.5")
+                    cmd = f"iflow --model {model_arg}"
+                    
+                    try:
+                        subprocess.run(
+                            ["tmux", "new-session", "-d", "-s", tmux_session, cmd],
+                            check=True
+                        )
+                        print_success(f"  iflow 已启动: {tmux_session}")
+                    except subprocess.CalledProcessError as e:
+                        print_error(f"  启动 iflow 失败: {e}")
+                        fail_count += 1
+                        print()
+                        continue
+            
+            # 启动机器人
+            if wechat:
+                process_manager = ProcessManager(PROJECT_ROOT)
+                if process_manager.is_running(bot.name):
+                    print_info(f"  机器人已运行: {bot.name}")
+                else:
+                    print_info(f"  启动机器人: {bot.name}")
+                    try:
+                        pid = process_manager.start_bot(
+                            bot_name=bot.name,
+                            config_path="config.json",
+                            daemon=True,
+                            verbose=verbose
+                        )
+                        print_success(f"  机器人已启动: {bot.name} (PID: {pid})")
+                    except Exception as e:
+                        print_error(f"  启动机器人失败: {e}")
+                        fail_count += 1
+                        print()
+                        continue
+            
+            success_count += 1
+            print()
+            
+        except Exception as e:
+            print_error(f"  启动失败: {e}")
+            fail_count += 1
+            print()
+    
+    print()
+    print_header("启动完成")
+    print_info(f"成功: {success_count} 个")
+    print_info(f"失败: {fail_count} 个")
+    print()
+
+
+@app.command()
+def stop_all(
+    iflow: bool = typer.Option(True, "--iflow/--no-iflow", help="停止 iflow CLI（默认启用）"),
+    wechat: bool = typer.Option(True, "--wechat/--no-wechat", help="停止企业微信 Bot（默认启用）"),
+):
+    """停止所有机器人和 tmux 会话。
+    
+    功能特性：
+    • 遍历所有配置的机器人，依次停止
+    • 同时停止对应的 tmux 会话
+    • 显示停止进度和结果
+    
+    注意：
+    • 未运行的机器人会被跳过
+    • 未运行的 tmux 会话会被跳过
+    • 停止失败不会影响其他服务的停止
+    
+    示例：
+    • 停止所有服务：python manage.py stop-all
+    • 仅停止 iflow：python manage.py stop-all --no-wechat
+    • 仅停止企业微信：python manage.py stop-all --no-iflow
+    """
+    print_header("停止所有服务")
+    
+    # 加载机器人配置
+    try:
+        bots_config = load_bots_config()
+    except FileNotFoundError:
+        print_error("机器人配置文件不存在")
+        sys.exit(1)
+    except Exception as e:
+        print_error(f"加载机器人配置失败: {e}")
+        sys.exit(1)
+    
+    # 加载主配置
+    try:
+        main_config = load_config()
+    except Exception as e:
+        print_error(f"加载主配置失败: {e}")
+        sys.exit(1)
+    
+    if not bots_config.bots:
+        print_warning("没有配置机器人")
+        return
+    
+    print_info(f"将停止 {len(bots_config.bots)} 个机器人")
+    print()
+    
+    success_count = 0
+    fail_count = 0
+    
+    # 遍历所有机器人
+    for i, bot in enumerate(bots_config.bots, 1):
+        print_info(f"[{i}/{len(bots_config.bots)}] 停止: {bot.name}")
+        
+        try:
+            # 停止机器人
+            if wechat:
+                process_manager = ProcessManager(PROJECT_ROOT)
+                if process_manager.is_running(bot.name):
+                    print_info(f"  停止机器人: {bot.name}")
+                    if process_manager.stop_bot(bot.name):
+                        print_success(f"  机器人已停止: {bot.name}")
+                    else:
+                        print_error(f"  停止机器人失败: {bot.name}")
+                        fail_count += 1
+                else:
+                    print_info(f"  机器人未运行: {bot.name}")
+            
+            # 停止 iflow
+            if iflow:
+                tmux_session = bot.tmux_session
+                if check_tmux_session(tmux_session):
+                    print_info(f"  停止 iflow: {tmux_session}")
+                    try:
+                        subprocess.run(
+                            ["tmux", "kill-session", "-t", tmux_session],
+                            check=True
+                        )
+                        print_success(f"  iflow 已停止: {tmux_session}")
+                    except subprocess.CalledProcessError as e:
+                        print_error(f"  停止 iflow 失败: {e}")
+                        fail_count += 1
+                else:
+                    print_info(f"  iflow 未运行: {tmux_session}")
+            
+            success_count += 1
+            print()
+            
+        except Exception as e:
+            print_error(f"  停止失败: {e}")
+            fail_count += 1
+            print()
+    
+    print()
+    print_header("停止完成")
+    print_info(f"成功: {success_count} 个")
+    print_info(f"失败: {fail_count} 个")
+    print()
+
+
+@app.command()
+def restart_all(
+    iflow: bool = typer.Option(True, "--iflow/--no-iflow", help="重启 iflow CLI（默认启用）"),
+    wechat: bool = typer.Option(True, "--wechat/--no-wechat", help="重启企业微信 Bot（默认启用）"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="启用详细日志输出"),
+):
+    """重启所有机器人和 tmux 会话。
+    
+    功能特性：
+    • 先停止所有服务
+    • 等待 2 秒
+    • 再启动所有服务
+    • 显示重启进度和结果
+    
+    注意：
+    • 重启会依次停止和启动每个服务
+    • 停止失败不会影响启动
+    • 适用于应用全局配置更改后的重启
+    
+    示例：
+    • 重启所有服务：python manage.py restart-all
+    • 仅重启 iflow：python manage.py restart-all --no-wechat
+    • 仅重启企业微信：python manage.py restart-all --no-iflow
+    • 启用详细日志：python manage.py restart-all --verbose
+    """
+    print_header("重启所有服务")
+    
+    # 先停止
+    stop_all(iflow=iflow, wechat=wechat)
+    
+    # 等待一下
+    print_info("等待 2 秒...")
+    time.sleep(2)
+    
+    # 再启动
+    start_all(iflow=iflow, wechat=wechat, verbose=verbose)
+
+
+@app.command()
 def status():
     """查看 Ling-iflow 服务的详细状态。
     
