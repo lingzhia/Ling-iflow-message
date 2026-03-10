@@ -574,9 +574,13 @@ class WechatWorkChannel(BaseChannel):
                 logger.debug(f"[{self.name}] Group message without mention, ignoring")
                 return
         
+        # 打印完整的企业微信原始消息
         logger.info(
-            f"[{self.name}] Received message from {from_user} "
-            f"in {'group' if is_group else 'private'}: {content[:50]}..."
+            f"[{self.name}] 收到企业微信消息 (原始消息)\n"
+            f"  来源: {from_user}\n"
+            f"  类型: {'群聊' if is_group else '私聊'}\n"
+            f"  消息类型: {msg_type}\n"
+            f"  消息内容: {content}"
         )
         
         # 检查权限控制
@@ -712,7 +716,14 @@ class WechatWorkChannel(BaseChannel):
                 return None
             
             msg_id = data.get("msgid", "")
-            logger.debug(f"[{self.name}] Message sent: {msg_id}")
+            # 打印完整的发送到企业微信的消息
+            logger.info(
+                f"[{self.name}] 发送消息到企业微信\n"
+                f"  接收者: {chat_id}\n"
+                f"  类型: {'群聊' if is_group else '私聊'}\n"
+                f"  消息ID: {msg_id}\n"
+                f"  消息内容: {content}"
+            )
             return msg_id
             
         except Exception as e:

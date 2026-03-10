@@ -120,7 +120,7 @@ class IFlowController:
                 logger.error(f"[IFlowController] Failed to send message: {result.stderr.decode()}")
                 return False
             
-            logger.debug(f"[IFlowController] Message sent to iflow: {message[:50]}...")
+            logger.info(f"[IFlowController] 发送消息到 iflow: {message}")
             return True
             
         except subprocess.TimeoutExpired:

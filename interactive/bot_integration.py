@@ -540,7 +540,7 @@ class BotIntegration:
                 return
 
             # 发送命令到 iflow
-            logger.info(f"[BotIntegration] 发送命令到 iflow")
+            logger.info(f"[BotIntegration] 发送命令到 iflow: {command}")
             success = self.iflow_controller.send_message(command)
 
             if not success:
@@ -913,6 +913,13 @@ class BotIntegration:
             for k, chunk in enumerate(chunks):
                 if k > 0:
                     await asyncio.sleep(0.3)
+                # 打印发送到企业微信的消息内容
+                logger.info(
+                    f"[BotIntegration] 发送消息到企业微信 (第{k+1}/{len(chunks)}段)\n"
+                    f"  接收者: {chat_id}\n"
+                    f"  类型: {'群聊' if is_group else '私聊'}\n"
+                    f"  消息内容: {chunk}"
+                )
                 await self.wechat_channel.send(chunk, chat_id, is_group=is_group)
     
     def _extract_reply_from_tmux(self) -> tuple:
@@ -1242,8 +1249,13 @@ class BotIntegration:
                         # 合并开头标记和内容
                         full_message = header + merged_content
                         
-                        # 记录发送的消息内容（前100字符）
-                        logger.info(f"[BotIntegration] 发送消息内容预览: {full_message[:100]}...")
+                        # 打印完整的 iflow 回复消息
+                        logger.info(
+                            f"[BotIntegration] 检测到 iflow 交互界面回复 (后台监控)\n"
+                            f"  用户问题: {user_question}\n"
+                            f"  消息数量: {len(new_messages)}\n"
+                            f"  完整回复: {full_message}"
+                        )
                         
                         # 使用消息分发器广播消息
                         dispatcher = MessageDispatcher()
