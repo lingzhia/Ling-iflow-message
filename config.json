@@ -1,1 +1,20 @@
-{"tmux_session": "iflow", "workspace": "~/.iflow", "wechat_work": {"enabled": false}}
+{
+  "tmux_session": "iflow",
+  "workspace": "~/.iflow",
+  "model": "kimi-k2.5",
+  "tmux_sessions": [
+    {
+      "name": "iflow",
+      "workspace": "~/.iflow",
+      "model": "kimi-k2.5"
+    },
+    {
+      "name": "iflow2",
+      "workspace": "~/.iflow2",
+      "model": "kimi-k2.5"
+    }
+  ],
+  "wechat_work": {
+    "enabled": false
+  }
+}

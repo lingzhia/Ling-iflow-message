@@ -72,7 +72,10 @@ class InteractiveConfig(BaseSettings):
     """iflow 模型名称。"""
     
     tmux_session: str = "iflow"
-    """tmux 会话名称。"""
+    """默认 tmux 会话名称（向后兼容）。"""
+    
+    tmux_sessions: list[dict] = Field(default_factory=list)
+    """tmux 会话列表（支持多会话配置）。"""
     
     # 企业微信配置
     wechat_work: WechatWorkConfig = Field(default_factory=WechatWorkConfig)
