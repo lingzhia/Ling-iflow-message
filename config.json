@@ -53,6 +53,22 @@
     }
   ],
   "wechat_work": {
-    "enabled": false
-  }
+    "enabled": false,
+    "corp_id": "",
+    "agent_id": "",
+    "secret": "",
+    "user_id": "",
+    "token": "",
+    "encoding_aes_key": "",
+    "callback_port": 8788,
+    "callback_host": "0.0.0.0",
+    "stream_mode": false,
+    "poll_interval": 5,
+    "allow_from": [],
+    "group_policy": "mention",
+    "group_allow_from": []
+  },
+  "log_level": "INFO",
+  "log_file": "",
+  "filter_thinking": true
 }

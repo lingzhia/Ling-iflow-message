@@ -911,18 +911,28 @@ def logs(
     if wechat:
         print_info("查看企业微信 Bot 日志")
         # 检查日志文件
-        log_files = [
-            PROJECT_ROOT / "tests" / "wechat_messages.log",
-            PROJECT_ROOT / "wechat_messages.log",
-        ]
+        log_files = []
         
-        for log_file in log_files:
-            if log_file.exists():
-                if follow:
-                    subprocess.run(["tail", "-f", str(log_file)])
-                else:
-                    subprocess.run(["tail", "-n", "50", str(log_file)])
-                break
+        # 查找所有机器人日志文件
+        wechat_log_files = list(LOG_DIR.glob("wechat_bot_*.log"))
+        if wechat_log_files:
+            log_files.extend(wechat_log_files)
+        
+        # 兼容旧的日志文件位置
+        for old_path in [PROJECT_ROOT / "tests" / "wechat_messages.log", PROJECT_ROOT / "wechat_messages.log"]:
+            if old_path.exists():
+                log_files.append(old_path)
+        
+        if log_files:
+            # 按修改时间排序，最新的在前
+            log_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+            
+            print_info(f"找到 {len(log_files)} 个日志文件，显示最新的")
+            
+            if follow:
+                subprocess.run(["tail", "-f", str(log_files[0])])
+            else:
+                subprocess.run(["tail", "-n", "50", str(log_files[0])])
         else:
             print_warning("未找到日志文件")
 
@@ -1477,7 +1487,7 @@ def bot_logs(
         sys.exit(1)
     
     # 查找日志文件
-    log_files = sorted((LOG_DIR / "logs").glob(f"wechat_bot_{bot_config.name}_*.log"), reverse=True)
+    log_files = sorted(LOG_DIR.glob(f"wechat_bot_{bot_config.name}_*.log"), reverse=True)
     
     if not log_files:
         print_warning("未找到日志文件")
