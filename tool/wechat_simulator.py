@@ -81,14 +81,24 @@ class WechatSimulator:
         self.message_count = 0
 
     async def start(self) -> None:
-        """启动机器人（测试模式）。"""
+        """启动机器人（测试模式）。
+        
+        注意：测试模式下不调用 WechatBot.start()，因为它会进入无限循环。
+        而是只初始化组件并启动后台监控。
+        """
         try:
             self.bot = WechatBot(
                 config_path=str(self.config_path),
                 bot_name=self.bot_name,
                 test_mode=True  # 测试模式
             )
-            await self.bot.start()
+            
+            # 设置运行标志
+            self.bot.running = True
+            
+            # 直接调用测试模式的初始化逻辑，避免进入无限循环
+            await self.bot._start_test_mode()
+            
             logger.info(f"[WechatSimulator] 机器人已启动（测试模式）: {self.bot_name}")
         except Exception as e:
             logger.error(f"[WechatSimulator] 启动机器人失败: {e}")

@@ -227,9 +227,7 @@ class WechatBot:
         print(f"{COLOR_BLUE}[提示] 使用 listen() 监听回复{COLOR_RESET}")
         print()
         
-        # 保持运行
-        while self.running:
-            await asyncio.sleep(1)
+        # 注意：测试模式下不在这里保持运行，而是在 listen() 方法中保持运行
     
     async def _start_production_mode(self) -> None:
         """启动生产模式（完整功能，包括 HTTP 服务器）。"""
