@@ -28,16 +28,18 @@ COLOR_BLUE = "\033[36m"
 class WechatBot:
     """企业微信机器人主类。"""
     
-    def __init__(self, config_path: str = "config.json", bot_name: Optional[str] = None):
+    def __init__(self, config_path: str = "config.json", bot_name: Optional[str] = None, test_mode: bool = False):
         """初始化机器人。
         
         Args:
             config_path: 配置文件路径
             bot_name: 机器人名称（从 bots.json 加载）
+            test_mode: 测试模式（不启动 HTTP 服务器，提供测试接口）
         """
         # 加载配置
         self.config = load_project_config(Path(config_path))
         self.bot_name = bot_name
+        self.test_mode = test_mode
         
         # 如果指定了机器人名称，从 bots.json 加载配置
         if bot_name:
@@ -49,7 +51,12 @@ class WechatBot:
         self.running = False
         self.dispatcher = None
         
-        logger.info(f"[WechatBot] 初始化完成 (bot_name={bot_name})")
+        # 测试模式专用变量
+        self.test_callback = None
+        self.test_listener_id = "test_listener"
+        
+        mode_str = "测试模式" if test_mode else "生产模式"
+        logger.info(f"[WechatBot] 初始化完成 (bot_name={bot_name}, mode={mode_str})")
     
     def _load_bot_config(self, bot_name: str):
         """从 bots.json 加载机器人配置。
@@ -104,6 +111,123 @@ class WechatBot:
     
     async def start(self) -> None:
         """启动机器人。"""
+        if self.test_mode:
+            await self._start_test_mode()
+        else:
+            await self._start_production_mode()
+    
+    async def _start_test_mode(self) -> None:
+        """启动测试模式（不启动 HTTP 服务器，提供测试接口）。"""
+        logger.info("[WechatBot] 启动测试模式")
+        print(f"{COLOR_BLUE}[测试模式] 正在初始化组件...{COLOR_RESET}")
+        
+        self.running = True
+        
+        # 检查企业微信配置
+        if not self.config.wechat_work or not self.config.wechat_work.enabled:
+            logger.warning("[WechatBot] 测试模式下企业微信未启用，继续使用默认配置")
+        
+        wechat_config: WechatWorkConfig = self.config.wechat_work
+        
+        # 创建企业微信渠道（不启动）
+        logger.info("[WechatBot] 正在初始化企业微信渠道（不启动）...")
+        self.wechat_channel = WechatWorkChannel(wechat_config)
+        
+        
+        
+        # 包装 wechat_channel.send() 方法，使其在发送后广播消息
+        original_send = self.wechat_channel.send
+        
+        async def wrapped_send(content, chat_id, is_group=False, **kwargs):
+            # 先执行原始的 send() 方法
+            result = await original_send(content, chat_id, is_group=is_group, **kwargs)
+            
+            # 然后通过 MessageDispatcher 广播消息
+            await self.dispatcher.broadcast(
+                content,
+                {
+                    'source': 'wechat_send',
+                    'chat_id': chat_id,
+                    'is_group': is_group,
+                    'tmux_session': self.config.tmux_session,
+                    'workspace': self.config.workspace
+                }
+            )
+            
+            return result
+        
+        # 替换原始方法
+        self.wechat_channel.send = wrapped_send
+        logger.info('[WechatBot] 测试模式已包装 wechat_channel.send() 方法')
+        
+        # 创建机器人集成
+        logger.info("[WechatBot] 正在初始化机器人集成...")
+        self.bot_integration = BotIntegration(
+            wechat_channel=self.wechat_channel,
+            tmux_session=self.config.tmux_session,
+            workspace=self.config.workspace,
+            filter_thinking=self.config.filter_thinking
+        )
+        
+        # 启动后台监控（检测 iflow 交互界面的消息）
+        logger.info("[WechatBot] 正在启动后台监控...")
+        print(f"{COLOR_BLUE}[测试模式] 正在启动后台监控...{COLOR_RESET}")
+        
+        asyncio.create_task(self.bot_integration.start_background_monitor())
+        
+        # 注册到消息分发器
+        logger.info("[WechatBot] 正在注册到消息分发器...")
+        print(f"{COLOR_BLUE}[测试模式] 正在注册到消息分发器...{COLOR_RESET}")
+        
+        self.dispatcher = MessageDispatcher()
+        
+        # 定义默认回调函数（打印到控制台）
+        async def test_callback(message: str, metadata: dict) -> None:
+            """测试模式回调：打印消息到控制台"""
+            try:
+                # 检查消息来源（多 iflow 场景下过滤消息）
+                source = metadata.get("source", "")
+                tmux_session = metadata.get("tmux_session", "")
+                workspace = metadata.get("workspace", "")
+                
+                # 只处理来自当前 iflow 的消息
+                if source == "iflow_interactive":
+                    if tmux_session != self.config.tmux_session:
+                        logger.warning(
+                            f"[WechatBot] 忽略来自其他 iflow 的消息: "
+                            f"来源 tmux={tmux_session}, 当前 tmux={self.config.tmux_session}"
+                        )
+                        return
+                    logger.info(
+                        f"[WechatBot] 收到来自 iflow 的消息: "
+                        f"tmux={tmux_session}, workspace={workspace}"
+                    )
+                
+                # 打印消息到控制台
+                print(f"{COLOR_GREEN}[iflow 回复]{COLOR_RESET}")
+                print(f"{message}")
+                print()
+                logger.info(f"[WechatBot] 测试模式收到消息: {message[:50]}")
+            except Exception as e:
+                logger.error(f"[WechatBot] 测试模式回调失败: {e}")
+        
+        # 注册回调
+        self.test_callback = test_callback
+        self.dispatcher.subscribe(self.test_listener_id, test_callback)
+        logger.info("[WechatBot] 已注册到消息分发器（测试模式）")
+        print(f"{COLOR_GREEN}[测试模式] 已注册到消息分发器{COLOR_RESET}")
+        
+        # 显示启动信息
+        self._print_test_startup_info()
+        
+        logger.info("[WechatBot] 测试模式启动完成")
+        print(f"{COLOR_GREEN}[测试模式] 测试模式已启动！{COLOR_RESET}")
+        print(f"{COLOR_BLUE}[提示] 使用 send_message() 发送消息{COLOR_RESET}")
+        print(f"{COLOR_BLUE}[提示] 使用 listen() 监听回复{COLOR_RESET}")
+        print()
+    
+    async def _start_production_mode(self) -> None:
+        """启动生产模式（完整功能，包括 HTTP 服务器）。"""
         # 检查企业微信配置
         if not self.config.wechat_work or not self.config.wechat_work.enabled:
             logger.error("[WechatBot] 企业微信未启用，请在配置中设置 wechat_work.enabled=true")
@@ -129,7 +253,7 @@ class WechatBot:
         
         self.wechat_channel = WechatWorkChannel(wechat_config)
         
-        # 创建机器人集成
+                # 创建机器人集成
         logger.info("[WechatBot] 正在初始化机器人集成...")
         print(f"{COLOR_BLUE}[启动] 正在初始化机器人集成...{COLOR_RESET}")
         
@@ -165,6 +289,24 @@ class WechatBot:
         async def wechat_callback(message: str, metadata: dict) -> None:
             """分发器回调：发送消息到企业微信"""
             try:
+                # 检查消息来源（多 iflow 场景下过滤消息）
+                source = metadata.get("source", "")
+                tmux_session = metadata.get("tmux_session", "")
+                workspace = metadata.get("workspace", "")
+                
+                # 只处理来自当前 iflow 的消息
+                if source == "iflow_interactive":
+                    if tmux_session != self.config.tmux_session:
+                        logger.warning(
+                            f"[WechatBot] 忽略来自其他 iflow 的消息: "
+                            f"来源 tmux={tmux_session}, 当前 tmux={self.config.tmux_session}"
+                        )
+                        return
+                    logger.info(
+                        f"[WechatBot] 收到来自 iflow 的消息: "
+                        f"tmux={tmux_session}, workspace={workspace}"
+                    )
+                
                 user_id = wechat_config.user_id
                 is_group = metadata.get("is_group", False)
                 
@@ -276,22 +418,36 @@ class WechatBot:
     
     async def stop(self) -> None:
         """停止机器人。"""
-        # 发送关闭通知
-        await self._send_shutdown_notification()
-        
-        # 取消分发器注册
-        if self.dispatcher:
-            logger.info("[WechatBot] 正在取消消息分发器注册...")
-            self.dispatcher.unsubscribe("wechat_bot")
-            logger.info("[WechatBot] 已取消消息分发器注册")
-        
-        self.running = False
-        
-        if self.wechat_channel:
-            await self.wechat_channel.stop()
-        
-        logger.info("[WechatBot] 已停止")
-        print(f"{COLOR_YELLOW}[停止] iFlow 企业微信机器人已停止{COLOR_RESET}")
+        if self.test_mode:
+            # 测试模式：不发送关闭通知，不停止 HTTP 服务器
+            # 取消分发器注册
+            if self.dispatcher and self.test_listener_id in self.dispatcher.get_subscribers():
+                logger.info("[WechatBot] 正在取消测试模式消息分发器注册...")
+                self.dispatcher.unsubscribe(self.test_listener_id)
+                logger.info("[WechatBot] 已取消测试模式消息分发器注册")
+            
+            self.running = False
+            
+            logger.info("[WechatBot] 测试模式已停止")
+            print(f"{COLOR_YELLOW}[测试模式] 测试模式已停止{COLOR_RESET}")
+        else:
+            # 生产模式：完整停止流程
+            # 发送关闭通知
+            await self._send_shutdown_notification()
+            
+            # 取消分发器注册
+            if self.dispatcher:
+                logger.info("[WechatBot] 正在取消消息分发器注册...")
+                self.dispatcher.unsubscribe("wechat_bot")
+                logger.info("[WechatBot] 已取消消息分发器注册")
+            
+            self.running = False
+            
+            if self.wechat_channel:
+                await self.wechat_channel.stop()
+            
+            logger.info("[WechatBot] 已停止")
+            print(f"{COLOR_YELLOW}[停止] iFlow 企业微信机器人已停止{COLOR_RESET}")
     
     async def _send_shutdown_notification(self) -> None:
         """发送关闭通知。"""
@@ -344,6 +500,122 @@ python manage.py start
         logger.info("[WechatBot] 收到关闭信号，正在停止...")
         print(f"{COLOR_YELLOW}[停止] 收到关闭信号，正在停止...{COLOR_RESET}")
         await self.stop()
+    
+    def _print_test_startup_info(self) -> None:
+        """打印测试模式启动信息。"""
+        print()
+        print("=" * 70)
+        print(f"{COLOR_GREEN}iFlow 企业微信机器人 - 测试模式 🧪{COLOR_RESET}")
+        print("=" * 70)
+        print()
+        print(f"{COLOR_BLUE}[配置信息]{COLOR_RESET}")
+        print(f"  机器人名称: {self.bot_name}")
+        print(f"  tmux 会话: {self.config.tmux_session}")
+        print(f"  工作目录: {self.config.workspace}")
+        print()
+        print(f"{COLOR_BLUE}[测试模式特性]{COLOR_RESET}")
+        print(f"  不启动 HTTP 服务器")
+        print(f"  不接收企业微信消息")
+        print(f"  不发送消息到企业微信")
+        print(f"  提供测试接口")
+        print()
+        print(f"{COLOR_BLUE}[可用接口]{COLOR_RESET}")
+        print(f"  await bot.send_message('消息')")
+        print(f"  await bot.listen()")
+        print(f"  await bot.listen(callback)")
+        print(f"  await bot.stop_test_mode()")
+        print()
+        print("=" * 70)
+        print()
+    
+    async def send_message(self, content: str, sender_id: str = None) -> None:
+        """发送消息（测试模式接口）。
+        
+        Args:
+            content: 消息内容
+            sender_id: 发送者 ID（默认使用配置的 user_id）
+        
+        Raises:
+            RuntimeError: 如果不在测试模式下
+        """
+        if not self.test_mode:
+            raise RuntimeError("此方法只能在测试模式下使用")
+        
+        sender_id = sender_id or self.config.wechat_work.user_id
+        chat_id = sender_id
+        
+        logger.info(f"[WechatBot] 测试模式发送消息: {content[:50]}...")
+        
+        await self.bot_integration.handle_message(
+            content=content,
+            sender_id=sender_id,
+            chat_id=chat_id,
+            is_group=False,
+            metadata={},
+            source="wechat"
+        )
+    
+    async def listen(self, callback=None) -> None:
+        """监听 iflow 回复（测试模式接口）。
+        
+        Args:
+            callback: 自定义回调函数（可选），格式：async def callback(message: str, metadata: dict)
+        
+        Raises:
+            RuntimeError: 如果不在测试模式下
+        """
+        if not self.test_mode:
+            raise RuntimeError("此方法只能在测试模式下使用")
+        
+        # 如果提供了自定义回调，替换默认回调
+        if callback:
+            async def wrapper(message: str, metadata: dict):
+                try:
+                    await callback(message, metadata)
+                except Exception as e:
+                    logger.error(f"[WechatBot] 自定义回调失败: {e}")
+            
+            # 取消旧的回调
+            if self.test_listener_id in self.dispatcher.get_subscribers():
+                self.dispatcher.unsubscribe(self.test_listener_id)
+            
+            # 注册新的回调
+            self.dispatcher.subscribe(self.test_listener_id, wrapper)
+            logger.info("[WechatBot] 测试模式已使用自定义回调")
+        
+        # 保持运行
+        logger.info("[WechatBot] 测试模式正在监听回复...")
+        print(f"{COLOR_BLUE}[测试模式] 正在监听 iflow 回复...{COLOR_RESET}")
+        print(f"{COLOR_BLUE}[提示] 按 Ctrl+C 停止{COLOR_RESET}")
+        print()
+        
+        try:
+            while self.running:
+                await asyncio.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("[WechatBot] 测试模式监听已停止")
+            print()
+            print(f"{COLOR_YELLOW}[测试模式] 监听已停止{COLOR_RESET}")
+    
+    async def stop_test_mode(self) -> None:
+        """停止测试模式。
+        
+        Raises:
+            RuntimeError: 如果不在测试模式下
+        """
+        if not self.test_mode:
+            raise RuntimeError("此方法只能在测试模式下使用")
+        
+        # 取消分发器注册
+        if self.dispatcher and self.test_listener_id in self.dispatcher.get_subscribers():
+            logger.info("[WechatBot] 正在取消测试模式消息分发器注册...")
+            self.dispatcher.unsubscribe(self.test_listener_id)
+            logger.info("[WechatBot] 已取消测试模式消息分发器注册")
+        
+        self.running = False
+        
+        logger.info("[WechatBot] 测试模式已停止")
+        print(f"{COLOR_YELLOW}[测试模式] 测试模式已停止{COLOR_RESET}")
 
 
 async def main():

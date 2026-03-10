@@ -65,7 +65,10 @@ class BotIntegration:
         # 命令前缀
         self.COMMAND_PREFIX = "/"
         
-        logger.info("[BotIntegration] 初始化完成")
+        logger.info(
+            f"[BotIntegration] 初始化完成 "
+            f"(tmux_session={self.tmux_session}, workspace={self.workspace})"
+        )
     
     async def handle_message(
         self,
@@ -776,11 +779,16 @@ class BotIntegration:
                         full_message,
                         {
                             "source": "iflow_interactive",
+                            "tmux_session": self.tmux_session,
+                            "workspace": self.workspace,
                             "user_question": user_question,
                             "message_count": len(unknown_messages)
                         }
                     )
-                    logger.info(f"[BotIntegration] 已通过分发器发送 iflow 交互界面消息")
+                    logger.info(
+                        f"[BotIntegration] 已通过分发器发送 iflow 交互界面消息 "
+                        f"(tmux: {self.tmux_session}, workspace: {self.workspace})"
+                    )
 
                     # 标记为已发送
                     for msg in unknown_messages:
@@ -1176,7 +1184,10 @@ class BotIntegration:
         这个方法会在后台持续运行，检测用户在 tmux iflow 中直接输入的消息，
         并将这些消息合并后发送到企业微信。
         """
-        logger.info("[BotIntegration] 启动后台监控")
+        logger.info(
+            f"[BotIntegration] 启动后台监控 "
+            f"(tmux_session={self.tmux_session}, workspace={self.workspace})"
+        )
         
         last_known_messages = set()
         
@@ -1240,11 +1251,16 @@ class BotIntegration:
                             full_message,
                             {
                                 "source": "iflow_interactive",
+                                "tmux_session": self.tmux_session,
+                                "workspace": self.workspace,
                                 "user_question": user_question,
                                 "message_count": len(new_messages)
                             }
                         )
-                        logger.info(f"[BotIntegration] 已通过分发器发送 iflow 交互界面消息")
+                        logger.info(
+                            f"[BotIntegration] 已通过分发器发送 iflow 交互界面消息 "
+                            f"(tmux: {self.tmux_session}, workspace: {self.workspace})"
+                        )
                     
                     # 更新已知消息
                     last_known_messages.update(current_marker_ids)
