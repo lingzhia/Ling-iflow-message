@@ -54,15 +54,76 @@ def print_info(message: str) -> None:
     print(f"{COLOR_BLUE}ℹ{COLOR_RESET} {message}")
 
 
+def load_config() -> Dict:
+    """加载配置文件。
+    
+    Returns:
+        配置字典
+    """
+    import json
+    from pathlib import Path
+    
+    config_path = Path.home() / '.ling-iflow' / 'config.json'
+    
+    if not config_path.exists():
+        config_path = Path.cwd() / 'config.json'
+    
+    if not config_path.exists():
+        return {}
+    
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print_error(f"加载配置文件失败: {e}")
+        return {}
+
+
+def get_bot_binding(config: Dict) -> Dict[str, Dict]:
+    """获取机器人绑定关系。
+    
+    Args:
+        config: 配置字典
+        
+    Returns:
+        会话名称到机器人信息的映射
+    """
+    binding = {}
+    
+    # 从 bots 配置中获取绑定关系
+    bots = config.get('bots', [])
+    for bot in bots:
+        if bot.get('enabled', False):
+            tmux_session = bot.get('tmux_session', '')
+            if tmux_session:
+                binding[tmux_session] = {
+                    'name': bot.get('name', ''),
+                    'port': bot.get('callback_port', 0),
+                    'workspace': bot.get('workspace', ''),
+                }
+    
+    # 从 tmux_sessions 配置中获取额外信息
+    tmux_sessions = config.get('tmux_sessions', [])
+    for tmux_config in tmux_sessions:
+        name = tmux_config.get('name', '')
+        if name and name in binding:
+            # 补充配置信息
+            binding[name]['workspace'] = tmux_config.get('workspace', binding[name].get('workspace', ''))
+            binding[name]['model'] = tmux_config.get('model', '')
+    
+    return binding
+
+
 def get_tmux_sessions() -> List[Dict[str, str]]:
     """获取所有 tmux 会话。
     
     Returns:
-        会话列表，每个会话包含 name, created, windows, width, height
+        会话列表，每个会话包含 name, windows
     """
     try:
+        # 使用更简单的格式获取会话信息
         result = subprocess.run(
-            ["tmux", "list-sessions", "-F", "#{session_name}|#{session_created}|#{session_windows}|#{session_width}|#{session_height}"],
+            ["tmux", "list-sessions", "-F", "#{session_name}|#{session_windows}"],
             capture_output=True,
             text=True
         )
@@ -76,13 +137,12 @@ def get_tmux_sessions() -> List[Dict[str, str]]:
                 continue
             
             parts = line.split('|')
-            if len(parts) >= 5:
+            if len(parts) >= 2:
                 sessions.append({
                     'name': parts[0],
-                    'created': parts[1],
-                    'windows': parts[2],
-                    'width': parts[3],
-                    'height': parts[4],
+                    'windows': parts[1],
+                    'width': '80',
+                    'height': '24',
                 })
         
         return sessions
@@ -92,21 +152,34 @@ def get_tmux_sessions() -> List[Dict[str, str]]:
         return []
 
 
-def format_session_info(session: Dict[str, str], index: int) -> str:
+def format_session_info(session: Dict[str, str], index: int, bot_binding: Dict[str, Dict] = None) -> str:
     """格式化会话信息。
     
     Args:
         session: 会话信息
         index: 索引
+        bot_binding: 机器人绑定关系
         
     Returns:
         格式化的字符串
     """
-    return (
-        f"{COLOR_CYAN}{index + 1}.{COLOR_RESET} "
-        f"{COLOR_BOLD}{COLOR_GREEN}{session['name']}{COLOR_RESET} "
+    name = session['name']
+    info = [
+        f"{COLOR_CYAN}{index + 1}.{COLOR_RESET} ",
+        f"{COLOR_BOLD}{COLOR_GREEN}{name}{COLOR_RESET} ",
         f"({session['windows']} 窗口, {session['width']}x{session['height']})"
-    )
+    ]
+    
+    # 添加机器人绑定信息
+    if bot_binding and name in bot_binding:
+        bot = bot_binding[name]
+        info.append(f"\n    {COLOR_BLUE}→ {COLOR_RESET}")
+        info.append(f"{COLOR_YELLOW}{bot['name']}{COLOR_RESET} ")
+        info.append(f"(端口: {bot['port']}, 工作目录: {bot.get('workspace', 'N/A')})")
+        if 'model' in bot:
+            info.append(f", 模型: {bot['model']}")
+    
+    return ''.join(info)
 
 
 def attach_to_session(session_name: str) -> None:
@@ -129,15 +202,28 @@ def attach_to_session(session_name: str) -> None:
         print_error(f"连接会话失败: {e}")
 
 
-def kill_session(session_name: str) -> bool:
+def kill_session(session_name: str, bot_binding: Dict[str, Dict] = None) -> bool:
     """删除 tmux 会话。
     
     Args:
         session_name: 会话名称
+        bot_binding: 机器人绑定关系
         
     Returns:
         是否成功
     """
+    # 检查是否被机器人使用
+    if bot_binding and session_name in bot_binding:
+        bot = bot_binding[session_name]
+        print_warning(f"⚠️ 会话 '{session_name}' 正在被机器人 '{bot['name']}' 使用")
+        print_warning(f"   端口: {bot['port']}, 工作目录: {bot.get('workspace', 'N/A')}")
+        print_warning(f"   删除此会话将导致机器人中断！")
+        
+        confirm = input(f"确定要删除吗？(yes/no): ").strip().lower()
+        if confirm not in ['yes', 'y']:
+            print_info("已取消删除")
+            return False
+    
     try:
         result = subprocess.run(
             ["tmux", "kill-session", "-t", session_name],
@@ -182,11 +268,12 @@ def create_new_session(session_name: str = None) -> bool:
         return False
 
 
-def list_sessions(sessions: List[Dict[str, str]]) -> None:
+def list_sessions(sessions: List[Dict[str, str]], bot_binding: Dict[str, Dict] = None) -> None:
     """列出所有会话。
     
     Args:
         sessions: 会话列表
+        bot_binding: 机器人绑定关系
     """
     if not sessions:
         print_warning("没有找到正在运行的 tmux 会话")
@@ -198,20 +285,46 @@ def list_sessions(sessions: List[Dict[str, str]]) -> None:
     print()
     
     for i, session in enumerate(sessions):
-        print(format_session_info(session, i))
+        print(format_session_info(session, i, bot_binding))
     
     print()
+
+
+def show_bot_bindings(bot_binding: Dict[str, Dict]) -> None:
+    """显示机器人绑定关系。
+    
+    Args:
+        bot_binding: 机器人绑定关系
+    """
+    if not bot_binding:
+        print_info("没有配置机器人绑定关系")
+        return
+    
+    print_header("机器人绑定关系")
+    
+    for session_name, bot_info in bot_binding.items():
+        print(f"{COLOR_GREEN}会话: {COLOR_RESET}{session_name}")
+        print(f"  {COLOR_YELLOW}机器人: {COLOR_RESET}{bot_info['name']}")
+        print(f"  {COLOR_YELLOW}端口: {COLOR_RESET}{bot_info['port']}")
+        print(f"  {COLOR_YELLOW}工作目录: {COLOR_RESET}{bot_info.get('workspace', 'N/A')}")
+        if 'model' in bot_info:
+            print(f"  {COLOR_YELLOW}模型: {COLOR_RESET}{bot_info['model']}")
+        print()
 
 
 def main():
     """主函数。"""
     print_header("tmux 会话管理器")
     
+    # 加载配置
+    config = load_config()
+    bot_binding = get_bot_binding(config)
+    
     # 获取所有会话
     sessions = get_tmux_sessions()
     
     # 显示会话列表
-    list_sessions(sessions)
+    list_sessions(sessions, bot_binding)
     
     if not sessions:
         # 没有会话，提示创建
@@ -234,6 +347,7 @@ def main():
     print(f"  {COLOR_CYAN}1-{len(sessions)}{COLOR_RESET} - 连接到对应的会话")
     print(f"  {COLOR_CYAN}n{COLOR_RESET} - 创建新会话")
     print(f"  {COLOR_CYAN}k{COLOR_RESET} - 删除会话")
+    print(f"  {COLOR_CYAN}s{COLOR_RESET} - 显示机器人绑定关系")
     print(f"  {COLOR_CYAN}r{COLOR_RESET} - 刷新会话列表")
     print(f"  {COLOR_CYAN}q{COLOR_RESET} - 退出")
     print()
@@ -248,13 +362,21 @@ def main():
             
             elif choice == 'r':
                 print()
+                # 重新加载配置
+                config = load_config()
+                bot_binding = get_bot_binding(config)
                 sessions = get_tmux_sessions()
-                list_sessions(sessions)
+                list_sessions(sessions, bot_binding)
                 
                 if not sessions:
                     print_info("没有正在运行的会话")
                     break
                 
+                continue
+            
+            elif choice == 's':
+                print()
+                show_bot_bindings(bot_binding)
                 continue
             
             elif choice == 'n':
@@ -284,15 +406,17 @@ def main():
                     num = int(input("输入会话编号: ").strip())
                     if 1 <= num <= len(sessions):
                         session_name = sessions[num - 1]['name']
-                        confirm = input(f"确定要删除会话 '{session_name}'？(y/n): ").strip().lower()
-                        if confirm == 'y' or confirm == 'yes':
-                            if kill_session(session_name):
-                                print_success(f"已删除会话: {session_name}")
-                                # 刷新列表
-                                sessions = get_tmux_sessions()
-                                list_sessions(sessions)
-                            else:
-                                print_error(f"删除会话失败: {session_name}")
+                        # 重新加载配置，检查绑定关系
+                        config = load_config()
+                        bot_binding = get_bot_binding(config)
+                        if kill_session(session_name, bot_binding):
+                            print_success(f"已删除会话: {session_name}")
+                            # 刷新列表
+                            sessions = get_tmux_sessions()
+                            bot_binding = get_bot_binding(config)
+                            list_sessions(sessions, bot_binding)
+                        else:
+                            print_info("已取消删除")
                     else:
                         print_warning("无效的编号")
                 except ValueError:

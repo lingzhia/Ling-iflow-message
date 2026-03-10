@@ -53,6 +53,7 @@ class BotIntegration:
         # 消息缓冲区（用于延迟发送）
         self._message_buffer: Dict[str, str] = {}  # {marker: content}
         self._sent_marker_ids: set = set()  # 已发送的消息标识（前10字符）
+        self._wechat_message_markers: set = set()  # 由企业微信请求触发的消息标记（避免后台监控重复添加前缀）
         self._last_sent_marker_id: str = ""  # 最后发送的消息标识
         self._current_marker: Optional[str] = None  # 当前正在处理的标记
         self._sent_message_hashes: set = set()  # 已发送的消息哈希（用于去重）
@@ -130,6 +131,10 @@ class BotIntegration:
         # /sessions - 查看历史会话
         # /help - 显示帮助
         # /status - 查看状态
+        # /lscmd - 列出所有可用命令
+        # /start-iflow - 启动 iflow CLI
+        # /stop-iflow - 停止 iflow CLI
+        # /restart-iflow - 重启 iflow CLI
         
         if trimmed.startswith("/run "):
             cmd = trimmed[5:].strip()
@@ -146,6 +151,18 @@ class BotIntegration:
         
         if trimmed == "/status":
             return {"valid": True, "type": "status"}
+        
+        if trimmed == "/start-iflow":
+            return {"valid": True, "type": "start-iflow"}
+        
+        if trimmed == "/stop-iflow":
+            return {"valid": True, "type": "stop-iflow"}
+        
+        if trimmed == "/restart-iflow":
+            return {"valid": True, "type": "restart-iflow"}
+        
+        if trimmed == "/lscmd":
+            return {"valid": True, "type": "lscmd"}
         
         # 直接发送命令（不带前缀）
         if trimmed and not trimmed.startswith("/"):
@@ -187,6 +204,18 @@ class BotIntegration:
         elif cmd_type == "run":
             await self._run_command(chat_id, is_group, command, source)
         
+        elif cmd_type == "start-iflow":
+            await self._start_iflow(chat_id, is_group)
+        
+        elif cmd_type == "stop-iflow":
+            await self._stop_iflow(chat_id, is_group)
+        
+        elif cmd_type == "restart-iflow":
+            await self._restart_iflow(chat_id, is_group)
+        
+        elif cmd_type == "lscmd":
+            await self._list_commands(chat_id, is_group)
+        
         else:
             await self._send_help(chat_id, is_group)
     
@@ -207,6 +236,13 @@ class BotIntegration:
 - `/new`：开始新会话（清除上下文）
 - `/sessions`：查看历史会话
 - `/status`：查看服务状态
+
+**iflow 管理命令：**
+- `/start-iflow`：启动 iflow CLI
+- `/stop-iflow`：停止 iflow CLI
+- `/restart-iflow`：重启 iflow CLI
+
+**帮助命令：**
 - `/help`：显示此帮助
 
 💡 提示：默认会自动恢复最近的会话，保持对话连续性。如需重新开始，请使用 `/new` 命令。
@@ -255,6 +291,183 @@ class BotIntegration:
         message = f"✅ {result['message']}"
         await self.wechat_channel.send(message, chat_id, is_group=is_group)
     
+    async def _list_commands(self, chat_id: str, is_group: bool) -> None:
+        """列出所有可用命令。
+        
+        Args:
+            chat_id: 聊天 ID
+            is_group: 是否为群聊
+        """
+        # 检查 iflow 状态
+        session_info = self.iflow_controller.get_session_info()
+        iflow_running = session_info.get('iflow_running', False) if session_info else False
+        
+        commands_message = """**📋 iFlow 企业微信机器人 - 可用命令**
+
+**基础命令：**
+• 直接发送消息：执行 iFlow 命令（自动恢复上次会话）
+• `/run <命令>`：执行 iFlow 命令
+• `/new`：开始新会话（清除上下文）
+
+**查询命令：**
+• `/status`：查看服务状态（tmux、iflow 运行状态）
+• `/sessions`：查看历史会话列表
+• `/lscmd`：列出所有可用命令（本命令）
+
+**iflow 管理命令：**
+• `/start-iflow`：启动 iflow CLI""" + ("" if iflow_running else "（推荐）") + """
+• `/stop-iflow`：停止 iflow CLI
+• `/restart-iflow`：重启 iflow CLI
+
+**帮助命令：**
+• `/help`：显示详细帮助信息
+
+---
+💡 提示：
+• """ + ("iflow 已运行，可以直接发送命令使用" if iflow_running else "iflow 未运行，请先使用 `/start-iflow` 启动") + """
+• 默认会自动恢复最近的会话，保持对话连续性
+• 如需重新开始，请使用 `/new` 命令
+
+示例：
+```
+""" + ("帮我写一个 Python 脚本" if iflow_running else "/start-iflow") + """
+继续完善这个脚本
+```
+"""
+        await self.wechat_channel.send(commands_message, chat_id, is_group=is_group)
+    
+    async def _start_iflow(self, chat_id: str, is_group: bool) -> None:
+        """启动 iflow CLI。
+        
+        Args:
+            chat_id: 聊天 ID
+            is_group: 是否为群聊
+        """
+        logger.info(f"[BotIntegration] 收到启动 iflow 请求")
+        
+        # 检查 iflow 是否已经在运行
+        session_info = self.iflow_controller.get_session_info()
+        if session_info and session_info.get('iflow_running', False):
+            message = "✅ iflow 已经在运行中"
+            await self.wechat_channel.send(message, chat_id, is_group=is_group)
+            return
+        
+        # 尝试启动 iflow
+        logger.info(f"[BotIntegration] 正在启动 iflow...")
+        await self.wechat_channel.send("⏳ 正在启动 iflow，请稍候...", chat_id, is_group=is_group)
+        
+        success = self.iflow_controller.start_iflow(model="kimi-k2.5")
+        
+        if success:
+            # 等待 iflow 完全启动
+            await asyncio.sleep(3)
+            
+            # 验证 iflow 是否真的启动了
+            session_info = self.iflow_controller.get_session_info()
+            if session_info and session_info.get('iflow_running', False):
+                message = "✅ iflow 启动成功！现在可以开始使用了"
+                await self.wechat_channel.send(message, chat_id, is_group=is_group)
+                logger.info(f"[BotIntegration] iflow 启动成功")
+            else:
+                message = "⚠️ iflow 启动失败，请检查日志"
+                await self.wechat_channel.send(message, chat_id, is_group=is_group)
+                logger.error(f"[BotIntegration] iflow 启动验证失败")
+        else:
+            message = "❌ iflow 启动失败，请检查服务器日志"
+            await self.wechat_channel.send(message, chat_id, is_group=is_group)
+            logger.error(f"[BotIntegration] iflow 启动失败")
+    
+    async def _stop_iflow(self, chat_id: str, is_group: bool) -> None:
+        """停止 iflow CLI。
+        
+        Args:
+            chat_id: 聊天 ID
+            is_group: 是否为群聊
+        """
+        logger.info(f"[BotIntegration] 收到停止 iflow 请求")
+        
+        # 检查 iflow 是否在运行
+        session_info = self.iflow_controller.get_session_info()
+        if not session_info or not session_info.get('tmux_exists', False):
+            message = "✅ iflow 未运行，无需停止"
+            await self.wechat_channel.send(message, chat_id, is_group=is_group)
+            return
+        
+        # 尝试停止 iflow
+        logger.info(f"[BotIntegration] 正在停止 iflow...")
+        await self.wechat_channel.send("⏳ 正在停止 iflow，请稍候...", chat_id, is_group=is_group)
+        
+        success = self.iflow_controller.stop_iflow()
+        
+        if success:
+            # 等待 iflow 完全停止
+            await asyncio.sleep(2)
+            
+            # 验证 iflow 是否真的停止了
+            session_info = self.iflow_controller.get_session_info()
+            if not session_info or not session_info.get('tmux_exists', False):
+                message = "✅ iflow 已停止"
+                await self.wechat_channel.send(message, chat_id, is_group=is_group)
+                logger.info(f"[BotIntegration] iflow 停止成功")
+            else:
+                message = "⚠️ iflow 停止失败，请检查日志"
+                await self.wechat_channel.send(message, chat_id, is_group=is_group)
+                logger.error(f"[BotIntegration] iflow 停止验证失败")
+        else:
+            message = "❌ iflow 停止失败，请检查服务器日志"
+            await self.wechat_channel.send(message, chat_id, is_group=is_group)
+            logger.error(f"[BotIntegration] iflow 停止失败")
+    
+    async def _restart_iflow(self, chat_id: str, is_group: bool) -> None:
+        """重启 iflow CLI。
+        
+        Args:
+            chat_id: 聊天 ID
+            is_group: 是否为群聊
+        """
+        logger.info(f"[BotIntegration] 收到重启 iflow 请求")
+        
+        # 先停止 iflow（如果正在运行）
+        session_info = self.iflow_controller.get_session_info()
+        if session_info and session_info.get('tmux_exists', False):
+            logger.info(f"[BotIntegration] 正在停止 iflow...")
+            await self.wechat_channel.send("⏳ 正在停止 iflow，请稍候...", chat_id, is_group=is_group)
+            
+            success = self.iflow_controller.stop_iflow()
+            if not success:
+                message = "❌ iflow 停止失败，无法重启"
+                await self.wechat_channel.send(message, chat_id, is_group=is_group)
+                logger.error(f"[BotIntegration] iflow 停止失败，无法重启")
+                return
+            
+            # 等待 iflow 完全停止
+            await asyncio.sleep(2)
+        
+        # 启动 iflow
+        logger.info(f"[BotIntegration] 正在启动 iflow...")
+        await self.wechat_channel.send("⏳ 正在启动 iflow，请稍候...", chat_id, is_group=is_group)
+        
+        success = self.iflow_controller.start_iflow(model="kimi-k2.5")
+        
+        if success:
+            # 等待 iflow 完全启动
+            await asyncio.sleep(3)
+            
+            # 验证 iflow 是否真的启动了
+            session_info = self.iflow_controller.get_session_info()
+            if session_info and session_info.get('iflow_running', False):
+                message = "✅ iflow 重启成功！现在可以开始使用了"
+                await self.wechat_channel.send(message, chat_id, is_group=is_group)
+                logger.info(f"[BotIntegration] iflow 重启成功")
+            else:
+                message = "⚠️ iflow 重启失败，请检查日志"
+                await self.wechat_channel.send(message, chat_id, is_group=is_group)
+                logger.error(f"[BotIntegration] iflow 重启验证失败")
+        else:
+            message = "❌ iflow 重启失败，请检查服务器日志"
+            await self.wechat_channel.send(message, chat_id, is_group=is_group)
+            logger.error(f"[BotIntegration] iflow 重启失败")
+    
     async def _send_sessions(self, chat_id: str, is_group: bool) -> None:
         """发送会话列表。
         
@@ -288,7 +501,10 @@ class BotIntegration:
         if not self.iflow_controller.check_tmux_session():
             logger.error(f"[BotIntegration] iflow 未运行，tmux_session={self.tmux_session}")
             await self.wechat_channel.send(
-                "❌ iflow 未运行，请先启动 iflow: tmux new-session -d -s iflow \"iflow --model kimi-k2.5\"",
+                "❌ iflow 未运行\n\n请使用以下命令启动服务：\n"
+                "python manage.py start\n\n"
+                "或者只启动 iflow：\n"
+                "python manage.py start --no-wechat",
                 chat_id,
                 is_group=is_group
             )
@@ -350,6 +566,8 @@ class BotIntegration:
                 marker_id = message.get('marker_id', '')
                 if marker_id:
                     self._sent_marker_ids.add(marker_id)
+                    # 同时添加到企业微信消息标记集合，避免后台监控误判为 iflow 交互界面消息
+                    self._wechat_message_markers.add(marker_id)
                     logger.debug(f"[BotIntegration] 标记初始消息为已发送: {marker_id}")
             
             # 设置最后发送的标记（用于后续发送逻辑）
@@ -422,6 +640,8 @@ class BotIntegration:
                                 logger.info(f"[BotIntegration] 发送消息 {i+1}/{final_count}: 标识={marker_id}")
                                 await self._send_message_content(msg['content'], chat_id, is_group)
                                 self._sent_marker_ids.add(marker_id)
+                                # 添加到标记集合，避免后台监控误判
+                                self._wechat_message_markers.add(marker_id)
                             
                             # 记录最后一个标记
                             if final_count > 0:
@@ -456,6 +676,8 @@ class BotIntegration:
                                             logger.info(f"[BotIntegration] 发送消息 {i+1}/{final_count}: 标识={marker_id}")
                                             await self._send_message_content(msg['content'], chat_id, is_group)
                                             self._sent_marker_ids.add(marker_id)
+                                            # 添加到标记集合，避免后台监控检测
+                                            self._wechat_message_markers.add(marker_id)
                                         
                                         # 更新最后发送的标记
                                         new_last_marker_id = final_messages[final_count - 1].get('marker_id', '')
@@ -477,6 +699,8 @@ class BotIntegration:
                                         logger.info(f"[BotIntegration] 发送消息 {i+1}/{final_count}: 标识={marker_id}")
                                         await self._send_message_content(msg['content'], chat_id, is_group)
                                         self._sent_marker_ids.add(marker_id)
+                                        # 添加到标记集合，避免后台监控检测
+                                        self._wechat_message_markers.add(marker_id)
                                     
                                     # 更新最后发送的标记
                                     if final_count > 0:
@@ -510,12 +734,16 @@ class BotIntegration:
                             if self._current_source == "tool":
                                 # 工具来源：只返回给工具，不发企业微信
                                 logger.debug(f"[BotIntegration] 工具来源消息，不发送到企业微信")
+                                # 添加到标记集合，避免后台监控检测
+                                self._wechat_message_markers.add(marker_id)
                             elif self._current_source == "wechat":
                                 # 企业微信来源：逐条发送
                                 if msg_hash not in self._sent_message_hashes:
                                     logger.info(f"[BotIntegration] 发送消息 {i+1}: {message[:50]}")
                                     await self._send_message_content(message, chat_id, is_group)
                                     self._sent_message_hashes.add(msg_hash)
+                                    # 添加到标记集合，避免后台监控检测
+                                    self._wechat_message_markers.add(marker_id)
 
                 # 更新最后的消息计数
                 last_message_count = current_count
@@ -534,8 +762,25 @@ class BotIntegration:
                     # 合并所有 ✦ 标记的消息
                     merged_content = self._merge_messages(unknown_messages)
 
-                    # 发送到企业微信
-                    await self.wechat_channel.send(merged_content, self.wechat_channel.config.user_id, is_group=False)
+                    # 提取用户提问
+                    _, _, _, user_question = self._extract_reply_from_tmux()
+
+                    # 构造开头标记
+                    header = f"🔔 iflow交互模式请求：原消息=[{user_question}]，当前回复完成，回复结果如下：\n\n"
+                    # 合并开头标记和内容
+                    full_message = header + merged_content
+
+                    # 使用消息分发器广播消息到所有订阅者
+                    dispatcher = MessageDispatcher()
+                    await dispatcher.broadcast(
+                        full_message,
+                        {
+                            "source": "iflow_interactive",
+                            "user_question": user_question,
+                            "message_count": len(unknown_messages)
+                        }
+                    )
+                    logger.info(f"[BotIntegration] 已通过分发器发送 iflow 交互界面消息")
 
                     # 标记为已发送
                     for msg in unknown_messages:
@@ -910,7 +1155,14 @@ class BotIntegration:
             if '✦' in msg.get('full_marker', '') and '✻' not in msg.get('full_marker', ''):
                 content = msg.get('content', '').strip()
                 if content:
-                    # 清理消息内容，去除 iflow 的 UI 元素
+                    # 使用 marker_id 作为回复内容（不使用 content，避免被分隔符截断）
+                    marker_id = msg.get('marker_id', '').strip()
+                    if marker_id:
+                        logger.debug(f"[BotIntegration] 使用 marker_id 作为回复内容: {marker_id}")
+                        merged_lines.append(marker_id)
+                        continue
+
+                    # 如果没有 marker_id，尝试清理消息内容
                     cleaned_content = self._clean_message_content(content)
                     if cleaned_content.strip():
                         merged_lines.append(cleaned_content)
@@ -948,7 +1200,12 @@ class BotIntegration:
                 for msg in current_messages:
                     marker_id = msg.get('marker_id', '')
                     if marker_id and marker_id not in last_known_messages:
-                        new_messages.append(msg)
+                        # 检查消息是否已经被企业微信请求触发过（避免重复添加前缀）
+                        if marker_id in self._wechat_message_markers:
+                            logger.debug(f"[BotIntegration] 跳过企业微信消息: {marker_id}")
+                        else:
+                            logger.debug(f"[BotIntegration] 检测到新消息: {marker_id}, 企业微信消息数: {len(self._wechat_message_markers)}")
+                            new_messages.append(msg)
                 
                 # 如果有新消息且不在处理中
                 if new_messages and not is_generating and self._current_source == "":
@@ -958,6 +1215,17 @@ class BotIntegration:
                     merged_content = self._merge_messages(new_messages)
                     
                     if merged_content.strip():
+                        # 再次检查所有消息标记，确保不是企业微信消息（双重检查）
+                        all_in_wechat_markers = all(
+                            msg.get('marker_id', '') in self._wechat_message_markers
+                            for msg in new_messages
+                        )
+                        
+                        if all_in_wechat_markers:
+                            logger.info(f"[BotIntegration] 所有消息都在企业微信标记中，跳过后台监控发送")
+                            last_known_messages.update(current_marker_ids)
+                            continue
+                        
                         # 构造开头标记
                         header = f"🔔 iflow交互模式请求：原消息=[{user_question}]，当前回复完成，回复结果如下：\n\n"
                         # 合并开头标记和内容

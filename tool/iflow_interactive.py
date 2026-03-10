@@ -33,6 +33,10 @@ from interactive.iflow_controller import IFlowController
 COLOR_USER = "\033[32m"      # 绿色
 COLOR_AI = "\033[36m"        # 青色
 COLOR_SYSTEM = "\033[33m"    # 黄色
+COLOR_CYAN = "\033[96m"      # 亮青色
+COLOR_YELLOW = "\033[93m"    # 亮黄色
+COLOR_GREEN = "\033[92m"     # 亮绿色
+COLOR_RED = "\033[91m"       # 亮红色
 COLOR_RESET = "\033[0m"
 
 
@@ -87,13 +91,14 @@ class IFlowTester:
     复用 BotIntegration 的处理逻辑，与企业微信使用相同的处理方法。
     """
     
-    def __init__(self, tmux_session="iflow", workspace="~/.iflow", extract_all_messages=False):
+    def __init__(self, tmux_session=None, workspace=None, extract_all_messages=False, config_path=None):
         """初始化测试器。
 
         Args:
-            tmux_session: tmux 会话名称
-            workspace: iflow 工作目录
+            tmux_session: tmux 会话名称（可选，如果为空则显示选择列表）
+            workspace: iflow 工作目录（可选）
             extract_all_messages: 是否提取全部消息（包括非✦标记的消息）
+            config_path: 配置文件路径（可选）
         """
         self.tmux_session = tmux_session
         self.workspace = workspace
@@ -101,16 +106,32 @@ class IFlowTester:
         self.running = False
         self.message_count = 0
 
+        # 加载配置
+        self.config_path = config_path or (Path(__file__).parent.parent / "config.json")
+        self.config = self._load_config()
+        self.bots_config = self._load_bots_config()
+
+        # 如果未指定 tmux_session，显示选择列表
+        if not tmux_session:
+            self.tmux_session = self._select_session()
+            if not self.tmux_session:
+                return
+
+        # 从配置中获取工作目录
+        if not workspace:
+            workspace = self._get_workspace_for_session(self.tmux_session)
+            self.workspace = workspace  # 更新 self.workspace
+
         # 创建模拟渠道
         self.mock_channel = MockWeChatChannel()
 
         # 创建 IFlowController（用于状态检查）
-        self.controller = IFlowController(tmux_session)
+        self.controller = IFlowController(self.tmux_session)
 
         # 创建 BotIntegration（与企业微信使用相同的逻辑）
         self.bot = BotIntegration(
             wechat_channel=self.mock_channel,
-            tmux_session=tmux_session,
+            tmux_session=self.tmux_session,
             workspace=workspace,
             filter_thinking=True,  # 过滤思考消息
             extract_all_messages=extract_all_messages  # 是否提取全部消息
@@ -121,6 +142,146 @@ class IFlowTester:
         
         # 测试模式：tool（工具模式）/ iflow（模拟 iflow 交互界面）
         self.mode = "tool"
+    
+    def _load_config(self) -> dict:
+        """加载配置文件。
+        
+        Returns:
+            配置字典
+        """
+        try:
+            from config.loader import load_config
+            config = load_config(self.config_path)
+            # 如果返回的是 Pydantic 模型，转换为字典
+            if hasattr(config, 'model_dump'):
+                return config.model_dump()
+            elif hasattr(config, 'dict'):
+                return config.dict()
+            return config
+        except Exception as e:
+            logger.warning(f"加载配置文件失败: {e}")
+            return {}
+    
+    def _load_bots_config(self) -> dict:
+        """加载机器人配置。
+        
+        Returns:
+            机器人配置字典
+        """
+        try:
+            from config.bots_loader import load_bots_config
+            return load_bots_config(self.config_path)
+        except Exception as e:
+            logger.warning(f"加载机器人配置失败: {e}")
+            return {}
+    
+    def _select_session(self) -> str:
+        """选择 tmux 会话。
+        
+        Returns:
+            选中的会话名称，如果取消则返回 None
+        """
+        sessions = self.config.get('tmux_sessions', [])
+        bots = self.bots_config.get_enabled_bots()
+        
+        # 构建会话到机器人的映射
+        session_to_bot = {}
+        for bot in bots:
+            if bot.enabled and bot.tmux_session:
+                session_to_bot[bot.tmux_session] = bot
+        
+        # 获取所有正在运行的 tmux 会话
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["tmux", "list-sessions", "-F", "#{session_name}"],
+                capture_output=True,
+                text=True
+            )
+            running_sessions = result.stdout.strip().split('\n') if result.returncode == 0 else []
+        except:
+            running_sessions = []
+        
+        print()
+        print("=" * 70)
+        print("选择 tmux 会话")
+        print("=" * 70)
+        
+        if not sessions and not running_sessions:
+            print(f"{COLOR_SYSTEM}⚠ 配置文件中未配置 tmux 会话，也没有正在运行的会话{COLOR_RESET}")
+            print(f"{COLOR_SYSTEM}请先在 config.json 中配置 tmux_sessions 或启动会话{COLOR_RESET}")
+            return None
+        
+        # 显示配置的会话
+        if sessions:
+            print(f"{COLOR_CYAN}配置的会话:{COLOR_RESET}")
+            for i, session in enumerate(sessions):
+                name = session.get('name', '')
+                bot_info = session_to_bot.get(name, None)
+                status_icon = f"{COLOR_GREEN}✓{COLOR_RESET}" if name in running_sessions else f"{COLOR_RED}✗{COLOR_RESET}"
+                
+                print(f"  {i + 1}. {status_icon} {name}")
+                if bot_info:
+                    print(f"     → {COLOR_YELLOW}{bot_info.name}{COLOR_RESET} (端口: {bot_info.callback_port})")
+                print(f"     工作目录: {session.get('workspace', 'N/A')}")
+                print(f"     模型: {session.get('model', 'N/A')}")
+                print()
+        
+        # 显示正在运行但未配置的会话
+        for session in running_sessions:
+            if session not in [s.get('name', '') for s in sessions]:
+                print(f"{COLOR_YELLOW}* {session} (未配置){COLOR_RESET}")
+        
+        print(f"{COLOR_SYSTEM}0. 取消{COLOR_RESET}")
+        print()
+        
+        try:
+            choice = input("请选择会话编号: ").strip()
+            if choice == '0':
+                return None
+            
+            choice_num = int(choice)
+            
+            # 从配置的会话中选择
+            if 1 <= choice_num <= len(sessions):
+                selected = sessions[choice_num - 1]
+                return selected.get('name', '')
+            
+            # 从正在运行的会话中选择
+            elif len(sessions) < choice_num <= len(sessions) + len(running_sessions):
+                running_only = running_sessions[len(sessions):]
+                if choice_num - len(sessions) - 1 < len(running_only):
+                    return running_only[choice_num - len(sessions) - 1]
+            
+            print(f"{COLOR_SYSTEM}✗ 无效的选择{COLOR_RESET}")
+            return None
+            
+        except (ValueError, IndexError):
+            print(f"{COLOR_SYSTEM}✗ 无效的选择{COLOR_RESET}")
+            return None
+    
+    def _get_workspace_for_session(self, session_name: str) -> str:
+        """获取会话的工作目录。
+        
+        Args:
+            session_name: 会话名称
+            
+        Returns:
+            工作目录
+        """
+        # 从配置中查找
+        sessions = self.config.get('tmux_sessions', [])
+        for session in sessions:
+            if session.get('name') == session_name:
+                return session.get('workspace', '~/.iflow')
+        
+        # 从机器人配置中查找
+        bots = self.bots_config.get_enabled_bots()
+        for bot in bots:
+            if bot.tmux_session == session_name and bot.workspace:
+                return bot.workspace
+        
+        return '~/.iflow'
     
     def _setup_readline(self):
         """配置 readline 模块，提供命令行编辑功能。"""
@@ -176,6 +337,23 @@ class IFlowTester:
             print(f"{COLOR_SYSTEM}✗ iflow 未运行{COLOR_RESET}")
             return False
 
+        # 显示绑定关系信息
+        bots = self.bots_config.get_enabled_bots()
+        bound_bot = None
+        for bot in bots:
+            if bot.tmux_session == self.tmux_session:
+                bound_bot = bot
+                break
+        
+        if bound_bot:
+            print()
+            print(f"{COLOR_CYAN}当前会话绑定:{COLOR_RESET}")
+            print(f"  会话名称: {self.tmux_session}")
+            print(f"  机器人: {COLOR_YELLOW}{bound_bot.name}{COLOR_RESET}")
+            print(f"  回调端口: {bound_bot.callback_port}")
+            print(f"  工作目录: {self.workspace}")
+            print()
+        
         return True
     
     async def test_message(self, message: str, source: str = None):
@@ -413,17 +591,28 @@ async def main():
     
     parser = argparse.ArgumentParser(
         description="iflow 交互式测试工具（使用 BotIntegration）",
-        epilog="示例:\n  %(prog)s                    # 交互模式\n  %(prog)s \"1+1等于几？\"      # 命令行模式（tool来源）\n  %(prog)s -u \"测试\"          # 命令行模式（无标记，模拟 iflow 交互界面）\n  %(prog)s -m                  # 纯监听模式（只监听 iflow 交互界面消息）\n  %(prog)s -a \"测试\"          # 提取全部消息",
+        epilog="示例:\n  %(prog)s                    # 交互模式（可选择会话）\n  %(prog)s -t iflow         # 指定会话\n  %(prog)s \"1+1等于几？\"      # 命令行模式（tool来源）\n  %(prog)s -u \"测试\"          # 命令行模式（无标记，模拟 iflow 交互界面）\n  %(prog)s -m                  # 纯监听模式（只监听 iflow 交互界面消息）\n  %(prog)s -a \"测试\"          # 提取全部消息",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--tmux-session", "-t", default="iflow", help="tmux 会话名称")
-    parser.add_argument("--workspace", "-w", default="~/.iflow", help="iflow 工作目录")
+    parser.add_argument("--tmux-session", "-t", default=None, help="tmux 会话名称（不指定则显示选择列表）")
+    parser.add_argument("--workspace", "-w", default=None, help="iflow 工作目录（不指定则从配置获取）")
     parser.add_argument("--all-messages", "-a", action="store_true", help="提取全部消息（包括非✦标记的消息）")
     parser.add_argument("--monitor", "-m", action="store_true", help="纯监听模式（只监听 iflow 交互界面消息，不发送任何消息）")
     parser.add_argument("--unmarked", "-u", action="store_true", help="发送无标记消息（模拟直接在 iflow 交互界面输入）")
+    parser.add_argument("--list", "-l", action="store_true", help="列出所有可用的会话")
     parser.add_argument("message", nargs="?", help="要发送的消息（可选，不提供则进入交互模式）")
     
     args = parser.parse_args()
+    
+    # 如果只是列出会话
+    if args.list:
+        tester = IFlowTester(
+            tmux_session="",  # 空字符串会触发会话选择列表
+            workspace=None,
+            extract_all_messages=args.all_messages
+        )
+        # 用户选择了 0（取消）或没有选择任何会话
+        return
     
     # 创建测试器
     tester = IFlowTester(
@@ -431,6 +620,10 @@ async def main():
         workspace=args.workspace,
         extract_all_messages=args.all_messages
     )
+    
+    # 如果用户取消了选择
+    if not tester.tmux_session:
+        return
     
     # 纯监听模式
     if args.monitor:

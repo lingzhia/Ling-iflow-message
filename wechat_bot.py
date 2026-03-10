@@ -228,23 +228,45 @@ class WechatBot:
             if self.wechat_channel and wechat_config.user_id:
                 startup_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
-                notification = f"""**🤖 iFlow 企业微信机器人已启动**
+                # 检查 tmux 会话状态
+                session_info = self.bot_integration.iflow_controller.get_session_info()
+                tmux_connected = session_info.get('tmux_exists', False) if session_info else False
+                
+                if tmux_connected:
+                    # tmux 连接正常
+                    notification = f"""**🤖 iFlow 企业微信机器人已启动**
 
 📅 启动时间: {startup_time}
 📁 工作目录: {self.config.workspace}
-💻 tmux 会话: {self.config.tmux_session}
+💻 tmux 会话: {self.config.tmux_session} ✓
 🌐 回调端口: {wechat_config.callback_port}
 
 ✅ 服务运行正常，可以开始使用！
 
 ---
-可用命令:
-- 直接发送消息：执行 iFlow 命令
-- /run <命令>：执行 iFlow 命令
-- /new：开始新会话
-- /sessions：查看历史会话
-- /status：查看服务状态
-- /help：显示帮助
+📋 快速开始：
+• 直接发送消息：执行 iFlow 命令
+• `/lscmd`：查看所有可用命令
+
+💡 提示：输入 `/lscmd` 查看完整的命令列表和功能说明。
+"""
+                else:
+                    # tmux 未连接
+                    notification = f"""**🤖 iFlow 企业微信机器人已启动**
+
+📅 启动时间: {startup_time}
+💻 tmux 会话: 无连接
+📁 工作目录: 无
+🌐 回调端口: {wechat_config.callback_port}
+
+⚠️ iflow 未运行，无法处理消息
+
+---
+📋 快速开始：
+• `/start-iflow`：启动 iflow CLI（推荐）
+• `/lscmd`：查看所有可用命令
+
+💡 提示：输入 `/lscmd` 查看完整的命令列表和功能说明。
 """
                 
                 await self.wechat_channel.send(notification, wechat_config.user_id, is_group=False)
@@ -279,11 +301,31 @@ class WechatBot:
             if self.wechat_channel and self.config.wechat_work and self.config.wechat_work.user_id:
                 shutdown_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
-                notification = f"""**🛑 iFlow 企业微信机器人已停止**
+                # 检查关闭前的状态
+                session_info = self.bot_integration.iflow_controller.get_session_info()
+                tmux_was_connected = session_info.get('tmux_exists', False) if session_info else False
+                
+                if tmux_was_connected:
+                    # tmux 之前是连接的
+                    notification = f"""**🛑 iFlow 企业微信机器人已停止**
 
 📅 关闭时间: {shutdown_time}
 📁 工作目录: {self.config.workspace}
 💻 tmux 会话: {self.config.tmux_session}
+
+---
+如需重新启动，请执行:
+```bash
+python manage.py start
+```
+"""
+                else:
+                    # tmux 之前就是未连接的
+                    notification = f"""**🛑 iFlow 企业微信机器人已停止**
+
+📅 关闭时间: {shutdown_time}
+💻 tmux 会话: 无连接
+📁 工作目录: 无
 
 ---
 如需重新启动，请执行:

@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-Ling-iflow 是一个 iflow CLI 交互模式管理工具，通过 tmux 管理和监控 iflow CLI 会话，实现与企业微信的双向消息同步。项目从 iflow-bot 迁移而来，专注于提供轻量级的交互模式管理功能。
+Ling-iflow 是一个 iflow CLI 交互模式管理工具，通过 tmux 管理和监控 iflow CLI 会话，实现与企业微信的双向消息同步。专注于提供轻量级的交互模式管理功能。
 
 ### 核心目标
 
@@ -597,10 +597,11 @@ iflow CLI 生成回复
 
 **主要功能**：
 - 接收企业微信消息
-- 解析命令（/run, /new, /sessions, /help, /status）
+- 解析命令（/run, /new, /sessions, /help, /status, /lscmd, /start-iflow, /stop-iflow, /restart-iflow）
 - 调用 iflow CLI
 - 发送回复到企业微信
 - 支持连续对话（自动恢复上次会话）
+- 管理 iflow 服务（启动、停止、重启）
 
 **关键方法**：
 ```python
@@ -608,6 +609,10 @@ iflow CLI 生成回复
 - _parse_command(content): 解析用户消息，提取命令
 - async _handle_command(...): 处理命令
 - async _run_command(...): 运行 iFlow 命令
+- async _start_iflow(...): 启动 iflow CLI
+- async _stop_iflow(...): 停止 iflow CLI
+- async _restart_iflow(...): 重启 iflow CLI
+- async _list_commands(...): 列出所有可用命令
 - _extract_reply_from_tmux(): 从 tmux 输出中提取回复
 - _filter_thinking_messages(message): 过滤思考消息
 - _split_message(message, max_length): 分段消息
@@ -619,7 +624,13 @@ iflow CLI 生成回复
 - `/new`：开始新会话（清除上下文）
 - `/sessions`：查看历史会话
 - `/status`：查看服务状态
+- `/lscmd`：列出所有可用命令
+- `/start-iflow`：启动 iflow CLI
+- `/stop-iflow`：停止 iflow CLI
+- `/restart-iflow`：重启 iflow CLI
 - `/help`：显示帮助
+
+**详细说明：** 参见 [2.5.7 企业微信命令系统](#257-企业微信命令系统)
 
 #### 2.5.1 消息提取方案（基于标记的改进版）
 
@@ -1176,6 +1187,302 @@ async def start_background_monitor(self) -> None:
 - 无需手动干预
 - 支持完整的消息追踪
 - 包含原始问题信息
+
+#### 2.5.7 企业微信命令系统
+
+**设计目标**：
+提供完整的企业微信命令系统，让用户可以直接通过企业微信管理 iflow 和查看状态。
+
+**技术方案**：
+
+**1. 命令列表**
+系统支持以下命令：
+
+| 命令 | 功能 | 说明 |
+|------|------|------|
+| 直接发送消息 | 执行 iFlow 命令 | 自动恢复上次会话 |
+| `/run <命令>` | 执行 iFlow 命令 | 显式执行命令 |
+| `/new` | 开始新会话 | 清除上下文 |
+| `/sessions` | 查看历史会话 | 显示会话列表 |
+| `/status` | 查看服务状态 | 显示 tmux 和 iflow 状态 |
+| `/lscmd` | 列出所有命令 | 显示完整命令列表 |
+| `/start-iflow` | 启动 iflow CLI | 启动 iflow 服务 |
+| `/stop-iflow` | 停止 iflow CLI | 停止 iflow 服务 |
+| `/restart-iflow` | 重启 iflow CLI | 重启 iflow 服务 |
+| `/help` | 显示帮助信息 | 显示详细帮助 |
+
+**2. 命令解析**
+```python
+def _parse_command(self, content: str) -> Dict:
+    """解析用户消息，提取命令。"""
+    trimmed = content.strip()
+    
+    # 支持的命令格式
+    if trimmed.startswith("/run "):
+        return {"valid": True, "type": "run", "command": trimmed[5:].strip()}
+    if trimmed == "/new":
+        return {"valid": True, "type": "new"}
+    if trimmed == "/sessions":
+        return {"valid": True, "type": "sessions"}
+    if trimmed == "/status":
+        return {"valid": True, "type": "status"}
+    if trimmed == "/lscmd":
+        return {"valid": True, "type": "lscmd"}
+    if trimmed == "/start-iflow":
+        return {"valid": True, "type": "start-iflow"}
+    if trimmed == "/stop-iflow":
+        return {"valid": True, "type": "stop-iflow"}
+    if trimmed == "/restart-iflow":
+        return {"valid": True, "type": "restart-iflow"}
+    if trimmed == "/help":
+        return {"valid": True, "type": "help"}
+    
+    # 直接发送命令（不带前缀）
+    if trimmed and not trimmed.startswith("/"):
+        return {"valid": True, "type": "run", "command": trimmed}
+    
+    return {"valid": False, "type": "unknown"}
+```
+
+**3. iflow 管理命令实现**
+
+**启动 iflow** - `/start-iflow`
+```python
+async def _start_iflow(self, chat_id: str, is_group: bool) -> None:
+    """启动 iflow CLI。"""
+    # 检查 iflow 是否已经在运行
+    session_info = self.iflow_controller.get_session_info()
+    if session_info and session_info.get('iflow_running', False):
+        await self.wechat_channel.send("✅ iflow 已经在运行中", chat_id, is_group=is_group)
+        return
+    
+    # 尝试启动 iflow
+    await self.wechat_channel.send("⏳ 正在启动 iflow，请稍候...", chat_id, is_group=is_group)
+    success = self.iflow_controller.start_iflow(model="kimi-k2.5")
+    
+    if success:
+        await asyncio.sleep(3)
+        # 验证启动状态
+        session_info = self.iflow_controller.get_session_info()
+        if session_info and session_info.get('iflow_running', False):
+            await self.wechat_channel.send("✅ iflow 启动成功！现在可以开始使用了", chat_id, is_group=is_group)
+        else:
+            await self.wechat_channel.send("⚠️ iflow 启动失败，请检查日志", chat_id, is_group=is_group)
+    else:
+        await self.wechat_channel.send("❌ iflow 启动失败，请检查服务器日志", chat_id, is_group=is_group)
+```
+
+**停止 iflow** - `/stop-iflow`
+```python
+async def _stop_iflow(self, chat_id: str, is_group: bool) -> None:
+    """停止 iflow CLI。"""
+    # 检查 iflow 是否在运行
+    session_info = self.iflow_controller.get_session_info()
+    if not session_info or not session_info.get('tmux_exists', False):
+        await self.wechat_channel.send("✅ iflow 未运行，无需停止", chat_id, is_group=is_group)
+        return
+    
+    # 尝试停止 iflow
+    await self.wechat_channel.send("⏳ 正在停止 iflow，请稍候...", chat_id, is_group=is_group)
+    success = self.iflow_controller.stop_iflow()
+    
+    if success:
+        await asyncio.sleep(2)
+        session_info = self.iflow_controller.get_session_info()
+        if not session_info or not session_info.get('tmux_exists', False):
+            await self.wechat_channel.send("✅ iflow 已停止", chat_id, is_group=is_group)
+        else:
+            await self.wechat_channel.send("⚠️ iflow 停止失败，请检查日志", chat_id, is_group=is_group)
+    else:
+        await self.wechat_channel.send("❌ iflow 停止失败，请检查服务器日志", chat_id, is_group=is_group)
+```
+
+**重启 iflow** - `/restart-iflow`
+```python
+async def _restart_iflow(self, chat_id: str, is_group: bool) -> None:
+    """重启 iflow CLI。"""
+    # 先停止 iflow（如果正在运行）
+    session_info = self.iflow_controller.get_session_info()
+    if session_info and session_info.get('tmux_exists', False):
+        await self.wechat_channel.send("⏳ 正在停止 iflow，请稍候...", chat_id, is_group=is_group)
+        success = self.iflow_controller.stop_iflow()
+        if not success:
+            await self.wechat_channel.send("❌ iflow 停止失败，无法重启", chat_id, is_group=is_group)
+            return
+        await asyncio.sleep(2)
+    
+    # 启动 iflow
+    await self.wechat_channel.send("⏳ 正在启动 iflow，请稍候...", chat_id, is_group=is_group)
+    success = self.iflow_controller.start_iflow(model="kimi-k2.5")
+    
+    if success:
+        await asyncio.sleep(3)
+        session_info = self.iflow_controller.get_session_info()
+        if session_info and session_info.get('iflow_running', False):
+            await self.wechat_channel.send("✅ iflow 重启成功！现在可以开始使用了", chat_id, is_group=is_group)
+        else:
+            await self.wechat_channel.send("⚠️ iflow 重启失败，请检查日志", chat_id, is_group=is_group)
+    else:
+        await self.wechat_channel.send("❌ iflow 重启失败，请检查服务器日志", chat_id, is_group=is_group)
+```
+
+**列出命令** - `/lscmd`
+```python
+async def _list_commands(self, chat_id: str, is_group: bool) -> None:
+    """列出所有可用命令。"""
+    # 检查 iflow 状态
+    session_info = self.iflow_controller.get_session_info()
+    iflow_running = session_info.get('iflow_running', False) if session_info else False
+    
+    commands_message = """**📋 iFlow 企业微信机器人 - 可用命令**
+
+**基础命令：**
+• 直接发送消息：执行 iFlow 命令（自动恢复上次会话）
+• `/run <命令>`：执行 iFlow 命令
+• `/new`：开始新会话（清除上下文）
+
+**查询命令：**
+• `/status`：查看服务状态（tmux、iflow 运行状态）
+• `/sessions`：查看历史会话列表
+• `/lscmd`：列出所有可用命令（本命令）
+
+**iflow 管理命令：**
+• `/start-iflow`：启动 iflow CLI""" + ("" if iflow_running else "（推荐）") + """
+• `/stop-iflow`：停止 iflow CLI
+• `/restart-iflow`：重启 iflow CLI
+
+**帮助命令：**
+• `/help`：显示详细帮助信息
+
+---
+💡 提示：
+• """ + ("iflow 已运行，可以直接发送命令使用" if iflow_running else "iflow 未运行，请先使用 `/start-iflow` 启动") + """
+• 默认会自动恢复最近的会话，保持对话连续性
+• 如需重新开始，请使用 `/new` 命令
+
+示例：
+```
+""" + ("帮我写一个 Python 脚本" if iflow_running else "/start-iflow") + """
+继续完善这个脚本
+```
+"""
+    await self.wechat_channel.send(commands_message, chat_id, is_group=is_group)
+```
+
+**4. 智能提示**
+系统会根据 iflow 状态智能调整提示信息：
+
+**iflow 未运行时：**
+- 提示使用 `/start-iflow` 启动
+- 示例显示启动命令
+
+**iflow 已运行时：**
+- 提示可以直接使用命令
+- 示例显示实际命令
+
+**5. 错误处理优化**
+
+**tmux 未启动时的错误提示：**
+```
+❌ iflow 未运行
+
+请使用以下命令启动服务：
+python manage.py start
+
+或者只启动 iflow：
+python manage.py start --no-wechat
+```
+
+**tmux 已启动但 iflow 未运行时的错误提示：**
+```
+❌ iflow 未运行
+
+请使用以下命令启动服务：
+python manage.py start
+
+或者只启动 iflow：
+python manage.py start --no-wechat
+```
+
+**6. 启动通知优化**
+
+**tmux 未连接时的启动通知：**
+```
+🤖 iFlow 企业微信机器人已启动
+
+📅 启动时间: 2026-03-10 15:28:02
+💻 tmux 会话: 无连接
+📁 工作目录: 无
+🌐 回调端口: 8787
+
+⚠️ iflow 未运行，无法处理消息
+
+---
+📋 快速开始：
+• `/start-iflow`：启动 iflow CLI（推荐）
+• `/lscmd`：查看所有可用命令
+
+💡 提示：输入 `/lscmd` 查看完整的命令列表和功能说明。
+```
+
+**tmux 已连接时的启动通知：**
+```
+🤖 iFlow 企业微信机器人已启动
+
+📅 启动时间: 2026-03-10 15:28:02
+📁 工作目录: ~/.iflow
+💻 tmux 会话: iflow ✓
+🌐 回调端口: 8787
+
+✅ 服务运行正常，可以开始使用！
+
+---
+📋 快速开始：
+• 直接发送消息：执行 iFlow 命令
+• `/lscmd`：查看所有可用命令
+
+💡 提示：输入 `/lscmd` 查看完整的命令列表和功能说明。
+```
+
+**7. 关闭通知优化**
+
+**tmux 未连接时的关闭通知：**
+```
+🛑 iFlow 企业微信机器人已停止
+
+📅 关闭时间: 2026-03-10 15:30:00
+💻 tmux 会话: 无连接
+📁 工作目录: 无
+
+---
+如需重新启动，请执行:
+```bash
+python manage.py start
+```
+```
+
+**tmux 已连接时的关闭通知：**
+```
+🛑 iFlow 企业微信机器人已停止
+
+📅 关闭时间: 2026-03-10 15:30:00
+📁 工作目录: ~/.iflow
+💻 tmux 会话: iflow
+
+---
+如需重新启动，请执行:
+```bash
+python manage.py start
+```
+```
+
+**优势：**
+- ✅ 完整的 iflow 管理功能
+- ✅ 智能的状态提示
+- ✅ 简洁的启动/关闭通知
+- ✅ 统一的命令列表查看方式
+- ✅ 友好的错误提示
+- ✅ 完全无需手动操作服务器
 
 ### 3. Config 层
 

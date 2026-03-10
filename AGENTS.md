@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-Ling-iflow 是一个 iflow CLI 交互模式管理工具，支持通过 tmux 启动 iflow，并实现与企业微信的双向消息同步。项目从 iflow-bot 迁移而来，专注于提供轻量级的交互模式管理功能。
+Ling-iflow 是一个 iflow CLI 交互模式管理工具，支持通过 tmux 启动 iflow，并实现与企业微信的双向消息同步。专注于提供轻量级的交互模式管理功能。
 
 ## 核心功能
 
@@ -489,7 +489,7 @@ iflow CLI 生成回复
 
 ## 重要记忆
 
-- 项目从 iflow-bot 迁移而来，专注于交互模式管理
+- 专注于交互模式管理
 - 使用 tmux 管理 iflow CLI 会话
 - 通过监控会话文件（session-*.jsonl）捕获 AI 回复
 - 支持企业微信消息与 iflow CLI 的双向同步
@@ -499,14 +499,6 @@ iflow CLI 生成回复
 - 配置文件位置：`~/.ling-iflow/config.json`
 - 环境信息：Linux (WSL2), Python 3.13.11
 - GitHub 仓库：`git@github.com:lingzhia/Ling-iflow-message.git`
-
-## 与 iflow-bot 的区别
-
-1. **简化设计**：只包含交互模式核心功能，移除其他渠道和复杂功能
-2. **独立运行**：不依赖 iflow-bot 的消息总线和其他组件
-3. **增强功能**：提供命令系统、连续对话、会话管理等功能
-4. **轻量级**：依赖项更少，安装和配置更简单
-5. **测试完善**：提供多个测试程序，覆盖不同测试场景
 
 ## 未来改进
 
