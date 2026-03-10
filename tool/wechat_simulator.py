@@ -476,46 +476,105 @@ class ProcessManager:
             return False
     
     def stop_bot(self, bot_name: str) -> bool:
-        """停止机器人进程。"""
+        """停止机器人进程。
+        
+        返回 True 表示进程已停止（或本就不在运行），
+        返回 False 表示停止失败（进程仍在运行）。
+        """
+        import os
+        import signal
+        
+        # 首先尝试通过 PID 文件停止
         pid_file = self.get_pid_file(bot_name)
         
-        if not pid_file.exists():
-            return False
-        
-        try:
-            with open(pid_file, 'r') as f:
-                pid = int(f.read().strip())
-            
-            if not self._process_exists(pid):
-                pid_file.unlink()
-                return False
-            
-            import os
-            import signal
+        if pid_file.exists():
             try:
-                os.kill(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pid_file.unlink()
-                return False
+                with open(pid_file, 'r') as f:
+                    pid = int(f.read().strip())
+                
+                if self._process_exists(pid):
+                    # 尝试优雅停止
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        # 进程已退出，清理 PID 文件
+                        pid_file.unlink()
+                        return True
+                    
+                    # 等待进程结束
+                    import time
+                    for _ in range(5):
+                        time.sleep(0.5)
+                        if not self._process_exists(pid):
+                            pid_file.unlink()
+                            return True
+                    else:
+                        # 强制终止
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            # 进程已退出
+                            pass
+                    
+                    pid_file.unlink()
+                    return True
+                else:
+                    # PID 文件存在但进程不存在，进程已退出
+                    # 清理 PID 文件并返回成功
+                    pid_file.unlink()
+                    return True
+            except Exception:
+                # 读取 PID 文件失败，尝试通过进程名查找
+                pass
+        
+        # 如果 PID 文件不存在或读取失败，尝试通过进程名查找
+        try:
+            # 查找 wechat_bot 进程（包含 bot_name）
+            result = subprocess.run(
+                ["pgrep", "-f", f"wechat_bot.py.*--bot.*{bot_name}"],
+                capture_output=True,
+                text=True
+            )
             
-            # 等待进程结束
-            import time
-            for _ in range(5):
-                time.sleep(0.5)
-                if not self._process_exists(pid):
-                    break
+            if result.returncode == 0 and result.stdout.strip():
+                # 找到进程，需要停止
+                pids = result.stdout.strip().split('\n')
+                stopped = False
+                for pid_str in pids:
+                    try:
+                        pid = int(pid_str)
+                        if self._process_exists(pid):
+                            # 先尝试 SIGTERM
+                            try:
+                                os.kill(pid, signal.SIGTERM)
+                            except ProcessLookupError:
+                                continue
+                            
+                            # 等待进程结束
+                            import time
+                            for _ in range(3):
+                                time.sleep(0.5)
+                                if not self._process_exists(pid):
+                                    stopped = True
+                                    break
+                            else:
+                                # 强制终止
+                                try:
+                                    os.kill(pid, signal.SIGKILL)
+                                except ProcessLookupError:
+                                    stopped = True
+                    except (ValueError, OSError):
+                        continue
+                
+                return stopped
             else:
-                # 强制终止
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            
-            pid_file.unlink()
-            return True
-            
+                # 没有找到进程，说明进程已不在运行
+                return True
         except Exception:
-            return False
+            pass
+        
+        # 未知状态，认为失败
+        return False
     
     def _process_exists(self, pid: int) -> bool:
         """检查进程是否存在。"""
