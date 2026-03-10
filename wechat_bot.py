@@ -118,7 +118,12 @@ class WechatBot:
             await self._start_production_mode()
     
     async def _start_test_mode(self) -> None:
-        """启动测试模式（不启动 HTTP 服务器，提供测试接口）。"""
+        """启动测试模式（启动 HTTP 服务器 + 提供测试接口）。
+        
+        测试模式现在同时支持：
+        - HTTP 服务器（企业微信回调）
+        - 测试接口（send_message, listen 等）
+        """
         logger.info("[WechatBot] 启动测试模式")
         print(f"{COLOR_BLUE}[测试模式] 正在初始化组件...{COLOR_RESET}")
         
@@ -126,43 +131,20 @@ class WechatBot:
         
         # 检查企业微信配置
         if not self.config.wechat_work or not self.config.wechat_work.enabled:
-            logger.warning("[WechatBot] 测试模式下企业微信未启用，继续使用默认配置")
+            logger.error("[WechatBot] 企业微信未启用，请在配置中设置 wechat_work.enabled=true")
+            print(f"{COLOR_YELLOW}[错误] 企业微信未启用，请在配置中设置 wechat_work.enabled=true{COLOR_RESET}")
+            return
         
         wechat_config: WechatWorkConfig = self.config.wechat_work
         
-        # 创建企业微信渠道（不启动）
-        logger.info("[WechatBot] 正在初始化企业微信渠道（不启动）...")
+        # 创建企业微信渠道（启动）
+        logger.info("[WechatBot] 正在初始化企业微信渠道...")
         self.wechat_channel = WechatWorkChannel(wechat_config)
-        
-        
-        
-        # 包装 wechat_channel.send() 方法，使其在发送后广播消息
-        original_send = self.wechat_channel.send
-        
-        async def wrapped_send(content, chat_id, is_group=False, **kwargs):
-            # 先执行原始的 send() 方法
-            result = await original_send(content, chat_id, is_group=is_group, **kwargs)
-            
-            # 然后通过 MessageDispatcher 广播消息
-            await self.dispatcher.broadcast(
-                content,
-                {
-                    'source': 'wechat_send',
-                    'chat_id': chat_id,
-                    'is_group': is_group,
-                    'tmux_session': self.config.tmux_session,
-                    'workspace': self.config.workspace
-                }
-            )
-            
-            return result
-        
-        # 替换原始方法
-        self.wechat_channel.send = wrapped_send
-        logger.info('[WechatBot] 测试模式已包装 wechat_channel.send() 方法')
         
         # 创建机器人集成
         logger.info("[WechatBot] 正在初始化机器人集成...")
+        print(f"{COLOR_BLUE}[测试模式] 正在初始化机器人集成...{COLOR_RESET}")
+        
         self.bot_integration = BotIntegration(
             wechat_channel=self.wechat_channel,
             tmux_session=self.config.tmux_session,
@@ -182,7 +164,7 @@ class WechatBot:
         
         self.dispatcher = MessageDispatcher()
         
-        # 定义默认回调函数（打印到控制台）
+        # 定义测试模式回调（打印到控制台）
         async def test_callback(message: str, metadata: dict) -> None:
             """测试模式回调：打印消息到控制台"""
             try:
@@ -223,11 +205,33 @@ class WechatBot:
         
         logger.info("[WechatBot] 测试模式启动完成")
         print(f"{COLOR_GREEN}[测试模式] 测试模式已启动！{COLOR_RESET}")
+        print(f"{COLOR_BLUE}[功能特性]{COLOR_RESET}")
+        print(f"  ✓ HTTP 服务器：已启动（支持企业微信回调）")
+        print(f"  ✓ 测试接口：send_message(), listen() 等")
         print(f"{COLOR_BLUE}[提示] 使用 send_message() 发送消息{COLOR_RESET}")
         print(f"{COLOR_BLUE}[提示] 使用 listen() 监听回复{COLOR_RESET}")
         print()
         
-        # 注意：测试模式下不在这里保持运行，而是在 listen() 方法中保持运行
+        # 启动 HTTP 服务器（企业微信回调）
+        logger.info("[WechatBot] 正在启动 HTTP 服务器...")
+        print(f"{COLOR_BLUE}[测试模式] 正在启动 HTTP 服务器...{COLOR_RESET}")
+        
+        try:
+            # 启动 HTTP 服务器
+            await self.wechat_channel.start()
+            
+            logger.info("[WechatBot] HTTP 服务器已启动")
+            print(f"{COLOR_GREEN}[成功] HTTP 服务器已启动{COLOR_RESET}")
+            print(f"{COLOR_BLUE}[回调 URL]{COLOR_RESET}")
+            callback_url = f"http://{wechat_config.callback_host}:{wechat_config.callback_port}/wechat/callback"
+            print(f"  {callback_url}")
+            print()
+            
+        except Exception as e:
+            logger.error(f"[WechatBot] 启动 HTTP 服务器失败: {e}")
+            print(f"{COLOR_YELLOW}[错误] 启动 HTTP 服务器失败: {e}{COLOR_RESET}")
+            # HTTP 服务器启动失败，但继续运行测试模式
+            print(f"{COLOR_YELLOW}[警告] HTTP 服务器启动失败，仅提供测试接口{COLOR_RESET}")
     
     async def _start_production_mode(self) -> None:
         """启动生产模式（完整功能，包括 HTTP 服务器）。"""
@@ -517,10 +521,11 @@ python manage.py start
         print(f"  工作目录: {self.config.workspace}")
         print()
         print(f"{COLOR_BLUE}[测试模式特性]{COLOR_RESET}")
-        print(f"  不启动 HTTP 服务器")
-        print(f"  不接收企业微信消息")
-        print(f"  不发送消息到企业微信")
-        print(f"  提供测试接口")
+        print(f"  启动 HTTP 服务器（支持企业微信回调）")
+        print(f"  接收企业微信消息")
+        print(f"  发送消息到企业微信")
+        print(f"  提供测试接口（send_message, listen 等）")
+        print(f"  工具和企业微信都能接收 iflow 回复")
         print()
         print(f"{COLOR_BLUE}[可用接口]{COLOR_RESET}")
         print(f"  await bot.send_message('消息')")

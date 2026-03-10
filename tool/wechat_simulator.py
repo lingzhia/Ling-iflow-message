@@ -113,6 +113,14 @@ class WechatSimulator:
             await self.bot.stop()
             logger.info(f"[WechatSimulator] 机器人已停止: {self.bot_name}")
 
+    async def send_message(self, message: str) -> None:
+        """发送消息（调用安静模式）。
+
+        Args:
+            message: 要发送的消息内容
+        """
+        await self.send_message_quiet(message)
+
     async def send_message_quiet(self, message: str) -> None:
         """发送消息（安静模式，不显示日志，只显示回复）。
 
@@ -161,7 +169,7 @@ class WechatSimulator:
                 print(f"{COLOR_YELLOW}[iflow 回复]{COLOR_RESET}")
                 print("未收到回复（可能超时或 iflow 未运行）")
                 print()
-                
+
         except Exception as e:
             print(f"{COLOR_YELLOW}[错误] 发送消息失败: {e}{COLOR_RESET}")
             print()
