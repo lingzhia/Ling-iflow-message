@@ -704,6 +704,13 @@ async def main():
     # 启动机器人
     try:
         await bot.start()
+        
+        # 测试模式下，保持运行
+        if bot.test_mode:
+            logger.info("[WechatBot] 测试模式运行中，等待消息...")
+            while bot.running:
+                await asyncio.sleep(1)
+    
     except KeyboardInterrupt:
         logger.info("[WechatBot] 用户中断")
         print(f"\n{COLOR_YELLOW}[中断] 收到用户中断，正在停止...{COLOR_RESET}")
@@ -713,8 +720,8 @@ async def main():
         print(f"{COLOR_YELLOW}[错误] 启动失败: {e}{COLOR_RESET}")
         sys.exit(1)
     finally:
-        # 删除 PID 文件
-        if pid_file and pid_file.exists():
+        # 只有在程序真正退出时才删除 PID 文件
+        if pid_file and pid_file.exists() and not bot.running:
             pid_file.unlink()
             logger.info(f"[WechatBot] 已删除 PID 文件: {pid_file}")
 

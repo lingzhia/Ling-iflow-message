@@ -361,6 +361,9 @@ async def auto_setup(bot_name: str, config_path: str) -> None:
         python_path = sys.executable
         bot_script = project_root / "wechat_bot.py"
         
+        # 日志文件
+        log_file = project_root / "logs" / f"wechat_bot_{bot_name}_auto.log"
+        
         cmd = [
             python_path,
             str(bot_script),
@@ -369,34 +372,57 @@ async def auto_setup(bot_name: str, config_path: str) -> None:
             "--test-mode"  # 添加测试模式参数
         ]
         
-        # 后台运行
+        # 打开日志文件
+        log_handle = open(log_file, 'a')
+        
+        # 后台运行，输出到日志文件
         process = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=log_handle,
             start_new_session=True,
             cwd=str(project_root)
         )
         
         pid = process.pid
         print_success(f"wechat_bot 已启动 (测试模式, PID: {pid})")
+        print_info(f"日志文件: {log_file}")
         
         # 等待一下，确保进程启动成功
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
         
         # 检查进程是否仍在运行
         if not process_manager.is_running(bot_name):
             print_error(f"wechat_bot 启动失败")
+            print_info(f"请查看日志文件: {log_file}")
+            
+            # 显示最后几行日志
+            try:
+                with open(log_file, 'r') as f:
+                    lines = f.readlines()
+                    if lines:
+                        print_info(f"最近日志:")
+                        for line in lines[-20:]:
+                            print(f"  {line.rstrip()}")
+            except Exception:
+                pass
+            
             sys.exit(1)
+        
+        # 额外等待，确保初始化完成
+        print_info(f"等待 wechat_bot 初始化...")
+        await asyncio.sleep(2)
         
     except Exception as e:
         print_error(f"启动 wechat_bot 失败: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
     
     print()
     print_success(f"自动设置完成！")
     print(f"{COLOR_BLUE}iflow CLI:{COLOR_RESET} {tmux_session}")
-    print(f"{COLOR_BLUE}wechat_bot:{COLOR_RESET} {bot_name} (测试模式)")
+    print(f"{COLOR_BLUE}wechat_bot:{COLOR_RESET} {bot_name} (测试模式, PID: {pid})")
     print()
     print_info(f"按 {COLOR_YELLOW}Ctrl+C{COLOR_RESET} 可以停止测试并清理资源")
     print()
