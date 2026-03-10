@@ -25,6 +25,7 @@
 import asyncio
 import argparse
 import sys
+import subprocess
 from pathlib import Path
 from typing import Optional
 from loguru import logger
@@ -40,7 +41,28 @@ COLOR_GREEN = "\033[32m"
 COLOR_YELLOW = "\033[33m"
 COLOR_BLUE = "\033[36m"
 COLOR_CYAN = "\033[96m"
+COLOR_RED = "\033[31m"
 COLOR_RESET = "\033[0m"
+
+
+def print_success(message: str) -> None:
+    """打印成功消息。"""
+    print(f"{COLOR_GREEN}✓{COLOR_RESET} {message}")
+
+
+def print_warning(message: str) -> None:
+    """打印警告消息。"""
+    print(f"{COLOR_YELLOW}⚠{COLOR_RESET} {message}")
+
+
+def print_error(message: str) -> None:
+    """打印错误消息。"""
+    print(f"{COLOR_RED}✗{COLOR_RESET} {message}")
+
+
+def print_info(message: str) -> None:
+    """打印信息消息。"""
+    print(f"{COLOR_BLUE}ℹ{COLOR_RESET} {message}")
 
 
 class WechatSimulator:
@@ -396,6 +418,7 @@ class ProcessManager:
     def __init__(self, project_root: Path):
         self.project_root = project_root
         self.pids_dir = project_root / ".pids"
+        self.pids_dir.mkdir(exist_ok=True)
     
     def get_pid_file(self, bot_name: str) -> Path:
         """获取 PID 文件路径。"""
@@ -470,6 +493,19 @@ class ProcessManager:
 
 async def main():
     """主函数。"""
+    # 创建父 parser，包含共享参数
+    parent_parser = argparse.ArgumentParser(add_help=False)
+    parent_parser.add_argument(
+        "--config", "-c",
+        default=None,
+        help="配置文件路径（默认: 项目根目录/config.json）"
+    )
+    parent_parser.add_argument(
+        "--auto", "-a",
+        action="store_true",
+        help="自动设置模式：自动检查并启动 iflow 和 wechat_bot（测试模式）"
+    )
+
     parser = argparse.ArgumentParser(
         description="企业微信模拟器（通过 WechatBot 测试消息交互）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -498,35 +534,23 @@ async def main():
         """
     )
 
-    parser.add_argument(
-        "--config", "-c",
-        default=None,
-        help="配置文件路径（默认: 项目根目录/config.json）"
-    )
-
-    parser.add_argument(
-        "--auto", "-a",
-        action="store_true",
-        help="自动设置模式：自动检查并启动 iflow 和 wechat_bot（测试模式）"
-    )
-
     subparsers = parser.add_subparsers(dest="command", help="测试命令")
 
     # 发送命令
-    send_parser = subparsers.add_parser("send", help="发送消息")
+    send_parser = subparsers.add_parser("send", help="发送消息", parents=[parent_parser])
     send_parser.add_argument("bot_name", help="机器人名称")
     send_parser.add_argument("message", help="要发送的消息内容")
 
     # 交互命令
-    interactive_parser = subparsers.add_parser("interactive", help="交互模式")
+    interactive_parser = subparsers.add_parser("interactive", help="交互模式", parents=[parent_parser])
     interactive_parser.add_argument("bot_name", help="机器人名称")
 
     # 监听命令
-    listen_parser = subparsers.add_parser("listen", help="监听模式")
+    listen_parser = subparsers.add_parser("listen", help="监听模式", parents=[parent_parser])
     listen_parser.add_argument("bot_name", help="机器人名称")
 
     # 批量发送命令
-    send_sequence_parser = subparsers.add_parser("send-sequence", help="批量发送消息")
+    send_sequence_parser = subparsers.add_parser("send-sequence", help="批量发送消息", parents=[parent_parser])
     send_sequence_parser.add_argument("bot_name", help="机器人名称")
     send_sequence_parser.add_argument(
         "messages",

@@ -7,6 +7,7 @@
 import asyncio
 import signal
 import sys
+import os
 from pathlib import Path
 from typing import Optional
 from loguru import logger
@@ -225,6 +226,10 @@ class WechatBot:
         print(f"{COLOR_BLUE}[提示] 使用 send_message() 发送消息{COLOR_RESET}")
         print(f"{COLOR_BLUE}[提示] 使用 listen() 监听回复{COLOR_RESET}")
         print()
+        
+        # 保持运行
+        while self.running:
+            await asyncio.sleep(1)
     
     async def _start_production_mode(self) -> None:
         """启动生产模式（完整功能，包括 HTTP 服务器）。"""
@@ -669,6 +674,19 @@ async def main():
         encoding="utf-8"
     )
     
+    # 创建 PID 文件（如果指定了机器人名称）
+    pid_file = None
+    if args.bot:
+        pids_dir = Path(__file__).parent / ".pids"
+        pids_dir.mkdir(exist_ok=True)
+        pid_file = pids_dir / f"bot_{args.bot}.pid"
+        
+        # 写入 PID
+        with open(pid_file, 'w') as f:
+            f.write(str(os.getpid()))
+        
+        logger.info(f"[WechatBot] 已创建 PID 文件: {pid_file}")
+    
     # 创建机器人实例
     bot = WechatBot(
         config_path=args.config,
@@ -696,6 +714,11 @@ async def main():
         logger.error(f"[WechatBot] 启动失败: {e}", exc_info=True)
         print(f"{COLOR_YELLOW}[错误] 启动失败: {e}{COLOR_RESET}")
         sys.exit(1)
+    finally:
+        # 删除 PID 文件
+        if pid_file and pid_file.exists():
+            pid_file.unlink()
+            logger.info(f"[WechatBot] 已删除 PID 文件: {pid_file}")
 
 
 if __name__ == "__main__":
