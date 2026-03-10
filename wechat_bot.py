@@ -152,6 +152,14 @@ class WechatBot:
             filter_thinking=self.config.filter_thinking
         )
         
+        # 设置消息处理器
+        logger.info("[WechatBot] 设置消息处理器...")
+        self.wechat_channel.set_message_handler(self.bot_integration.handle_message)
+        
+        # 启动企业微信渠道
+        logger.info("[WechatBot] 启动企业微信渠道...")
+        await self.wechat_channel.start()
+        
         # 启动后台监控（检测 iflow 交互界面的消息）
         logger.info("[WechatBot] 正在启动后台监控...")
         print(f"{COLOR_BLUE}[测试模式] 正在启动后台监控...{COLOR_RESET}")
@@ -164,9 +172,9 @@ class WechatBot:
         
         self.dispatcher = MessageDispatcher()
         
-        # 定义测试模式回调（打印到控制台）
+        # 定义测试模式回调（打印到控制台 + 发送到企业微信）
         async def test_callback(message: str, metadata: dict) -> None:
-            """测试模式回调：打印消息到控制台"""
+            """测试模式回调：打印消息到控制台 + 发送到企业微信"""
             try:
                 # 检查消息来源（多 iflow 场景下过滤消息）
                 source = metadata.get("source", "")
@@ -191,6 +199,11 @@ class WechatBot:
                 print(f"{message}")
                 print()
                 logger.info(f"[WechatBot] 测试模式收到消息: {message[:50]}")
+                
+                # 发送到企业微信
+                if wechat_config.user_id:
+                    await self.wechat_channel.send(message, wechat_config.user_id, is_group=False)
+                    logger.info(f"[WechatBot] 已发送消息到企业微信: {message[:50]}")
             except Exception as e:
                 logger.error(f"[WechatBot] 测试模式回调失败: {e}")
         
@@ -232,6 +245,9 @@ class WechatBot:
             print(f"{COLOR_YELLOW}[错误] 启动 HTTP 服务器失败: {e}{COLOR_RESET}")
             # HTTP 服务器启动失败，但继续运行测试模式
             print(f"{COLOR_YELLOW}[警告] HTTP 服务器启动失败，仅提供测试接口{COLOR_RESET}")
+        
+        # 发送启动通知
+        await self._send_startup_notification(wechat_config)
     
     async def _start_production_mode(self) -> None:
         """启动生产模式（完整功能，包括 HTTP 服务器）。"""
@@ -660,6 +676,32 @@ async def main():
     else:
         logger.remove()
         logger.add(sys.stderr, level="INFO")
+    
+    # 配置 logging 模块，将其输出到 loguru（WechatWorkChannel 使用 logging）
+    import logging
+    from loguru import logger as loguru_logger
+    
+    class InterceptHandler(logging.Handler):
+        """将 logging 的日志输出到 loguru 的 handler"""
+        def emit(self, record):
+            # 获取对应的 loguru level
+            try:
+                level = logger.level(record.levelname).name
+            except ValueError:
+                level = record.levelno
+            
+            # 查找调用者
+            frame, depth = logging.currentframe(), 2
+            while frame.f_code.co_filename == logging.__file__:
+                frame = frame.f_back
+                depth += 1
+            
+            loguru_logger.opt(depth=depth, exception=record.exc_info).log(
+                level, record.getMessage()
+            )
+    
+    # 配置 logging
+    logging.basicConfig(handlers=[InterceptHandler()], level=0)
     
     # 添加文件日志
     from pathlib import Path

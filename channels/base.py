@@ -64,5 +64,14 @@ class BaseChannel(ABC):
             is_group: 是否为群聊
             metadata: 元数据
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.debug(f"[BaseChannel] _handle_message called: content={content[:50]}, sender_id={sender_id}")
+        
         if self._message_handler:
+            logger.debug(f"[BaseChannel] Calling message handler...")
             await self._message_handler(content, sender_id, chat_id, is_group, metadata)
+            logger.debug(f"[BaseChannel] Message handler completed")
+        else:
+            logger.warning(f"[BaseChannel] No message handler set, ignoring message")

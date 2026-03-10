@@ -60,6 +60,7 @@ class BotIntegration:
         self._sent_markers: set = set()  # 已发送的标记哈希（用于 fallback 机制）
         self._current_source: str = ""  # 当前正在处理的请求来源（wechat/tool/""）
         self._pending_messages: list = []  # 待处理的未知来源消息
+        self._processing_wechat_request: bool = False  # 是否正在处理企业微信请求（标志，避免后台监控重复发送）
         self.iflow_controller = IFlowController(tmux_session)
         
         # 命令前缀
@@ -495,6 +496,11 @@ class BotIntegration:
         # 设置当前来源
         self._current_source = source
 
+        # 设置企业微信请求处理标志（避免后台监控重复发送）
+        if source == "wechat":
+            self._processing_wechat_request = True
+            logger.info(f"[BotIntegration] 设置企业微信请求处理标志为 True")
+
         if not command:
             logger.warning("[BotIntegration] 命令为空")
             await self.wechat_channel.send("❌ 命令不能为空", chat_id, is_group=is_group)
@@ -835,6 +841,21 @@ class BotIntegration:
         finally:
             # 清理当前来源
             self._current_source = ""
+            
+            # 清理企业微信请求处理标志（延迟清理，确保实时监控的消息已经发送）
+            if self._processing_wechat_request:
+                logger.info(f"[BotIntegration] 延迟清理企业微信请求处理标志，等待 5 秒...")
+                await asyncio.sleep(5)
+                
+                # 检查后台监控是否已经检测到了消息
+                # 如果检测到了，就清理标志；如果没有检测到，就不清理标志
+                current_messages, _, _, _ = self._extract_reply_from_tmux()
+                if len(current_messages) > 0:
+                    logger.info(f"[BotIntegration] 后台监控已检测到 {len(current_messages)} 条消息，清理标志")
+                    self._processing_wechat_request = False
+                    logger.info(f"[BotIntegration] 已清理企业微信请求处理标志，设置为 False")
+                else:
+                    logger.warning(f"[BotIntegration] 后台监控未检测到消息，不清理标志，继续等待后台监控处理")
 
     def _clean_message_content(self, content: str) -> str:
         """清理消息内容，去除 iflow 的 UI 元素。
@@ -979,21 +1000,25 @@ class BotIntegration:
             
             # 先检测生成中状态（只检查最后 10 行）
             for line in lines[-10:]:
-                if '生成中' in line:
+                line_stripped = line.strip()
+                # 检测"生成中"标记
+                if '生成中' in line_stripped:
                     import re
-                    time_match = re.search(r'(\d+)s', line)
+                    time_match = re.search(r'(\d+)s', line_stripped)
                     if time_match:
                         is_generating = True
                         generation_time = time_match.group(1) + 's'
                         logger.debug(f"[BotIntegration] 检测到生成中: {generation_time}")
                         break
+                # 检测"思考中"标记（✻）
+                if '✻' in line_stripped:
+                    is_generating = True
+                    generation_time = 'thinking'
+                    logger.debug(f"[BotIntegration] 检测到思考中标记")
+                    break
             
             # 提取标记消息
             for line in conversation_lines:
-                # 跳过生成中检测（已经在上面完成了）
-                if '生成中' in line:
-                    continue
-                
                 # 检测标记
                 marker = self._detect_marker(line)
                 
@@ -1036,8 +1061,8 @@ class BotIntegration:
                 else:
                     # 只返回 ✦ 标记的消息
                     if '✦' in msg['full_marker'] and '✻' not in msg['full_marker']:
-                        # 清理 ✦ 符号
-                        clean_content = msg['content'].replace('✦', '').strip()
+                        # 清理 ✦ 符号和 UI 元素
+                        clean_content = self._clean_message_content(msg['content'].replace('✦', '').strip())
                         if clean_content:
                             filtered_messages.append({
                                 'marker_id': msg['marker_id'],
@@ -1077,13 +1102,13 @@ class BotIntegration:
         if curr_line_stripped.startswith('>') or curr_line_stripped.count('|') >= 2:
             return None
 
+        # 检测 ✻ 标记（思考、工具调用等）
+        if '✻' in curr_line_stripped and '✹' not in curr_line_stripped:
+            return '✻'
+
         # 检测 ✦ 标记（实际回复）
         if '✦' in curr_line_stripped and '✻' not in curr_line_stripped and '✹' not in curr_line_stripped:
             return '✦'
-
-        # 检测 ✻ 标记（思考、工具调用等）
-        if '✻' in curr_line_stripped:
-            return '✻'
 
         return None
     
@@ -1170,17 +1195,9 @@ class BotIntegration:
             if '✦' in msg.get('full_marker', '') and '✻' not in msg.get('full_marker', ''):
                 content = msg.get('content', '').strip()
                 if content:
-                    # 使用 marker_id 作为回复内容（不使用 content，避免被分隔符截断）
-                    marker_id = msg.get('marker_id', '').strip()
-                    if marker_id:
-                        logger.debug(f"[BotIntegration] 使用 marker_id 作为回复内容: {marker_id}")
-                        merged_lines.append(marker_id)
-                        continue
-
-                    # 如果没有 marker_id，尝试清理消息内容
-                    cleaned_content = self._clean_message_content(content)
-                    if cleaned_content.strip():
-                        merged_lines.append(cleaned_content)
+                    logger.debug(f"[BotIntegration] 使用 content 作为回复内容: {content[:50]}")
+                    merged_lines.append(content)
+                    continue
 
         # 直接换行连接，无分隔符
         return '\n'.join(merged_lines)
@@ -1220,14 +1237,16 @@ class BotIntegration:
                     if marker_id and marker_id not in last_known_messages:
                         # 检查消息是否已经被企业微信请求触发过（避免重复添加前缀）
                         if marker_id in self._wechat_message_markers:
-                            logger.debug(f"[BotIntegration] 跳过企业微信消息: {marker_id}")
+                            logger.debug(f"[BotIntegration] 跳过企业微信消息: {marker_id}（已在企业微信标记中）")
                         else:
                             logger.debug(f"[BotIntegration] 检测到新消息: {marker_id}, 企业微信消息数: {len(self._wechat_message_markers)}")
+                            logger.debug(f"[BotIntegration] 企业微信标记集合: {list(self._wechat_message_markers)}")
                             new_messages.append(msg)
                 
                 # 如果有新消息且不在处理中
                 if new_messages and not is_generating and self._current_source == "":
                     logger.info(f"[BotIntegration] 后台监控检测到新消息: {len(new_messages)} 条")
+                    logger.info(f"[BotIntegration] 当前来源状态: _current_source='{self._current_source}', _processing_wechat_request={self._processing_wechat_request}")
                     
                     # 合并所有 ✦ 标记的消息
                     merged_content = self._merge_messages(new_messages)
@@ -1239,10 +1258,49 @@ class BotIntegration:
                             for msg in new_messages
                         )
                         
+                        # 检查是否正在处理企业微信请求
+                        is_wechat_request_processing = self._processing_wechat_request
+                        
                         if all_in_wechat_markers:
                             logger.info(f"[BotIntegration] 所有消息都在企业微信标记中，跳过后台监控发送")
                             last_known_messages.update(current_marker_ids)
                             continue
+                        
+                        # 如果正在处理企业微信请求，也不添加前缀
+                        if is_wechat_request_processing:
+                            logger.info(f"[BotIntegration] 正在处理企业微信请求，分别发送每条消息到企业微信（不添加前缀）")
+                            # 分别发送每条消息到企业微信
+                            dispatcher = MessageDispatcher()
+                            sent_count = 0
+                            for msg in new_messages:
+                                # 只发送 ✦ 标记的消息
+                                if '✦' in msg.get('full_marker', '') and '✻' not in msg.get('full_marker', ''):
+                                    content = msg.get('content', '').strip()
+                                    if content:
+                                        await dispatcher.broadcast(
+                                            content,
+                                            {
+                                                "source": "wechat",
+                                                "tmux_session": self.tmux_session,
+                                                "workspace": self.workspace,
+                                                "user_question": user_question,
+                                                "message_count": 1,
+                                                "message_index": sent_count + 1
+                                            }
+                                        )
+                                        sent_count += 1
+                                        logger.info(f"[BotIntegration] 已发送第 {sent_count} 条消息到企业微信")
+                            logger.info(
+                                f"[BotIntegration] 已通过分发器发送 {sent_count} 条企业微信请求消息 (tmux: {self.tmux_session}, workspace: {self.workspace})"
+                            )
+                            last_known_messages.update(current_marker_ids)
+                            continue
+                        
+                        # 打印每条消息的标记状态（调试）
+                        for msg in new_messages:
+                            marker_id = msg.get('marker_id', '')
+                            in_markers = marker_id in self._wechat_message_markers
+                            logger.debug(f"[BotIntegration] 消息标记检查: {marker_id} -> in_wechat_markers={in_markers}")
                         
                         # 构造开头标记
                         header = f"🔔 iflow交互模式请求：原消息=[{user_question}]，当前回复完成，回复结果如下：\n\n"
@@ -1281,7 +1339,7 @@ class BotIntegration:
                     if len(last_known_messages) > 1000:
                         last_known_messages = current_marker_ids
                     else:
-                        last_known_messages = current_marker_ids
+                        last_known_messages.update(current_marker_ids)
                 
             except Exception as e:
                 logger.error(f"[BotIntegration] 后台监控错误: {e}", exc_info=True)
