@@ -69,6 +69,8 @@ class Conversation:
         if self.receive_iflow:
             print("\n【3. iflow 回复】")
             for key, value in self.receive_iflow.items():
+                if key == "full_message":
+                    continue  # 跳过完整消息（包含头部）
                 print(f"  {key}: {value}")
         
         if self.send_wechat:
@@ -97,17 +99,32 @@ class ConversationExtractor:
         )
         
         with open(self.log_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                match = pattern.match(line)
-                if match:
-                    entry = LogEntry(
-                        timestamp=match.group(1),
-                        level=match.group(2),
-                        module=match.group(3).strip(),
-                        message=match.group(4),
-                        raw=line.strip()
-                    )
-                    self.entries.append(entry)
+            lines = f.readlines()
+            
+            i = 0
+            while i < len(lines):
+                line = lines[i].strip()
+                
+                # 合并多行日志（不以时间戳开头的行属于上一条日志的续行）
+                if line and not re.match(r'^\d{4}-\d{2}-\d{2}', line):
+                    # 这是一个续行，添加到上一条日志的 message 中
+                    if self.entries:
+                        self.entries[-1].message += "\n" + line
+                        self.entries[-1].raw += "\n" + line
+                else:
+                    # 这是一个新日志行
+                    match = pattern.match(line)
+                    if match:
+                        entry = LogEntry(
+                            timestamp=match.group(1),
+                            level=match.group(2),
+                            module=match.group(3).strip(),
+                            message=match.group(4),
+                            raw=line
+                        )
+                        self.entries.append(entry)
+                
+                i += 1
         
         print(f"解析完成，共 {len(self.entries)} 条日志")
     
@@ -139,7 +156,7 @@ class ConversationExtractor:
                     }
             
             # 检测 iflow 回复（后台监控）
-            elif "后台监控检测到新消息" in entry.message:
+            elif "检测到 iflow 交互界面回复" in entry.message and "完整回复:" in entry.message:
                 if current_conversation:
                     current_conversation.receive_iflow = self._parse_background_monitor(entry)
             
@@ -196,11 +213,36 @@ class ConversationExtractor:
             "timestamp": entry.timestamp
         }
         
-        # 提取消息内容（可能在同一行或后续行）
-        # 发送消息内容预览: 🔔 iflow交互模式请求：原消息=[你好]，当前回复完成，回复结果如下：
-        if "发送消息内容预览:" in entry.message:
-            preview = entry.message.split("发送消息内容预览:")[1].strip()
-            data["preview"] = preview
+        # 解析多行消息
+        lines = entry.message.split("\n")
+        content_lines = []
+        
+        for line in lines:
+            if "用户问题:" in line:
+                data["user_question"] = line.split("用户问题:")[1].strip()
+            elif "消息数量:" in line:
+                data["message_count"] = line.split("消息数量:")[1].strip()
+            elif "完整回复:" in line:
+                # 完整回复可能在同一行或后续行
+                full_reply = line.split("完整回复:")[1].strip()
+                if full_reply:
+                    content_lines.append(full_reply)
+            elif line and not line.startswith("  "):
+                # 后续内容行
+                content_lines.append(line)
+        
+        if content_lines:
+            full_message = "\n".join(content_lines)
+            data["full_message"] = full_message
+            
+            # 提取真实的 iflow 回复（去除系统添加的头部）
+            # 头部格式: 🔔 iflow交互模式请求：原消息=[xxx]，当前回复完成，回复结果如下：
+            if "回复结果如下：" in full_message:
+                # 提取"回复结果如下："之后的内容
+                iflow_reply = full_message.split("回复结果如下：", 1)[1].strip()
+                data["content"] = iflow_reply
+            else:
+                data["content"] = full_message
         
         return data
     
