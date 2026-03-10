@@ -79,6 +79,7 @@ class WechatSimulator:
         self.config_path = config_path or (project_root / "config.json")
         self.bot: Optional[WechatBot] = None
         self.message_count = 0
+        self.pending_reply = None  # 等待中的回复
 
     async def start(self) -> None:
         """启动机器人（测试模式）。
@@ -86,6 +87,9 @@ class WechatSimulator:
         注意：测试模式下不调用 WechatBot.start()，因为它会进入无限循环。
         而是只初始化组件并启动后台监控。
         """
+        # 禁用日志输出（交互模式）
+        logger.remove()
+        
         try:
             self.bot = WechatBot(
                 config_path=str(self.config_path),
@@ -99,9 +103,7 @@ class WechatSimulator:
             # 直接调用测试模式的初始化逻辑，避免进入无限循环
             await self.bot._start_test_mode()
             
-            logger.info(f"[WechatSimulator] 机器人已启动（测试模式）: {self.bot_name}")
         except Exception as e:
-            logger.error(f"[WechatSimulator] 启动机器人失败: {e}")
             print(f"{COLOR_YELLOW}[错误] 启动机器人失败: {e}{COLOR_RESET}")
             raise
 
@@ -111,8 +113,8 @@ class WechatSimulator:
             await self.bot.stop()
             logger.info(f"[WechatSimulator] 机器人已停止: {self.bot_name}")
 
-    async def send_message(self, message: str) -> None:
-        """发送消息。
+    async def send_message_quiet(self, message: str) -> None:
+        """发送消息（安静模式，不显示日志，只显示回复）。
 
         Args:
             message: 消息内容
@@ -127,11 +129,42 @@ class WechatSimulator:
         print()
 
         try:
+            # 设置回调以捕获回复
+            self.pending_reply = None
+            
+            async def reply_callback(msg: str, metadata: dict) -> None:
+                """接收回复的回调"""
+                self.pending_reply = msg
+            
+            # 注册回调
+            self.bot.dispatcher.subscribe(f"interactive_{self.message_count}", reply_callback)
+            
+            # 发送消息
             await self.bot.send_message(message)
-            logger.info(f"[WechatSimulator] 消息已发送: {message[:50]}...")
+            
+            # 等待回复（最多等待 30 秒）
+            for _ in range(30):
+                await asyncio.sleep(1)
+                if self.pending_reply:
+                    break
+            
+            # 取消回调
+            self.bot.dispatcher.unsubscribe(f"interactive_{self.message_count}")
+            
+            # 显示回复
+            if self.pending_reply:
+                print(f"{COLOR_GREEN}[iflow 回复]{COLOR_RESET}")
+                print(f"{self.pending_reply}")
+                print()
+                self.pending_reply = None
+            else:
+                print(f"{COLOR_YELLOW}[iflow 回复]{COLOR_RESET}")
+                print("未收到回复（可能超时或 iflow 未运行）")
+                print()
+                
         except Exception as e:
-            logger.error(f"[WechatSimulator] 发送消息失败: {e}")
             print(f"{COLOR_YELLOW}[错误] 发送消息失败: {e}{COLOR_RESET}")
+            print()
 
     async def listen_mode(self) -> None:
         """监听模式（只监听 iflow 回复）。"""
@@ -219,8 +252,8 @@ class WechatSimulator:
                 if not user_input:
                     continue
 
-                # 发送消息
-                await self.send_message(user_input)
+                # 发送消息（不显示日志）
+                await self.send_message_quiet(user_input)
 
             except EOFError:
                 print(f"\n{COLOR_YELLOW}输入结束，正在退出...{COLOR_RESET}")
