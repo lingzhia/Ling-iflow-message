@@ -637,6 +637,11 @@ async def main():
         action="store_true",
         help="详细日志模式"
     )
+    parser.add_argument(
+        "--test-mode", "-t",
+        action="store_true",
+        help="测试模式（不启动 HTTP 服务器，提供测试接口）"
+    )
     
     args = parser.parse_args()
     
@@ -665,7 +670,11 @@ async def main():
     )
     
     # 创建机器人实例
-    bot = WechatBot(config_path=args.config, bot_name=args.bot)
+    bot = WechatBot(
+        config_path=args.config,
+        bot_name=args.bot,
+        test_mode=args.test_mode
+    )
     
     # 设置信号处理
     loop = asyncio.get_running_loop()

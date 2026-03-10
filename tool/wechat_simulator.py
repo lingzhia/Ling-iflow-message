@@ -228,6 +228,246 @@ class WechatSimulator:
         print()
 
 
+async def auto_setup(bot_name: str, config_path: str) -> None:
+    """自动设置 iflow 和 wechat_bot。
+    
+    功能：
+    1. 检查 iflow 是否运行，如果没有运行就启动
+    2. 检查 wechat_bot 是否运行（非测试模式），如果运行了就停止并重新以测试模式启动
+    3. 如果 wechat_bot 没有运行，就以测试模式启动
+    
+    Args:
+        bot_name: 机器人名称
+        config_path: 配置文件路径
+    """
+    print()
+    print("=" * 70)
+    print(f"{COLOR_CYAN}自动设置模式{COLOR_RESET}")
+    print("=" * 70)
+    print()
+    
+    # 加载配置
+    import json
+    config_file = Path(config_path)
+    if not config_file.exists():
+        print_error(f"配置文件不存在: {config_path}")
+        sys.exit(1)
+    
+    with open(config_file, 'r', encoding='utf-8') as f:
+        config = json.load(f)
+    
+    # 查找机器人配置
+    bot_config = None
+    for bot in config.get('bots', []):
+        if bot.get('name') == bot_name:
+            bot_config = bot
+            break
+    
+    if not bot_config:
+        print_error(f"机器人配置不存在: {bot_name}")
+        sys.exit(1)
+    
+    tmux_session = bot_config.get('tmux_session', 'iflow')
+    
+    # 1. 检查并启动 iflow
+    print_info(f"检查 iflow CLI (tmux 会话: {tmux_session})...")
+    
+    if check_tmux_session(tmux_session):
+        print_success(f"iflow CLI 已在 tmux 会话 '{tmux_session}' 中运行")
+    else:
+        print_info(f"启动 iflow CLI...")
+        
+        # 查找对应的 tmux 配置
+        tmux_config = None
+        for session in config.get('tmux_sessions', []):
+            if session.get('name') == tmux_session:
+                tmux_config = session
+                break
+        
+        if not tmux_config:
+            print_error(f"未找到 tmux 会话配置: {tmux_session}")
+            sys.exit(1)
+        
+        model = tmux_config.get('model', 'kimi-k2.5')
+        cmd = f"iflow --model {model}"
+        
+        try:
+            subprocess.run(
+                ["tmux", "new-session", "-d", "-s", tmux_session, cmd],
+                check=True
+            )
+            print_success(f"iflow CLI 已启动: {tmux_session}")
+        except subprocess.CalledProcessError as e:
+            print_error(f"启动 iflow CLI 失败: {e}")
+            sys.exit(1)
+    
+    print()
+    
+    # 2. 检查并启动 wechat_bot（测试模式）
+    print_info(f"检查 wechat_bot (机器人: {bot_name})...")
+    
+    process_manager = ProcessManager(project_root)
+    
+    if process_manager.is_running(bot_name):
+        print_warning(f"wechat_bot 已运行 (机器人: {bot_name})")
+        print_info(f"停止并重新以测试模式启动...")
+        
+        if process_manager.stop_bot(bot_name):
+            print_success(f"已停止 wechat_bot")
+        else:
+            print_error(f"停止 wechat_bot 失败")
+            sys.exit(1)
+        
+        # 等待一下，确保进程完全停止
+        await asyncio.sleep(1)
+    
+    # 以测试模式启动 wechat_bot
+    print_info(f"以测试模式启动 wechat_bot...")
+    
+    try:
+        # 使用 subprocess 启动测试模式的 wechat_bot
+        python_path = sys.executable
+        bot_script = project_root / "wechat_bot.py"
+        
+        cmd = [
+            python_path,
+            str(bot_script),
+            "--bot", bot_name,
+            "--config", config_path,
+            "--test-mode"  # 添加测试模式参数
+        ]
+        
+        # 后台运行
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            cwd=str(project_root)
+        )
+        
+        pid = process.pid
+        print_success(f"wechat_bot 已启动 (测试模式, PID: {pid})")
+        
+        # 等待一下，确保进程启动成功
+        await asyncio.sleep(2)
+        
+        # 检查进程是否仍在运行
+        if not process_manager.is_running(bot_name):
+            print_error(f"wechat_bot 启动失败")
+            sys.exit(1)
+        
+    except Exception as e:
+        print_error(f"启动 wechat_bot 失败: {e}")
+        sys.exit(1)
+    
+    print()
+    print_success(f"自动设置完成！")
+    print(f"{COLOR_BLUE}iflow CLI:{COLOR_RESET} {tmux_session}")
+    print(f"{COLOR_BLUE}wechat_bot:{COLOR_RESET} {bot_name} (测试模式)")
+    print()
+    print_info(f"按 {COLOR_YELLOW}Ctrl+C{COLOR_RESET} 可以停止测试并清理资源")
+    print()
+
+
+def check_tmux_session(session_name: str) -> bool:
+    """检查 tmux 会话是否存在。
+    
+    Args:
+        session_name: 会话名称
+        
+    Returns:
+        是否存在
+    """
+    try:
+        result = subprocess.run(
+            ["tmux", "has-session", "-t", session_name],
+            capture_output=True,
+            text=True
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+class ProcessManager:
+    """简化的进程管理器（用于检查 wechat_bot 是否运行）。"""
+    
+    def __init__(self, project_root: Path):
+        self.project_root = project_root
+        self.pids_dir = project_root / ".pids"
+    
+    def get_pid_file(self, bot_name: str) -> Path:
+        """获取 PID 文件路径。"""
+        return self.pids_dir / f"bot_{bot_name}.pid"
+    
+    def is_running(self, bot_name: str) -> bool:
+        """检查机器人是否运行。"""
+        pid_file = self.get_pid_file(bot_name)
+        
+        if not pid_file.exists():
+            return False
+        
+        try:
+            with open(pid_file, 'r') as f:
+                pid = int(f.read().strip())
+            
+            return self._process_exists(pid)
+        except Exception:
+            return False
+    
+    def stop_bot(self, bot_name: str) -> bool:
+        """停止机器人进程。"""
+        pid_file = self.get_pid_file(bot_name)
+        
+        if not pid_file.exists():
+            return False
+        
+        try:
+            with open(pid_file, 'r') as f:
+                pid = int(f.read().strip())
+            
+            if not self._process_exists(pid):
+                pid_file.unlink()
+                return False
+            
+            import os
+            import signal
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pid_file.unlink()
+                return False
+            
+            # 等待进程结束
+            import time
+            for _ in range(5):
+                time.sleep(0.5)
+                if not self._process_exists(pid):
+                    break
+            else:
+                # 强制终止
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            
+            pid_file.unlink()
+            return True
+            
+        except Exception:
+            return False
+    
+    def _process_exists(self, pid: int) -> bool:
+        """检查进程是否存在。"""
+        try:
+            import os
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, OSError):
+            return False
+
+
 async def main():
     """主函数。"""
     parser = argparse.ArgumentParser(
@@ -252,6 +492,9 @@ async def main():
 
   # 指定配置文件
   python tool/wechat_simulator.py --config custom.json interactive bot1
+
+  # 自动设置模式（推荐）
+  python tool/wechat_simulator.py interactive bot1 --auto
         """
     )
 
@@ -259,6 +502,12 @@ async def main():
         "--config", "-c",
         default=None,
         help="配置文件路径（默认: 项目根目录/config.json）"
+    )
+
+    parser.add_argument(
+        "--auto", "-a",
+        action="store_true",
+        help="自动设置模式：自动检查并启动 iflow 和 wechat_bot（测试模式）"
     )
 
     subparsers = parser.add_subparsers(dest="command", help="测试命令")
@@ -289,6 +538,11 @@ async def main():
     if not args.command:
         parser.print_help()
         sys.exit(1)
+
+    # 自动设置模式
+    if args.auto:
+        config_path = args.config or str(project_root / "config.json")
+        await auto_setup(args.bot_name, config_path)
 
     # 创建模拟器
     simulator = WechatSimulator(args.bot_name, args.config)
@@ -324,6 +578,26 @@ async def main():
     finally:
         # 停止机器人
         await simulator.stop()
+        
+        # 如果使用了 auto 模式，清理资源
+        if args.auto:
+            print()
+            print_info(f"正在清理资源...")
+            
+            # 停止测试模式的 wechat_bot
+            config_path = args.config or str(project_root / "config.json")
+            process_manager = ProcessManager(project_root)
+            
+            if process_manager.is_running(args.bot_name):
+                print_info(f"停止测试模式的 wechat_bot: {args.bot_name}")
+                if process_manager.stop_bot(args.bot_name):
+                    print_success(f"已停止 wechat_bot")
+                else:
+                    print_warning(f"停止 wechat_bot 失败")
+            
+            print()
+            print_success(f"清理完成！")
+            print()
 
 
 if __name__ == "__main__":
