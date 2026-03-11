@@ -1025,32 +1025,34 @@ class BotIntegration:
                 if marker:
                     # 保存前一条消息（如果有）
                     if current_marker and current_message:
+                        # 使用消息内容的哈希值作为唯一标识
+                        message_content = '\n'.join(current_message)
+                        marker_hash = str(hash(message_content.strip()))
                         messages.append({
-                            'marker_id': current_marker_id,
-                            'content': '\n'.join(current_message),
+                            'marker_id': marker_hash,
+                            'content': message_content,
                             'full_marker': current_marker
                         })
                     
                     # 开始新消息
                     current_marker = line.strip()
-                    # 使用完整内容作为唯一标识（避免前10字符重复的问题）
-                    clean_marker = line.replace('✦', '').replace('✻', '').strip()
-                    current_marker_id = clean_marker if clean_marker else ''
                     current_message = [line.strip()]
                     
-                    logger.debug(f"[BotIntegration] 检测到标记: {marker}, 标识: {current_marker_id}")
+                    logger.debug(f"[BotIntegration] 检测到标记: {marker}")
                 elif current_marker:
                     # 收集当前消息的扩展内容
                     current_message.append(line.strip())
             
             # 保存最后一条消息（如果有）
             if current_marker and current_message:
+                message_content = '\n'.join(current_message)
+                marker_hash = str(hash(message_content.strip()))
                 messages.append({
-                    'marker_id': current_marker_id,
-                    'content': '\n'.join(current_message),
+                    'marker_id': marker_hash,
+                    'content': message_content,
                     'full_marker': current_marker
                 })
-                logger.debug(f"[BotIntegration] 提取最后一条消息: 标识={current_marker_id}")
+                logger.debug(f"[BotIntegration] 提取最后一条消息: marker_id={marker_hash}")
             
             # 根据配置过滤消息
             filtered_messages = []
