@@ -2,12 +2,16 @@
 """
 IFlowModule 交互式体验工具
 
-模拟消息总线，手动测试 IFlowModule 的核心功能：
+直接测试 IFlowController 的核心功能：
 - 发送消息到 iflow
 - 接收 iflow 的回复
 
 使用方法：
-    python tools/iflow_interactive_tool.py
+    python tools/iflow_interactive_tool.py [tmux_session] [--auto-start]
+    
+参数：
+    tmux_session  - tmux 会话名称（默认: iflow）
+    --auto-start  - 自动启动 tmux 和 iflow（如果不存在）
 """
 
 import sys
@@ -21,137 +25,94 @@ from typing import Optional
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.modules import IFlowModule
 from src.modules.iflow.controller import IFlowController
-from src.core.message import Message, MessageType, MessageContent
+from src.modules.iflow.monitor import IFlowMonitor
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
-logger = logging.getLogger("iflow_interactive")
-
-
-class MockMessageBus:
-    """模拟消息总线"""
-    
-    def __init__(self):
-        self.messages_received = []  # 收到的消息（iflow 的回复）
-    
-    def register_module(self, module):
-        """注册模块（模拟）"""
-        pass
-    
-    def bind(self, from_module, to_module):
-        """绑定模块（模拟）"""
-        pass
-    
-    async def route(self, message: Message) -> bool:
-        """路由消息（模拟）"""
-        # 这里是 iflow 发出的回复
-        self.messages_received.append(message)
-        content = message.content.text if hasattr(message.content, 'text') else str(message.content)
-        print(f"\n📤 收到 iflow 回复:")
-        print(f"   {content[:200]}{'...' if len(content) > 200 else ''}")
-        return True
-    
-    async def publish(self, topic: str, message: Message) -> bool:
-        """发布消息（模拟）"""
-        self.messages_received.append(message)
-        content = message.content.text if hasattr(message.content, 'text') else str(message.content)
-        print(f"\n📤 收到 iflow 广播 [{topic}]:")
-        print(f"   {content[:200]}{'...' if len(content) > 200 else ''}")
-        return True
-    
-    async def send_to_module(self, message: Message) -> bool:
-        """发送消息到模块（模拟）"""
-        return await self.route(message)
+logger = logging.getLogger("iflow_tool")
 
 
 class IFlowInteractiveTool:
-    """IFlowModule 交互式体验工具"""
+    """IFlow 交互式体验工具（直接测试组件）"""
     
-    def __init__(self, tmux_session: str = "iflow"):
+    def __init__(self, tmux_session: str = "iflow", auto_start: bool = False, model: str = "kimi-k2.5"):
         self.tmux_session = tmux_session
-        self.iflow_module: Optional[IFlowModule] = None
-        self.mock_bus: Optional[MockMessageBus] = None
+        self.auto_start = auto_start
+        self.model = model
+        self.controller: Optional[IFlowController] = None
+        self.monitor: Optional[IFlowMonitor] = None
     
     async def start(self):
         """启动工具"""
         print("=" * 60)
-        print("IFlowModule 交互式体验工具")
+        print("IFlow 交互式体验工具")
         print("=" * 60)
         print(f"tmux 会话: {self.tmux_session}")
         
-        # 检查 tmux 会话是否存在
-        print("\n检查 tmux 会话...")
-        temp_controller = IFlowController(self.tmux_session)
+        # 创建 Controller
+        self.controller = IFlowController(self.tmux_session)
         
-        tmux_exists = await temp_controller.check_tmux_session()
+        # 检查 tmux 会话
+        tmux_exists = await self.controller.check_tmux_session()
+        iflow_running = await self.controller.check_iflow_running() if tmux_exists else False
+        
         if not tmux_exists:
-            print(f"❌ tmux 会话 '{self.tmux_session}' 不存在")
-            print(f"   请先启动 iflow: tmux new-session -d -s {self.tmux_session} 'iflow'")
-            sys.exit(1)
-        
-        iflow_running = await temp_controller.check_iflow_running()
-        if not iflow_running:
-            print(f"⚠️  iflow 未在 tmux 会话中运行")
-            print(f"   请确保 iflow 已启动")
+            if self.auto_start:
+                print(f"\n⏳ tmux 会话不存在，正在启动...")
+                success = await self.controller.start_iflow(self.model)
+                if success:
+                    print(f"✅ 已启动 tmux 会话和 iflow")
+                    iflow_running = True
+                else:
+                    print(f"❌ 启动失败")
+                    sys.exit(1)
+            else:
+                print(f"\n❌ tmux 会话 '{self.tmux_session}' 不存在")
+                print(f"   使用 --auto-start 自动启动")
+                sys.exit(1)
+        elif not iflow_running:
+            if self.auto_start:
+                print(f"\n⏳ iflow 未运行，正在启动...")
+                success = await self.controller.start_iflow(self.model)
+                if success:
+                    print(f"✅ 已启动 iflow")
+                else:
+                    print(f"❌ 启动失败")
+                    sys.exit(1)
+            else:
+                print(f"\n⚠️  iflow 未运行，使用 --auto-start 启动")
         else:
-            print(f"✅ tmux 会话 '{self.tmux_session}' 存在，iflow 运行中")
+            print(f"✅ iflow 运行中")
         
-        # 创建模拟消息总线
-        self.mock_bus = MockMessageBus()
+        # 创建 Monitor（用于提取消息）
+        self.monitor = IFlowMonitor(self.controller)
         
-        # 创建 IFlowModule
-        print("\n正在创建 IFlowModule...")
-        self.iflow_module = IFlowModule(
-            module_id="iflow_interactive",
-            tmux_session=self.tmux_session,
-            auto_start=False  # 假设 iflow 已在运行
-        )
-        
-        # 设置消息总线
-        self.iflow_module.set_message_bus(self.mock_bus)
-        
-        # 启动模块
-        print("正在启动 IFlowModule...")
-        await self.iflow_module.start()
-        
-        print("\n✅ IFlowModule 已启动")
         print("=" * 60)
     
     async def stop(self):
         """停止工具"""
-        if self.iflow_module:
-            print("\n正在停止 IFlowModule...")
-            await self.iflow_module.stop()
-            print("✅ IFlowModule 已停止")
+        print("\n已停止")
     
-    async def send_message(self, content: str):
+    async def send_message(self, content: str) -> bool:
         """发送消息到 iflow"""
-        print(f"\n📥 发送消息到 iflow:")
-        print(f"   {content}")
-        
-        # 创建消息
-        message = Message(
-            id=Message.generate_id(),
-            type=MessageType.TEXT,
-            content=MessageContent(type=MessageType.TEXT, text=content),
-            from_module="user",
-            to_module="iflow_interactive"
-        )
-        
-        # 模拟消息总线调用 receive
-        await self.iflow_module.receive(message)
-        
-        print("   ✅ 消息已发送到 iflow")
+        print(f"\n📥 发送: {content}")
+        success = await self.controller.send_message(content)
+        if success:
+            print("   ✅ 已发送")
+        else:
+            print("   ❌ 发送失败")
+        return success
     
-    async def wait_for_reply(self, timeout: float = 30.0):
+    async def wait_for_reply(self, timeout: float = 60.0) -> Optional[str]:
         """等待 iflow 回复"""
-        print(f"\n⏳ 等待 iflow 回复 (超时: {timeout}秒)...")
+        print(f"⏳ 等待回复 (超时 {timeout}秒)...")
         
-        initial_count = len(self.mock_bus.messages_received)
+        # 记录当前已处理的消息哈希
+        initial_hashes = set(self.monitor._processed_hashes)
+        
         elapsed = 0.0
         interval = 0.5
         
@@ -159,61 +120,76 @@ class IFlowInteractiveTool:
             await asyncio.sleep(interval)
             elapsed += interval
             
-            # 检查是否有新消息
-            if len(self.mock_bus.messages_received) > initial_count:
-                print(f"   ✅ 收到回复 (耗时: {elapsed:.1f}秒)")
-                return True
+            # 捕获输出
+            output = await self.controller.capture_output(lines=100)
+            if not output:
+                continue
+            
+            # 提取消息
+            messages = self.monitor._extract_messages(output)
+            new_messages = self.monitor._filter_new_messages(messages)
+            
+            if new_messages:
+                # 返回最新消息
+                msg = new_messages[-1]
+                content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                print(f"\n📤 回复: {content[:200]}{'...' if len(content) > 200 else ''}")
+                print(f"   ✅ 收到回复 (耗时 {elapsed:.1f}秒)")
+                return content
             
             # 显示等待进度
-            if int(elapsed) % 5 == 0 and elapsed > 0:
+            if int(elapsed) % 10 == 0 and elapsed > 0:
                 print(f"   等待中... {int(elapsed)}秒")
         
         print(f"   ⚠️ 超时，未收到回复")
-        return False
+        return None
     
     async def interactive_loop(self):
         """交互式循环"""
         print("\n" + "=" * 60)
-        print("交互模式")
-        print("=" * 60)
-        print("输入消息发送到 iflow，输入 'quit' 退出")
+        print("交互模式 - 输入消息发送，'quit' 退出")
         print("=" * 60)
         
         while True:
             try:
-                # 读取用户输入
-                print()
-                user_input = input("👤 你: ").strip()
+                user_input = input("\n👤 你: ").strip()
                 
                 if not user_input:
                     continue
                 
                 if user_input.lower() in ['quit', 'exit', 'q']:
-                    print("退出交互模式...")
                     break
                 
-                # 发送消息
                 await self.send_message(user_input)
-                
-                # 等待回复
-                await self.wait_for_reply(timeout=60.0)
+                await self.wait_for_reply()
                 
             except KeyboardInterrupt:
-                print("\n收到中断信号，退出...")
+                print("\n退出...")
                 break
             except EOFError:
-                print("\n退出...")
                 break
 
 
 async def main():
     """主函数"""
-    # 支持命令行参数指定 tmux 会话
     tmux_session = "iflow"
-    if len(sys.argv) > 1:
-        tmux_session = sys.argv[1]
+    auto_start = False
+    model = "kimi-k2.5"
     
-    tool = IFlowInteractiveTool(tmux_session)
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--auto-start":
+            auto_start = True
+        elif arg == "--model" and i + 1 < len(args):
+            model = args[i + 1]
+            i += 1
+        elif not arg.startswith("--"):
+            tmux_session = arg
+        i += 1
+    
+    tool = IFlowInteractiveTool(tmux_session, auto_start, model)
     
     try:
         await tool.start()
