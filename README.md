@@ -1,134 +1,109 @@
 # Ling-iflow
 
-iflow CLI 交互模式管理工具，支持通过 tmux 启动 iflow，并实现与企业微信的双向消息同步。
+Ling-iflow 是一个 iflow CLI 交互模式管理工具，通过 tmux 管理和监控 iflow CLI 会话，实现与企业微信的双向消息同步。
 
-## 功能特性
+## 项目状态
 
-- ✅ 通过 tmux 启动和管理 iflow CLI 会话
-- ✅ 实时监控 iflow 的会话文件，捕获 AI 回复
-- ✅ 支持企业微信消息与 iflow CLI 的双向同步
-- ✅ 消息来源差异化处理（工具消息、企业微信消息、iflow 交互界面消息）
-- ✅ 后台监控功能，检测 iflow 交互界面的消息并自动同步到企业微信
-- ✅ 提供交互式测试工具和企业微信调试工具
-- ✅ 轻量级设计，易于安装和使用
+⚠️ **项目正在重构中**
+
+当前项目正在进行架构重构，采用了基于消息总线的全新设计：
+
+- `src/` - 旧版本代码（稳定）
+- `src-v2/` - 新版本代码（开发中）
+- `design-v2/` - 重构设计方案
 
 ## 快速开始
 
-### 1. 安装依赖
+### 安装
 
 ```bash
+# 克隆项目
+git clone https://github.com/lingzhia/Ling-iflow-message.git
+cd Ling-iflow-message
+
+# 安装依赖
 pip install -e .
+
+# 安装企业微信依赖
+pip install -e ".[wechat]"
 ```
 
-### 2. 启动 iflow CLI
+### 配置
 
 ```bash
-tmux new-session -d -s iflow "iflow --model kimi-k2.5"
+# 复制配置文件
+cp config.example.json config.json
+
+# 编辑配置文件
+vim config.json
 ```
 
-### 3. 启动交互模式服务
+### 启动（旧版本）
 
 ```bash
-ling-iflow start
+# 启动服务（iflow + 企业微信）
+python src/manage.py start
+
+# 启动指定序号
+python src/manage.py start 2
+
+# 仅启动 iflow
+python src/manage.py start --no-wechat
+
+# 前台模式
+python src/manage.py start --foreground
 ```
 
-### 4. 测试消息同步
+## 功能特性
 
-在另一个终端运行测试工具：
+- **tmux 集成**：通过 tmux 启动和管理 iflow CLI 会话
+- **消息同步**：支持企业微信消息与 iflow CLI 的双向同步
+- **会话管理**：提供会话查询、创建、删除等功能
+- **命令系统**：支持 `/run`, `/new`, `/sessions`, `/status`, `/help` 等命令
+- **多机器人管理**：支持配置多个企业微信机器人
+- **测试工具**：提供 iflow 交互式测试工具和企业微信调试工具
 
-```bash
-# 运行 iflow 交互式测试工具
-python tool/iflow_interactive.py
-```
-
-在测试工具中输入消息，观察 iflow 的回复。
-
-## 使用说明
-
-### CLI 命令
-
-```bash
-# 启动交互模式服务
-ling-iflow start
-
-# 停止 iflow
-ling-iflow stop
-
-# 查看状态
-ling-iflow status
-
-# 运行测试
-ling-iflow test
-
-# 初始化配置
-ling-iflow init
-```
-
-### 配置文件
-
-配置文件位置：`~/.ling-iflow/config.json`
-
-示例配置：
-
-```json
-{
-  "workspace": "~/.iflow",
-  "model": "kimi-k2.5",
-  "tmux_session": "iflow",
-  "wechat_work": {
-    "enabled": false,
-    "corp_id": "",
-    "agent_id": "",
-    "secret": ""
-  },
-  "log_level": "INFO"
-}
-```
-
-## 项目结构
+## 目录结构
 
 ```
 Ling-iflow/
-├── channels/           # 渠道模块
-├── cli/               # CLI 命令模块
-├── config/            # 配置管理模块
-├── interactive/       # 交互模式核心模块
-├── tool/              # 测试工具模块
-├── utils/             # 工具函数模块
-├── wechat_bot.py      # 企业微信 Bot 主程序
-└── AGENTS.md          # 详细文档
+├── src/                # 旧版本代码（稳定）
+│   ├── channels/       # 渠道模块
+│   ├── interactive/    # 交互模式核心模块
+│   ├── config/         # 配置管理模块
+│   ├── cli/            # CLI 命令模块
+│   ├── utils/          # 工具函数模块
+│   ├── tool/           # 测试工具模块
+│   ├── manage.py       # 项目管理脚本
+│   ├── wechat_bot.py   # 企业微信 Bot 主程序
+│   └── tmux_manager.py # tmux 管理工具
+├── src-v2/             # 新版本代码（开发中）
+│   ├── core/           # 核心基础类
+│   └── modules/        # 模块实现
+│       ├── wechat/     # 企业微信模块
+│       └── iflow/      # iflow 模块
+├── design/             # 旧版本设计文档
+├── design-v2/          # 重构设计方案
+│   ├── 01-模块重构方案.md
+│   └── README.md
+├── tests/              # 测试文件
+├── logs/               # 日志目录
+├── config.json         # 配置文件
+├── config.example.json # 配置示例
+├── pyproject.toml      # 项目依赖配置
+└── README.md           # 项目说明文档
 ```
 
-## 技术架构
+## 文档
 
-### 核心组件
+### 设计文档
+- [design-v2/01-模块重构方案.md](design-v2/01-模块重构方案.md) - 重构设计方案
+- [design/](design/) - 旧版本设计文档
 
-- **IFlowController**: iflow CLI 控制器，通过 tmux 管理会话
-- **SessionMonitor**: 会话文件监控器，实时捕获 AI 回复
-- **SyncManager**: 同步管理器，协调双向消息同步
-- **WechatWorkChannel**: 企业微信渠道（简化版）
-
-### 消息流向
-
-**企业微信 → iflow CLI：**
-```
-企业微信消息 → WechatWorkChannel → SyncManager → IFlowController → tmux → iflow CLI
-```
-
-**iflow CLI → 企业微信：**
-```
-iflow CLI → session-*.jsonl → SessionMonitor → SyncManager → WechatWorkChannel → 企业微信
-```
-
-## 注意事项
-
-1. 需要安装 tmux
-2. 需要安装 iflow CLI
-3. 测试程序使用简化版的企业微信渠道，仅用于测试
-
-## 详细文档
-
-查看 [AGENTS.md](AGENTS.md) 了解更多详细信息。
+### 旧版本文档
+- [src/AGENTS.md](src/AGENTS.md) - Agent 上下文文档
+- [src/TOOLS.md](src/TOOLS.md) - 工具说明文档
+- [src/WECHAT_SETUP.md](src/WECHAT_SETUP.md) - 企业微信配置说明文档
 
 ## 许可证
 
