@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-IFlow 模块测试工具
+IFlow 模块自动化测试
 
 测试 IFlowModule 的核心功能：
 - IFlowController：进程管理
@@ -9,7 +9,7 @@ IFlow 模块测试工具
 - IFlowModule：整体集成
 
 使用方法：
-    python tools/iflow_test_tool.py
+    python tests/iflow_test_tool.py
 """
 
 import sys
