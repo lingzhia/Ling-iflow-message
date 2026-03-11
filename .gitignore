@@ -39,8 +39,7 @@ logs/
 # 配置文件（包含敏感信息）
 config.json
 
-# 测试文件
-tests/
+# 测试日志
 iflow_chat.log
 wechat_messages.log
 
