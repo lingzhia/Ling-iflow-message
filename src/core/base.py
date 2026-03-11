@@ -101,7 +101,7 @@ class BaseModule(ABC):
             logger.error(f"[{self.module_id}] 处理消息失败: {e}", exc_info=True)
     
     async def send_to_bus(self, message: Message) -> bool:
-        """发送消息到消息总线
+        """发送消息到消息总线（根据绑定关系路由）
         
         Args:
             message: 要发送的消息
@@ -116,7 +116,8 @@ class BaseModule(ABC):
         try:
             # 设置发送者
             message.from_module = self.module_id
-            await self.message_bus.send_to_module(message)
+            # 根据绑定关系路由消息
+            await self.message_bus.route(message)
             return True
         except Exception as e:
             logger.error(f"[{self.module_id}] 发送消息失败: {e}", exc_info=True)

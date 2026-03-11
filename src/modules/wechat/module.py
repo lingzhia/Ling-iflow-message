@@ -1,16 +1,17 @@
 """
 WeChat Module
 
-企业微信消息模块，集成 WeChatChannel。
+企业微信消息模块，集成 WeChatChannel 和 CommandHandler。
 """
 
 import logging
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from ...core.base import BaseModule
 from ...core.message import Message, MessageType
 from .channel import WeChatChannel
+from ..command import CommandHandler
 
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ class WeChatModule(BaseModule):
         
         self.config = config
         self.channel = WeChatChannel(config)
+        self.command_handler = CommandHandler()
         
         # 设置消息处理器
         self.channel.set_message_handler(self._on_wechat_message)
@@ -51,6 +53,16 @@ class WeChatModule(BaseModule):
         
         # 发送启动通知
         await self._send_startup_notification()
+    
+    def set_message_bus(self, bus) -> None:
+        """设置消息总线
+        
+        Args:
+            bus: 消息总线实例
+        """
+        super().set_message_bus(bus)
+        # 同时设置给 CommandHandler
+        self.command_handler.set_message_bus(bus)
     
     async def _send_startup_notification(self) -> None:
         """发送启动通知到企业微信"""
@@ -125,15 +137,30 @@ class WeChatModule(BaseModule):
             wechat_msg: 企业微信消息
         """
         try:
-            # 创建消息对象
+            content = wechat_msg.get("content", "")
+            chat_id = wechat_msg.get("chat_id", "")
+            sender_id = wechat_msg.get("sender_id", "")
+            is_group = wechat_msg.get("is_group", False)
+            
+            # 解析命令
+            parsed = self.command_handler.parse_command(content)
+            
+            # 如果是命令，执行命令并回复
+            if parsed.get("is_command"):
+                result = await self.command_handler.execute(parsed, chat_id)
+                if result:
+                    await self.channel.send_message(result, chat_id, is_group)
+                return
+            
+            # 普通消息：创建消息对象并发送到消息总线
             message = Message(
                 id=Message.generate_id(),
                 type=MessageType.TEXT,
-                content=wechat_msg.get("content", ""),
+                content=content,
                 from_module=self.module_id,
-                chat_id=wechat_msg.get("chat_id", ""),
-                user_id=wechat_msg.get("sender_id", ""),
-                is_group=wechat_msg.get("is_group", False),
+                chat_id=chat_id,
+                user_id=sender_id,
+                is_group=is_group,
                 metadata={
                     "msg_type": wechat_msg.get("msg_type", "text")
                 }
