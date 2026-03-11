@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 import xml.etree.ElementTree as ET
 from typing import Optional, Dict, Any, Callable
 from urllib.parse import quote
@@ -127,7 +128,9 @@ class WeChatChannel:
         
         # 启动回调服务
         if AIOHTTP_AVAILABLE:
-            await self._start_callback_server()
+            host = self.config.get("callback_host", "0.0.0.0")
+            port = self.config.get("callback_port", 8788)
+            await self._start_callback_server(host, port)
         
         self._running = True
         logger.info("[WeChatChannel] Started")
@@ -176,20 +179,28 @@ class WeChatChannel:
                 }
             }
             
+            # 详细日志：发送消息
+            logger.info(
+                f"[WeChatChannel] 发送消息到企业微信\n"
+                f"  接收者: {chat_id}\n"
+                f"  类型: {'群聊' if is_group else '私聊'}\n"
+                f"  消息内容: {content[:200] if content else ''}"
+            )
+            
             # 发送请求
             url = f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={self._access_token}"
             response = await self._http.post(url, json=payload)
             result = response.json()
             
             if result.get("errcode") == 0:
-                logger.info(f"[WeChatChannel] Message sent to {chat_id}")
+                logger.info(f"[WeChatChannel] 消息发送成功: {chat_id}")
                 return True
             else:
-                logger.error(f"[WeChatChannel] Failed to send: {result}")
+                logger.error(f"[WeChatChannel] 消息发送失败: {result.get('errmsg', result)}")
                 return False
                 
         except Exception as e:
-            logger.error(f"[WeChatChannel] Error sending message: {e}")
+            logger.error(f"[WeChatChannel] Error sending message: {e}", exc_info=True)
             return False
     
     def set_message_handler(self, handler: Callable) -> None:
@@ -252,42 +263,72 @@ class WeChatChannel:
         try:
             # 解析XML
             root = ET.fromstring(body)
-            msg_type = root.find("MsgType").text
-            msg_id = root.find("MsgId").text
             
-            # 消息去重
-            if await self._is_duplicate_message(msg_id):
-                return
-            
-            # 解密消息（如果配置了加密）
+            # 先检查是否为加密消息
             encrypt = root.find("Encrypt")
             if encrypt is not None and self._crypto:
-                from_user_name = root.find("FromUserName").text
-                to_user_name = root.find("ToUserName").text
-                
+                # 加密消息：需要先解密
                 decrypted = self._crypto.decrypt(encrypt.text)
                 decrypted_root = ET.fromstring(decrypted)
                 
-                msg_type = decrypted_root.find("MsgType").text
-                msg_id = decrypted_root.find("MsgId").text
-                content = decrypted_root.find("Content").text
+                # 从解密后的消息中读取所有字段
+                msg_type = decrypted_root.find("MsgType").text if decrypted_root.find("MsgType") is not None else ""
+                msg_id = decrypted_root.find("MsgId").text if decrypted_root.find("MsgId") is not None else ""
+                from_user_name = decrypted_root.find("FromUserName").text if decrypted_root.find("FromUserName") is not None else ""
+                to_user_name = decrypted_root.find("ToUserName").text if decrypted_root.find("ToUserName") is not None else ""
+                content_elem = decrypted_root.find("Content")
+                content = content_elem.text if content_elem is not None else ""
+                
+                # 检查是否为群聊
+                chat_id_elem = decrypted_root.find("ChatId")
+                is_group = chat_id_elem is not None and chat_id_elem.text
+                chat_id = chat_id_elem.text if is_group else from_user_name
             else:
-                from_user_name = root.find("FromUserName").text
-                to_user_name = root.find("ToUserName").text
-                content = root.find("Content").text
+                # 非加密消息：直接读取字段
+                msg_type = root.find("MsgType").text if root.find("MsgType") is not None else ""
+                msg_id = root.find("MsgId").text if root.find("MsgId") is not None else ""
+                from_user_name = root.find("FromUserName").text if root.find("FromUserName") is not None else ""
+                to_user_name = root.find("ToUserName").text if root.find("ToUserName") is not None else ""
+                content_elem = root.find("Content")
+                content = content_elem.text if content_elem is not None else ""
+                
+                # 检查是否为群聊
+                chat_id_elem = root.find("ChatId")
+                is_group = chat_id_elem is not None and chat_id_elem.text
+                chat_id = chat_id_elem.text if is_group else from_user_name
+            
+            # 消息去重
+            if msg_id and await self._is_duplicate_message(msg_id):
+                logger.info(f"[WeChatChannel] 忽略重复消息: MsgId={msg_id}")
+                return
+            
+            # 详细日志：收到消息
+            logger.info(
+                f"[WeChatChannel] 收到企业微信消息\n"
+                f"  来源: {from_user_name}\n"
+                f"  类型: {'群聊' if is_group else '私聊'}\n"
+                f"  消息类型: {msg_type}\n"
+                f"  消息内容: {content[:200] if content else ''}"
+            )
+            
+            # 消息确认机制：立即发送确认消息
+            if content:
+                confirmation = f"✅ 收到消息\n\n正在处理中...\n\n消息内容: {content[:100]}{'...' if len(content) > 100 else ''}"
+                await self.send_message(confirmation, chat_id, is_group)
+                logger.info(f"[WeChatChannel] 已发送消息确认到 {chat_id}")
             
             # 调用消息处理器
             if self._message_handler:
                 await self._message_handler({
                     "content": content,
                     "sender_id": from_user_name,
-                    "chat_id": from_user_name,
-                    "is_group": False,
+                    "chat_id": chat_id,
+                    "is_group": is_group,
                     "msg_type": msg_type
                 })
             
         except Exception as e:
-            logger.error(f"[WeChatChannel] Error processing callback: {e}")
+            logger.error(f"[WeChatChannel] Error processing callback: {e}", exc_info=True)
     
     async def _refresh_access_token(self) -> bool:
         """刷新 access_token"""

@@ -5,6 +5,7 @@ WeChat Module
 """
 
 import logging
+from datetime import datetime
 from typing import Dict, Any
 
 from ...core.base import BaseModule
@@ -47,6 +48,37 @@ class WeChatModule(BaseModule):
             raise RuntimeError(f"[{self.module_id}] 启动企业微信通道失败")
         
         logger.info(f"[{self.module_id}] 企业微信模块启动完成")
+        
+        # 发送启动通知
+        await self._send_startup_notification()
+    
+    async def _send_startup_notification(self) -> None:
+        """发送启动通知到企业微信"""
+        try:
+            user_id = self.config.get("user_id", "")
+            if not user_id:
+                logger.warning(f"[{self.module_id}] 未配置 user_id，跳过启动通知")
+                return
+            
+            startup_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            callback_port = self.config.get("callback_port", 8788)
+            
+            notification = f"""**🤖 iFlow 企业微信机器人已启动**
+
+📅 启动时间: {startup_time}
+🌐 回调端口: {callback_port}
+
+✅ 服务运行正常，可以开始使用！"""
+            
+            success = await self.channel.send_message(notification, user_id, False)
+            
+            if success:
+                logger.info(f"[{self.module_id}] 启动通知已发送到 {user_id}")
+            else:
+                logger.error(f"[{self.module_id}] 启动通知发送失败")
+                
+        except Exception as e:
+            logger.error(f"[{self.module_id}] 发送启动通知失败: {e}", exc_info=True)
     
     async def _on_stop(self) -> None:
         """停止时的钩子方法"""
