@@ -12,6 +12,7 @@ from ...core.base import BaseModule
 from ...core.message import Message, MessageType
 from .controller import IFlowController
 from .monitor import IFlowMonitor
+from .session_manager import SessionManager
 
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 class IFlowModule(BaseModule):
     """iflow 模块
     
-    完整的 iflow 管理，包括启动、停止、消息注入和输出监控。
+    完整的 iflow 管理，包括启动、停止、消息注入、输出监控和会话管理。
     """
     
     def __init__(
@@ -50,6 +51,9 @@ class IFlowModule(BaseModule):
         # 创建控制器和监控器
         self.controller = IFlowController(tmux_session)
         self.monitor = IFlowMonitor(self.controller)
+        
+        # 创建会话管理器
+        self.session_manager = SessionManager(workspace)
         
         # 添加监听器
         self.monitor.add_listener(self._on_new_message)
@@ -181,6 +185,7 @@ class IFlowModule(BaseModule):
         """
         session_info = await self.controller.get_session_info()
         monitor_stats = self.monitor.get_stats()
+        session_manager_info = self.session_manager.get_current_session_info()
         
         return {
             "module_id": self.module_id,
@@ -189,7 +194,8 @@ class IFlowModule(BaseModule):
             "model": self.model,
             "workspace": self.workspace,
             "session_info": session_info,
-            "monitor_stats": monitor_stats
+            "monitor_stats": monitor_stats,
+            "session_manager_info": session_manager_info
         }
     
     def get_monitor_stats(self) -> dict:
@@ -203,3 +209,41 @@ class IFlowModule(BaseModule):
     def reset_monitor_stats(self) -> None:
         """重置监控统计信息"""
         self.monitor.reset_stats()
+    
+    def get_status_message(self) -> str:
+        """获取状态信息的 Markdown 格式
+        
+        Returns:
+            状态信息 Markdown 文本
+        """
+        return self.session_manager.get_status_message()
+    
+    def get_sessions_message(self, limit: int = 10) -> str:
+        """获取会话列表信息的 Markdown 格式
+        
+        Args:
+            limit: 最多显示的数量
+            
+        Returns:
+            会话列表 Markdown 文本
+        """
+        return self.session_manager.get_sessions_message(limit)
+    
+    def create_new_session(self) -> dict:
+        """创建新会话
+        
+        Returns:
+            操作结果字典
+        """
+        return self.session_manager.create_new_session()
+    
+    def get_all_sessions(self, limit: int = 20) -> list:
+        """获取所有会话列表
+        
+        Args:
+            limit: 最多返回的数量
+            
+        Returns:
+            会话列表
+        """
+        return self.session_manager.get_all_sessions(limit)

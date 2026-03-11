@@ -196,8 +196,13 @@ class IFlowMonitor:
             if msg_data['marker_type'] != '✦':
                 continue
             
+            # 清理消息内容
+            content = self._clean_message_content(msg_data['content'])
+            
+            if not content:
+                continue
+            
             # 计算消息哈希
-            content = msg_data['content']
             msg_hash = hashlib.md5(content.encode()).hexdigest()
             
             # 检查是否已处理
@@ -227,6 +232,44 @@ class IFlowMonitor:
             new_messages.append(message)
         
         return new_messages
+    
+    def _clean_message_content(self, content: str) -> str:
+        """清理消息内容，移除 iflow UI 元素
+        
+        Args:
+            content: 原始消息内容
+            
+        Returns:
+            清理后的消息内容
+        """
+        if not content:
+            return content
+        
+        # 分隔符列表（iflow UI 元素）
+        separators = [
+            '---',
+            '══',
+            '────────',
+            '────────────────',
+            '════════════════',
+            '══════════════════════════',
+            '══════════════════════════════════════',
+            '══════════════════════════════════════════════════',
+        ]
+        
+        # 找到第一个分隔符的位置
+        first_separator_pos = -1
+        for sep in separators:
+            pos = content.find(sep)
+            if pos != -1 and (first_separator_pos == -1 or pos < first_separator_pos):
+                first_separator_pos = pos
+        
+        # 如果找到分隔符，只保留之前的内容
+        if first_separator_pos != -1:
+            cleaned_content = content[:first_separator_pos].strip()
+            return cleaned_content
+        
+        return content.strip()
     
     async def _notify_listeners(self, message: Message) -> None:
         """通知所有监听器
