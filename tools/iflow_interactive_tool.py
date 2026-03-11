@@ -22,6 +22,7 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.modules import IFlowModule
+from src.modules.iflow.controller import IFlowController
 from src.core.message import Message, MessageType, MessageContent
 
 logging.basicConfig(
@@ -37,11 +38,19 @@ class MockMessageBus:
     def __init__(self):
         self.messages_received = []  # 收到的消息（iflow 的回复）
     
+    def register_module(self, module):
+        """注册模块（模拟）"""
+        pass
+    
+    def bind(self, from_module, to_module):
+        """绑定模块（模拟）"""
+        pass
+    
     async def route(self, message: Message) -> bool:
         """路由消息（模拟）"""
         # 这里是 iflow 发出的回复
         self.messages_received.append(message)
-        content = message.content.text if message.content else str(message.content)
+        content = message.content.text if hasattr(message.content, 'text') else str(message.content)
         print(f"\n📤 收到 iflow 回复:")
         print(f"   {content[:200]}{'...' if len(content) > 200 else ''}")
         return True
@@ -49,10 +58,14 @@ class MockMessageBus:
     async def publish(self, topic: str, message: Message) -> bool:
         """发布消息（模拟）"""
         self.messages_received.append(message)
-        content = message.content.text if message.content else str(message.content)
+        content = message.content.text if hasattr(message.content, 'text') else str(message.content)
         print(f"\n📤 收到 iflow 广播 [{topic}]:")
         print(f"   {content[:200]}{'...' if len(content) > 200 else ''}")
         return True
+    
+    async def send_to_module(self, message: Message) -> bool:
+        """发送消息到模块（模拟）"""
+        return await self.route(message)
 
 
 class IFlowInteractiveTool:
@@ -69,6 +82,23 @@ class IFlowInteractiveTool:
         print("IFlowModule 交互式体验工具")
         print("=" * 60)
         print(f"tmux 会话: {self.tmux_session}")
+        
+        # 检查 tmux 会话是否存在
+        print("\n检查 tmux 会话...")
+        temp_controller = IFlowController(self.tmux_session)
+        
+        tmux_exists = await temp_controller.check_tmux_session()
+        if not tmux_exists:
+            print(f"❌ tmux 会话 '{self.tmux_session}' 不存在")
+            print(f"   请先启动 iflow: tmux new-session -d -s {self.tmux_session} 'iflow'")
+            sys.exit(1)
+        
+        iflow_running = await temp_controller.check_iflow_running()
+        if not iflow_running:
+            print(f"⚠️  iflow 未在 tmux 会话中运行")
+            print(f"   请确保 iflow 已启动")
+        else:
+            print(f"✅ tmux 会话 '{self.tmux_session}' 存在，iflow 运行中")
         
         # 创建模拟消息总线
         self.mock_bus = MockMessageBus()

@@ -199,6 +199,10 @@ class IFlowMonitor:
             # 清理消息内容
             content = self._clean_message_content(msg_data['content'])
             
+            # 如果内容为空，使用 marker_id 作为内容（iflow 回复格式：✦ 内容）
+            if not content:
+                content = self._clean_message_content(msg_data['marker_id'])
+            
             if not content:
                 continue
             
