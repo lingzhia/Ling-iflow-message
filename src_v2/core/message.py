@@ -84,8 +84,9 @@ class Message:
     @classmethod
     def generate_id(cls) -> str:
         """生成唯一消息ID"""
+        import random
         return hashlib.md5(
-            f"{datetime.now().isoformat()}_{id(obj):x}".encode()
+            f"{datetime.now().isoformat()}_{random.randint(0, 0xFFFFFFFF):x}".encode()
         ).hexdigest()
     
     def to_dict(self) -> Dict[str, Any]:
