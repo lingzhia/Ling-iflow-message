@@ -275,20 +275,19 @@ class IFlowMonitor:
                 await self._call_callback(self._on_state_change, old_state, self._state)
         
         elif not is_generating and self._state == IFlowState.GENERATING:
-            # 状态变更：生成中 -> 空闲（仅当稳定后才真正变更状态）
-            if self._stable_start_time is not None:
-                stable_time = (datetime.now() - self._stable_start_time).total_seconds()
-                if stable_time >= self._stable_duration:
-                    # 稳定后，真正变更状态
-                    duration = self.generating_duration
-                    self._state = IFlowState.IDLE
-                    self._generating_start_time = None
-                    self.stats["state_changes"] += 1
-                    logger.info(f"[IFlowMonitor] State changed: {old_state.value} -> {self._state.value}, duration={duration}s")
-                    
-                    # 触发状态变更回调（传递 duration）
-                    if self._on_state_change:
-                        await self._call_callback(self._on_state_change, old_state, self._state, duration)
+            # 状态变更：生成中 -> 空闲
+            # 使用交互完成标志来判断是否应该变更状态
+            if self._interaction_complete:
+                # 稳定后，真正变更状态
+                duration = self.generating_duration
+                self._state = IFlowState.IDLE
+                self._generating_start_time = None
+                self.stats["state_changes"] += 1
+                logger.info(f"[IFlowMonitor] State changed: {old_state.value} -> {self._state.value}, duration={duration}s")
+                
+                # 触发状态变更回调（传递 duration）
+                if self._on_state_change:
+                    await self._call_callback(self._on_state_change, old_state, self._state, duration)
     
     def _detect_generating(self, output: str) -> bool:
         """检测是否处于生成中状态
