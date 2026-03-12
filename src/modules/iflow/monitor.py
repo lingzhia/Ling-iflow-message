@@ -224,6 +224,30 @@ class IFlowMonitor:
                 # 重置稳定计时器（有新标记，说明还在生成）
                 self._stable_start_time = None
             
+            # 检测标记更新（数量相同但内容不同）
+            elif not self._interaction_complete and len(current_messages) == len(self._last_candidate_messages) and len(current_messages) > 0:
+                # 检查是否有真正的内容变化（排除工具调用状态变化）
+                has_real_content_change = False
+                for i in range(len(current_messages)):
+                    # 计算哈希来判断内容是否真正变化
+                    current_hash = hashlib.md5(f"{current_messages[i]['marker_type']}:{current_messages[i]['content']}".encode()).hexdigest()
+                    last_hash = hashlib.md5(f"{self._last_candidate_messages[i]['marker_type']}:{self._last_candidate_messages[i]['content']}".encode()).hexdigest()
+                    
+                    if current_hash != last_hash:
+                        has_real_content_change = True
+                        logger.debug(f"[IFlowMonitor] 标记 #{i+1} 内容已更新")
+                        logger.debug(f"  旧内容: {self._last_candidate_messages[i]['content'][:80]}...")
+                        logger.debug(f"  新内容: {current_messages[i]['content'][:80]}...")
+                
+                if has_real_content_change:
+                    # 内容已真正更新，不立即发送，等待稳定后发送
+                    logger.debug(f"[IFlowMonitor] 检测到标记内容真正更新，等待稳定后发送")
+                    # 更新缓存
+                    self._last_candidate_messages = self._candidate_messages  # 保存上次
+                    self._candidate_messages = current_messages
+                    # 重置稳定计时器
+                    self._stable_start_time = None
+            
             # 检测生成中消失（需要稳定2秒）
             elif not is_generating and len(self._candidate_messages) > 0:
                 if self._stable_start_time is None:
@@ -238,10 +262,10 @@ class IFlowMonitor:
                         # 稳定2秒，确认结束
                         logger.info(f"[IFlowMonitor] 生成中稳定消失（{stable_time:.1f}s），交互结束")
                         
-                        # 发送最后一个标记（只有在未发送的情况下）
+                        # 只发送最后一个标记（忽略中间的所有更新版本）
                         if len(self._candidate_messages) > 0:
+                            # 发送最后一个标记（当前标记）
                             message_to_send = self._candidate_messages[-1]
-                            # 计算哈希检查是否已发送
                             msg_hash = hashlib.md5(f"{message_to_send['marker_type']}:{message_to_send['content']}".encode()).hexdigest()
                             
                             if msg_hash not in self._processed_hashes:
@@ -253,10 +277,10 @@ class IFlowMonitor:
                                     
                                     # 检查前一条消息是否是当前消息的前缀
                                     if message_to_send['content'].startswith(prev_message['content']) and prev_hash in self._processed_hashes:
-                                        logger.debug(f"[IFlowMonitor] 检测到部分重叠，移除重复发送")
+                                        logger.debug(f"[IFlowMonitor] 标记 #{len(self._candidate_messages)} 与标记 #{len(self._candidate_messages)-1} 部分重叠，移除重复发送")
                                         # 从已发送集合中移除前一条消息
                                         self._processed_hashes.discard(prev_hash)
-                                        logger.debug(f"[IFlowMonitor] 已移除前一条消息的哈希")
+                                        logger.debug(f"[IFlowMonitor] 已移除标记 #{len(self._candidate_messages)-1} 的哈希")
                                 
                                 logger.debug(f"[IFlowMonitor] 发送最后一个标记（第 {len(self._candidate_messages)} 个）")
                                 logger.debug(f"[IFlowMonitor] 发送内容: {message_to_send['content']}")
