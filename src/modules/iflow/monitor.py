@@ -266,7 +266,7 @@ class IFlowMonitor:
         iflow 输出格式：
         - ✦ 回复内容...  (回复消息，内容直接在标记行)
         - ✻ 思考中...    (思考状态)
-        - 后续行可能是扩展内容
+        - 后续行通常是 UI 元素（如 "生成中 XXs"）
         
         Args:
             output: tmux 输出
@@ -277,64 +277,18 @@ class IFlowMonitor:
         messages = []
         lines = output.split('\n')
         
-        current_message = []
-        current_marker_content = None  # 标记行的内容（去掉标记符号）
-        marker_type = None  # '✦' or '✻' or None
-        
         for line in lines:
             # 检查标记行
-            if '✦' in line:
-                # 保存上一条消息
-                if current_marker_content is not None:
-                    # 合并标记行内容和后续行内容
-                    full_content = current_marker_content
-                    if current_message:
-                        extra = '\n'.join(current_message).strip()
-                        if extra:
-                            full_content = full_content + '\n' + extra
+            if '✦' in line or '✻' in line:
+                # 提取标记内容（去掉标记符号）
+                marker_type = '✦' if '✦' in line else '✻'
+                marker_content = line.replace('✦', '').replace('✻', '').strip()
+                
+                if marker_content:  # 只有非空内容才添加
                     messages.append({
-                        'content': full_content,
+                        'content': marker_content,
                         'marker_type': marker_type,
                     })
-                
-                # 开始新消息（回复）
-                # 提取标记行内容（去掉 ✦ 符号）
-                current_marker_content = line.replace('✦', '').strip()
-                marker_type = '✦'
-                current_message = []
-            elif '✻' in line:
-                # 保存上一条消息
-                if current_marker_content is not None:
-                    full_content = current_marker_content
-                    if current_message:
-                        extra = '\n'.join(current_message).strip()
-                        if extra:
-                            full_content = full_content + '\n' + extra
-                    messages.append({
-                        'content': full_content,
-                        'marker_type': marker_type,
-                    })
-                
-                # 开始新消息（思考）
-                current_marker_content = line.replace('✻', '').strip()
-                marker_type = '✻'
-                current_message = []
-            else:
-                # 收集后续行
-                if current_marker_content is not None:
-                    current_message.append(line)
-        
-        # 保存最后一条消息
-        if current_marker_content is not None:
-            full_content = current_marker_content
-            if current_message:
-                extra = '\n'.join(current_message).strip()
-                if extra:
-                    full_content = full_content + '\n' + extra
-            messages.append({
-                'content': full_content,
-                'marker_type': marker_type,
-            })
         
         return messages
     
