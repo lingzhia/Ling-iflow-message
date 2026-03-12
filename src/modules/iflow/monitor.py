@@ -201,11 +201,16 @@ class IFlowMonitor:
                 # 倒数第二原则：发送上一个候选的最后一个（倒数第二，已完整）
                 if len(self._candidate_messages) > 0:
                     message_to_send = self._candidate_messages[-1]
-                    await self._send_message(message_to_send)
                     logger.debug(f"[IFlowMonitor] 发送倒数第二个标记（第 {len(self._candidate_messages)} 个）")
+                    logger.debug(f"[IFlowMonitor] 发送内容: {message_to_send['content']}")
+                    await self._send_message(message_to_send)
                 
                 # 更新候选缓存
                 self._candidate_messages = current_messages
+                
+                logger.debug(f"[IFlowMonitor] 候选缓存更新为 {len(self._candidate_messages)} 个标记")
+                for i, msg in enumerate(self._candidate_messages):
+                    logger.debug(f"  标记 {i+1}: {msg['content'][:50]}...")
                 
                 # 重置稳定计时器（有新标记，说明还在生成）
                 self._stable_start_time = None
@@ -227,8 +232,9 @@ class IFlowMonitor:
                         # 发送最后一个标记（现在已经完整了）
                         if len(self._candidate_messages) > 0:
                             message_to_send = self._candidate_messages[-1]
-                            await self._send_message(message_to_send)
                             logger.debug(f"[IFlowMonitor] 发送最后一个标记（第 {len(self._candidate_messages)} 个）")
+                            logger.debug(f"[IFlowMonitor] 发送内容: {message_to_send['content']}")
+                            await self._send_message(message_to_send)
                         
                         # 清空候选缓存
                         self._candidate_messages = []
@@ -355,27 +361,41 @@ class IFlowMonitor:
                 # 收集后续行（消息延续）
                 content_lines = [marker_content]
                 
+                logger.debug(f"[IFlowMonitor] 检测到标记行: {line[:80]}")
+                logger.debug(f"[IFlowMonitor] 标记内容: {marker_content}")
+                
                 # 遍历后续行，收集缩进的内容
                 for j in range(i + 1, len(lines)):
                     next_line = lines[j]
                     
                     # 如果遇到新的标记行或分隔符，停止
                     if '✦' in next_line or '✻' in next_line or next_line.startswith('---') or next_line.startswith('═') or next_line.startswith('─'):
+                        logger.debug(f"[IFlowMonitor] 遇到新标记或分隔符，停止收集: {next_line[:50]}")
                         break
                     
                     # 跳过"生成中"等 UI 行
                     if '生成中' in next_line and '按' in next_line:
+                        logger.debug(f"[IFlowMonitor] 跳过 UI 行: {next_line[:50]}")
+                        continue
+                    
+                    # 跳过空行
+                    if not next_line.strip():
+                        logger.debug(f"[IFlowMonitor] 跳过空行")
                         continue
                     
                     # 如果行以缩进开头，认为是消息延续
                     if next_line.startswith('  ') or next_line.startswith('\t'):
+                        logger.debug(f"[IFlowMonitor] 收集缩进行: {next_line[:80]}")
                         content_lines.append(next_line.strip())
                     else:
                         # 非缩进行，停止
+                        logger.debug(f"[IFlowMonitor] 遇到非缩进行，停止收集: {next_line[:50]}")
                         break
                 
                 # 合并内容
                 full_content = '\n'.join(content_lines)
+                
+                logger.debug(f"[IFlowMonitor] 提取的消息内容: {full_content[:100]}...")
                 
                 messages.append({
                     'content': full_content,
@@ -391,15 +411,15 @@ class IFlowMonitor:
         Args:
             message_data: 消息数据字典
         """
-        marker_content = message_data.get('marker_only', '')
+        full_content = message_data.get('content', '')
         marker_type = message_data.get('marker_type', '')
         
-        # 计算哈希
-        msg_hash = hashlib.md5(f"{marker_type}:{marker_content}".encode()).hexdigest()
+        # 计算哈希（基于完整内容，而不是标记行）
+        msg_hash = hashlib.md5(f"{marker_type}:{full_content}".encode()).hexdigest()
         
         # 检查是否已发送
         if msg_hash in self._processed_hashes:
-            logger.debug(f"[IFlowMonitor] 消息已发送，跳过: {marker_content[:50]}")
+            logger.debug(f"[IFlowMonitor] 消息已发送，跳过: {full_content[:50]}")
             return
         
         # 添加到已发送集合
@@ -414,7 +434,7 @@ class IFlowMonitor:
         
         message = OutboundMessage(
             type=msg_type,
-            content=message_data['content'],
+            content=full_content,
             receiver="",
             scope="reply_only",
             timestamp=datetime.now(),
@@ -425,7 +445,7 @@ class IFlowMonitor:
         await self._notify_subscribers(message)
         self.stats["messages_extracted"] += 1
         
-        logger.info(f"[IFlowMonitor] 发送消息: {marker_content[:50]}")
+        logger.info(f"[IFlowMonitor] 发送消息: {full_content[:50]}")
     
     def _clean_message_content(self, content: str) -> str:
         """清理消息内容，移除 iflow UI 元素
