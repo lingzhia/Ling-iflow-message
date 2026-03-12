@@ -187,11 +187,22 @@ class IFlowMonitor:
             if not output:
                 return
             
-            # 提取所有消息
-            current_messages = self._extract_messages(output)
+            # 先检测状态变化（在所有逻辑之前）
+            await self._check_state(output)
             
             # 检测生成状态
             is_generating = self._detect_generating(output)
+            
+            # 提取所有消息
+            current_messages = self._extract_messages(output)
+            
+            # 调试日志：输出关键状态
+            if self.stats["check_count"] % 10 == 0:  # 每10次检查输出一次
+                logger.debug(f"[IFlowMonitor] Check #{self.stats['check_count']}: state={self._state.value}, is_generating={is_generating}, "
+                           f"interaction_complete={self._interaction_complete}, "
+                           f"candidate_count={len(self._candidate_messages)}, "
+                           f"last_candidate_count={len(self._last_candidate_messages)}, "
+                           f"current_count={len(current_messages)}")
             
             # 检测新标记（使用长度比较）
             if not self._interaction_complete and len(current_messages) > len(self._last_candidate_messages):
@@ -253,10 +264,11 @@ class IFlowMonitor:
                 if self._stable_start_time is None:
                     # 第一次检测到消失，开始计时
                     self._stable_start_time = datetime.now()
-                    logger.debug(f"[IFlowMonitor] 检测到生成中消失，开始稳定计时...")
+                    logger.debug(f"[IFlowMonitor] 检测到生成中消失（候选消息={len(self._candidate_messages)}），开始稳定计时...")
                 else:
                     # 检查稳定时间
                     stable_time = (datetime.now() - self._stable_start_time).total_seconds()
+                    logger.debug(f"[IFlowMonitor] 等待稳定... ({stable_time:.1f}s / {self._stable_duration}s)")
                     
                     if stable_time >= self._stable_duration:
                         # 稳定2秒，确认结束
@@ -311,20 +323,6 @@ class IFlowMonitor:
                     logger.debug(f"[IFlowMonitor] 生成中重新出现，重置交互完成标志")
                     self._interaction_complete = False
             
-            # 检测状态变化
-            old_generating = self._state == IFlowState.GENERATING
-            await self._check_state(output)
-            
-            # 检测生成状态是否首次开始
-            new_generating = self._state == IFlowState.GENERATING
-            if new_generating and not old_generating:
-                # 生成状态首次开始，清空缓存
-                logger.debug(f"[IFlowMonitor] 生成状态首次开始，清空缓存")
-                self._candidate_messages = []
-                self._last_candidate_messages = []
-                self._processed_hashes.clear()
-                self._generating_state_started = True
-            
         except Exception as e:
             logger.error(f"[IFlowMonitor] Error checking messages: {e}", exc_info=True)
     
@@ -347,6 +345,13 @@ class IFlowMonitor:
             self._generating_start_time = datetime.now()
             self.stats["state_changes"] += 1
             logger.info(f"[IFlowMonitor] State changed: {old_state.value} -> {self._state.value}")
+            
+            # 生成状态首次开始，清空缓存
+            logger.debug(f"[IFlowMonitor] 生成状态首次开始，清空缓存")
+            self._candidate_messages = []
+            self._last_candidate_messages = []
+            self._processed_hashes.clear()
+            self._generating_state_started = True
             
             # 触发状态变更回调
             if self._on_state_change:
