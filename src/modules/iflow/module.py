@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Optional, Callable, Dict, Any
 
 from ...core.base import BaseModule
+from ...core.message import Message, MessageContent, MessageType as CoreMessageType
 from .controller import IFlowController
 from .monitor import IFlowMonitor, IFlowState, OutboundMessage, MessageType
 from .session_manager import SessionManager
@@ -364,8 +365,8 @@ class IFlowModule(BaseModule):
             await self.send_to_bus(
                 Message(
                     id=Message.generate_id(),
-                    type=MessageType.TEXT,
-                    content=MessageContent(type=MessageType.TEXT, text=message.content),
+                    type=CoreMessageType.TEXT,
+                    content=MessageContent(type=CoreMessageType.TEXT, text=message.content),
                     from_module=self.module_id,
                     metadata={
                         "msg_type": "iflow_reply",
