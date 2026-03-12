@@ -312,6 +312,19 @@ class IFlowModule(BaseModule):
         # 获取当前消息的来源和范围
         source = self.message_store.get_current_source()
         scope = self.message_store.get_current_scope()
+        current_id = self.message_store._current_message_id
+        
+        # 如果当前没有处理中的消息（状态变化太快被清空），尝试从最近记录获取
+        if not current_id:
+            # 获取最近的消息记录（用于恢复消息归属）
+            recent = self.message_store.get_recent_processing()
+            if recent:
+                source = recent.source
+                scope = recent.scope
+                current_id = recent.message_id
+                # 恢复当前消息 ID（临时）
+                self.message_store._current_message_id = current_id
+                logger.debug(f"[{self.module_id}] 恢复消息归属: {current_id}, source={source}")
         
         # 检查 scope 过滤
         if scope == "reply_only" and message.type != MessageType.REPLY:
@@ -323,7 +336,7 @@ class IFlowModule(BaseModule):
         message.scope = scope
         
         # 增加回复计数
-        self.message_store.increment_reply_count()
+        self.message_store.increment_reply_count(current_id)
         
         # 记录接收
         if self.logger:
@@ -332,14 +345,15 @@ class IFlowModule(BaseModule):
         # 通知订阅者
         await self._notify_subscribers(message)
     
-    async def _on_state_change(self, old_state: IFlowState, new_state: IFlowState) -> None:
+    async def _on_state_change(self, old_state: IFlowState, new_state: IFlowState, duration: int = 0) -> None:
         """处理状态变更
         
         Args:
             old_state: 旧状态
             new_state: 新状态
+            duration: 生成持续时间（秒）
         """
-        logger.info(f"[{self.module_id}] State changed: {old_state.value} -> {new_state.value}")
+        logger.info(f"[{self.module_id}] State changed: {old_state.value} -> {new_state.value}, duration={duration}s")
         
         if new_state == IFlowState.IDLE and old_state == IFlowState.GENERATING:
             # 生成完成
@@ -349,12 +363,12 @@ class IFlowModule(BaseModule):
                 # 发送完成通知
                 complete_message = OutboundMessage(
                     type=MessageType.COMPLETE,
-                    content=f"【回复结束】本次交互共 {completed.reply_count} 条消息，处理耗时 {self.generating_duration} 秒",
+                    content=f"【回复结束】本次交互共 {completed.reply_count} 条消息，处理耗时 {duration} 秒",
                     receiver=completed.source,
                     scope=completed.scope,
                     metadata={
                         "reply_count": completed.reply_count,
-                        "duration": self.generating_duration
+                        "duration": duration
                     }
                 )
                 

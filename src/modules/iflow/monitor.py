@@ -177,10 +177,7 @@ class IFlowMonitor:
             if not output:
                 return
             
-            # 检测状态变化
-            await self._check_state(output)
-            
-            # 提取消息
+            # 提取消息（先于状态检测，确保 reply 在 complete 之前）
             messages = self._extract_messages(output)
             
             # 过滤新消息
@@ -190,6 +187,9 @@ class IFlowMonitor:
             for message in new_messages:
                 await self._notify_subscribers(message)
                 self.stats["messages_extracted"] += 1
+            
+            # 检测状态变化（在消息通知之后）
+            await self._check_state(output)
             
         except Exception as e:
             logger.error(f"[IFlowMonitor] Error checking messages: {e}", exc_info=True)
@@ -220,15 +220,16 @@ class IFlowMonitor:
         
         elif not is_generating and self._state == IFlowState.GENERATING:
             # 状态变更：生成中 -> 空闲
-            self._state = IFlowState.IDLE
+            # 先计算持续时间（在状态改变之前）
             duration = self.generating_duration
+            self._state = IFlowState.IDLE
             self._generating_start_time = None
             self.stats["state_changes"] += 1
             logger.info(f"[IFlowMonitor] State changed: {old_state.value} -> {self._state.value}, duration={duration}s")
             
-            # 触发状态变更回调
+            # 触发状态变更回调（传递 duration）
             if self._on_state_change:
-                await self._call_callback(self._on_state_change, old_state, self._state)
+                await self._call_callback(self._on_state_change, old_state, self._state, duration)
     
     def _detect_generating(self, output: str) -> bool:
         """检测是否处于生成中状态
@@ -262,6 +263,11 @@ class IFlowMonitor:
     def _extract_messages(self, output: str) -> List[Dict]:
         """从 tmux 输出中提取消息
         
+        iflow 输出格式：
+        - ✦ 回复内容...  (回复消息，内容直接在标记行)
+        - ✻ 思考中...    (思考状态)
+        - 后续行可能是扩展内容
+        
         Args:
             output: tmux 输出
             
@@ -272,53 +278,63 @@ class IFlowMonitor:
         lines = output.split('\n')
         
         current_message = []
-        current_marker = None
+        current_marker_content = None  # 标记行的内容（去掉标记符号）
         marker_type = None  # '✦' or '✻' or None
         
         for line in lines:
             # 检查标记行
             if '✦' in line:
                 # 保存上一条消息
-                if current_marker and current_message:
-                    content = '\n'.join(current_message).strip()
-                    if content:
-                        messages.append({
-                            'marker_id': current_marker,
-                            'content': content,
-                            'marker_type': marker_type,
-                        })
+                if current_marker_content is not None:
+                    # 合并标记行内容和后续行内容
+                    full_content = current_marker_content
+                    if current_message:
+                        extra = '\n'.join(current_message).strip()
+                        if extra:
+                            full_content = full_content + '\n' + extra
+                    messages.append({
+                        'content': full_content,
+                        'marker_type': marker_type,
+                    })
                 
                 # 开始新消息（回复）
-                current_marker = line.replace('✦', '').strip()
+                # 提取标记行内容（去掉 ✦ 符号）
+                current_marker_content = line.replace('✦', '').strip()
                 marker_type = '✦'
                 current_message = []
             elif '✻' in line:
                 # 保存上一条消息
-                if current_marker and current_message:
-                    content = '\n'.join(current_message).strip()
-                    if content:
-                        messages.append({
-                            'marker_id': current_marker,
-                            'content': content,
-                            'marker_type': marker_type,
-                        })
+                if current_marker_content is not None:
+                    full_content = current_marker_content
+                    if current_message:
+                        extra = '\n'.join(current_message).strip()
+                        if extra:
+                            full_content = full_content + '\n' + extra
+                    messages.append({
+                        'content': full_content,
+                        'marker_type': marker_type,
+                    })
                 
                 # 开始新消息（思考）
-                current_marker = line.replace('✻', '').strip()
+                current_marker_content = line.replace('✻', '').strip()
                 marker_type = '✻'
                 current_message = []
             else:
-                current_message.append(line)
+                # 收集后续行
+                if current_marker_content is not None:
+                    current_message.append(line)
         
         # 保存最后一条消息
-        if current_marker and current_message:
-            content = '\n'.join(current_message).strip()
-            if content:
-                messages.append({
-                    'marker_id': current_marker,
-                    'content': content,
-                    'marker_type': marker_type,
-                })
+        if current_marker_content is not None:
+            full_content = current_marker_content
+            if current_message:
+                extra = '\n'.join(current_message).strip()
+                if extra:
+                    full_content = full_content + '\n' + extra
+            messages.append({
+                'content': full_content,
+                'marker_type': marker_type,
+            })
         
         return messages
     

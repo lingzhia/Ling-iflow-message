@@ -150,6 +150,30 @@ class MessageStore:
         current = self.get_current_message()
         return current.scope if current else "reply_only"
     
+    def get_recent_processing(self) -> Optional[MessageRecord]:
+        """获取最近的处理中或已完成消息（按时间倒序）
+        
+        用于状态变化太快导致 _current_message_id 被清空时恢复消息归属。
+        
+        Returns:
+            最近的消息记录，无则返回 None
+        """
+        if not self._records:
+            return None
+        
+        # 按创建时间倒序排列，返回最近的处理中或已完成消息
+        sorted_records = sorted(
+            self._records.values(),
+            key=lambda x: x.created_at,
+            reverse=True
+        )
+        
+        for record in sorted_records:
+            if record.status in (MessageStatus.PROCESSING, MessageStatus.COMPLETED):
+                return record
+        
+        return None
+    
     def increment_reply_count(self, message_id: str = None) -> None:
         """增加回复计数
         
