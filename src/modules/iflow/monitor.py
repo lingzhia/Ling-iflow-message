@@ -174,7 +174,7 @@ class IFlowMonitor:
                 await asyncio.sleep(1)
     
     async def _check(self) -> None:
-        """检查新消息和状态（延迟提取策略 + 稳定检测）"""
+        """检查新消息和状态（优化后的策略）"""
         self.stats["check_count"] += 1
         
         try:
@@ -190,16 +190,16 @@ class IFlowMonitor:
             # 检测生成状态
             is_generating = self._detect_generating(output)
             
-            # 检测新标记
+            # 检测新标记（使用长度比较）
             if len(current_messages) > len(self._candidate_messages):
                 # 有新标记
                 new_message_count = len(current_messages) - len(self._candidate_messages)
                 
                 logger.debug(f"[IFlowMonitor] 检测到 {new_message_count} 个新标记，当前总数: {len(current_messages)}")
                 
-                # 如果有上一个候选，发送它（倒数第二，保证完整）
-                if len(self._candidate_messages) > 0:
-                    message_to_send = self._candidate_messages[-1]
+                # 发送所有新消息（从上一个候选之后的消息）
+                for i in range(len(self._candidate_messages), len(current_messages)):
+                    message_to_send = current_messages[i]
                     await self._send_message(message_to_send)
                 
                 # 更新候选缓存
@@ -220,15 +220,13 @@ class IFlowMonitor:
                     
                     if stable_time >= self._stable_duration:
                         # 稳定2秒，确认结束
-                        logger.info(f"[IFlowMonitor] 生成中稳定消失（{stable_time:.1f}s），发送最后一条消息")
+                        logger.info(f"[IFlowMonitor] 生成中稳定消失（{stable_time:.1f}s），交互结束")
                         
-                        # 发送最后一个候选
-                        message_to_send = self._candidate_messages[-1]
-                        await self._send_message(message_to_send)
-                        
-                        # 清空候选缓存
+                        # 清空候选缓存和重置去重集合，为下一次交互做准备
                         self._candidate_messages = []
+                        self._processed_hashes.clear()
                         self._stable_start_time = None
+                        logger.debug(f"[IFlowMonitor] 已清空候选缓存和去重集合")
                     else:
                         logger.debug(f"[IFlowMonitor] 等待稳定... ({stable_time:.1f}s / {self._stable_duration}s)")
             
