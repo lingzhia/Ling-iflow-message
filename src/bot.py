@@ -129,8 +129,7 @@ class LingIflowBot:
                 module_id=module_id,
                 tmux_session=session_name,
                 model=session_config.get("model", "kimi-k2.5"),
-                workspace=session_config.get("workspace", "~/.iflow"),
-                auto_start=False  # 主程序控制启动时机
+                workspace=session_config.get("workspace", "~/.iflow")
             )
             
             # 注册到消息总线
