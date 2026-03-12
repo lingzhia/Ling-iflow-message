@@ -19,13 +19,94 @@ class IFlowController:
     通过 tmux 命令管理 iflow CLI 会话。
     """
     
-    def __init__(self, tmux_session: str = "iflow"):
+    # 默认会话名称前缀
+    SESSION_PREFIX = "iflow"
+    
+    def __init__(self, tmux_session: Optional[str] = None):
         """初始化 iflow 控制器
         
         Args:
-            tmux_session: tmux 会话名称
+            tmux_session: tmux 会话名称，如果为 None 则自动分配
         """
-        self.tmux_session = tmux_session
+        self._tmux_session = tmux_session
+        self._session_assigned = tmux_session is not None
+    
+    @property
+    def tmux_session(self) -> str:
+        """获取 tmux 会话名称（延迟分配）"""
+        return self._tmux_session or ""
+    
+    @tmux_session.setter
+    def tmux_session(self, value: str):
+        """设置 tmux 会话名称"""
+        self._tmux_session = value
+        self._session_assigned = True
+    
+    async def get_existing_sessions(self) -> list:
+        """获取已存在的 iflow 会话列表
+        
+        Returns:
+            已存在的 iflow 会话名称列表
+        """
+        try:
+            result = await asyncio.create_subprocess_exec(
+                "tmux", "list-sessions", "-F", "#{session_name}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=5)
+            
+            if result.returncode != 0:
+                return []
+            
+            sessions = stdout.decode().strip().split('\n')
+            # 筛选出以 iflow 开头的会话
+            iflow_sessions = [s for s in sessions if s.startswith(self.SESSION_PREFIX)]
+            return iflow_sessions
+            
+        except Exception as e:
+            logger.warning(f"[IFlowController] Error listing sessions: {e}")
+            return []
+    
+    async def get_next_session_name(self) -> str:
+        """获取下一个可用的会话名称
+        
+        Returns:
+            可用的会话名称（如 iflow1, iflow2...）
+        """
+        existing = await self.get_existing_sessions()
+        
+        # 提取已使用的序号
+        used_numbers = set()
+        for session in existing:
+            # 从 "iflow1", "iflow2" 等提取数字
+            if session.startswith(self.SESSION_PREFIX):
+                num_str = session[len(self.SESSION_PREFIX):]
+                if num_str.isdigit():
+                    used_numbers.add(int(num_str))
+        
+        # 找到最小的未使用序号
+        for i in range(1, 1000):
+            if i not in used_numbers:
+                return f"{self.SESSION_PREFIX}{i}"
+        
+        # 备用方案：使用时间戳
+        return f"{self.SESSION_PREFIX}_{int(time.time())}"
+    
+    async def assign_session_name(self) -> str:
+        """分配会话名称（如果未指定）
+        
+        Returns:
+            分配的会话名称
+        """
+        if self._session_assigned and self._tmux_session:
+            return self._tmux_session
+        
+        # 自动分配名称
+        self._tmux_session = await self.get_next_session_name()
+        self._session_assigned = True
+        logger.info(f"[IFlowController] 自动分配会话名称: {self._tmux_session}")
+        return self._tmux_session
     
     async def check_tmux_session(self) -> bool:
         """检查 tmux 会话是否存在
@@ -33,6 +114,10 @@ class IFlowController:
         Returns:
             会话是否存在
         """
+        if not self.tmux_session:
+            logger.warning(f"[IFlowController] tmux_session is empty")
+            return False
+            
         try:
             result = await asyncio.create_subprocess_exec(
                 "tmux", "has-session", "-t", self.tmux_session,
@@ -40,6 +125,8 @@ class IFlowController:
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=5)
+            if result.returncode != 0:
+                logger.debug(f"[IFlowController] tmux session '{self.tmux_session}' not found (returncode={result.returncode})")
             return result.returncode == 0
         except Exception as e:
             logger.warning(f"[IFlowController] Error checking tmux session: {e}")
@@ -55,27 +142,25 @@ class IFlowController:
             return False
         
         try:
-            # 检查会话中是否有 iflow 进程
-            result = await asyncio.create_subprocess_exec(
-                "tmux", "list-panes", "-t", self.tmux_session, "-F", "#{pane_pid}",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=5)
+            # 捕获输出，检查是否有 iflow 的特征（增加行数确保捕获完整界面）
+            output = await self.capture_output(200)
             
-            if result.returncode == 0 and stdout.strip():
-                pane_pid = stdout.decode().strip()
-                
-                # 检查进程命令是否包含 iflow
-                try:
-                    with open(f"/proc/{pane_pid}/cmdline", "r") as f:
-                        cmdline = f.read()
-                        if "iflow" in cmdline.lower():
-                            return True
-                except:
-                    pass
+            # 检查输出中是否有 iflow 的特征：
+            # 1. 输入框 ">   输入消息或@文件路径"
+            # 2. 状态栏 "思考: 开启" 或 "智能模式"
+            # 3. 版本号 "版本号:"
+            iflow_indicators = [
+                "输入消息或@文件路径",
+                "Hi～今天想做点什么",
+                "版本号:",
+            ]
+            
+            for indicator in iflow_indicators:
+                if indicator in output:
+                    return True
             
             return False
+            
         except Exception as e:
             logger.warning(f"[IFlowController] Error checking iflow status: {e}")
             return False
@@ -89,44 +174,36 @@ class IFlowController:
         Returns:
             是否发送成功
         """
+        if not self.tmux_session:
+            logger.error(f"[IFlowController] tmux_session is empty, cannot send message")
+            return False
+            
         if not await self.check_tmux_session():
             logger.error(f"[IFlowController] tmux session '{self.tmux_session}' not found")
             return False
         
         try:
-            # 清除当前输入框（如果有）
-            await asyncio.create_subprocess_exec(
-                "tmux", "send-keys", "-t", self.tmux_session, "C-c",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            # 稍微等待一下
-            await asyncio.sleep(0.1)
-            
             # 发送消息内容（使用 -l 选项逐字发送）
-            await asyncio.create_subprocess_exec(
+            proc1 = await asyncio.create_subprocess_exec(
                 "tmux", "send-keys", "-t", self.tmux_session, "-l", message,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
-            # 稍微等待一下
-            await asyncio.sleep(0.1)
+            await proc1.communicate()
             
             # 发送回车键
-            result = await asyncio.create_subprocess_exec(
+            proc2 = await asyncio.create_subprocess_exec(
                 "tmux", "send-keys", "-t", self.tmux_session, "C-m",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            await asyncio.wait_for(result.communicate(), timeout=5)
+            stdout, stderr = await asyncio.wait_for(proc2.communicate(), timeout=5)
             
-            if result.returncode != 0:
-                logger.error(f"[IFlowController] Failed to send message")
+            if proc2.returncode != 0:
+                logger.error(f"[IFlowController] Failed to send message (returncode={proc2.returncode})")
                 return False
             
-            logger.info(f"[IFlowController] 发送消息到 iflow: {message}")
+            logger.info(f"[IFlowController] 发送消息到 iflow: {message[:50]}...")
             return True
             
         except Exception as e:
@@ -136,45 +213,89 @@ class IFlowController:
     async def start_iflow(self, model: str = "kimi-k2.5") -> bool:
         """在 tmux 会话中启动 iflow CLI
         
+        如果会话名称未指定，自动分配。
+        
         Args:
             model: iflow 模型
             
         Returns:
             是否启动成功
         """
-        if await self.check_tmux_session():
-            logger.warning(f"[IFlowController] tmux session '{self.tmux_session}' already exists")
+        # 确保会话名称已分配
+        await self.assign_session_name()
+        
+        # 检查 tmux 会话是否已存在
+        tmux_exists = await self.check_tmux_session()
+        
+        if tmux_exists:
+            # 检查 iflow 是否已在运行
             if await self.check_iflow_running():
                 logger.info("[IFlowController] iflow already running")
                 return True
+            else:
+                # tmux 会话存在但 iflow 未运行，重新启动 iflow
+                logger.info("[IFlowController] tmux session exists, starting iflow...")
+                result = await asyncio.create_subprocess_exec(
+                    "tmux", "send-keys", "-t", self.tmux_session,
+                    f"iflow --model {model}", "C-m",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                await asyncio.wait_for(result.communicate(), timeout=10)
+                
+                # 等待 iflow 完全启动（最多 25 秒）
+                for i in range(25):
+                    await asyncio.sleep(1)
+                    if await self.check_iflow_running():
+                        logger.info(f"[IFlowController] iflow started in existing tmux session '{self.tmux_session}' after {i+1}s")
+                        return True
+                
+                logger.warning("[IFlowController] iflow may not have started properly")
+                return False
         
         try:
-            # 创建新的 tmux 会话并启动 iflow
+            # 创建新的 tmux 会话（启动 bash）
             result = await asyncio.create_subprocess_exec(
                 "tmux", "new-session", "-d", "-s", self.tmux_session,
-                f"iflow --model {model}",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             await asyncio.wait_for(result.communicate(), timeout=30)
             
             if result.returncode != 0:
-                logger.error(f"[IFlowController] Failed to start iflow")
+                logger.error(f"[IFlowController] Failed to create tmux session")
                 return False
             
-            logger.info(f"[IFlowController] iflow started in tmux session '{self.tmux_session}'")
+            # 等待会话创建
+            await asyncio.sleep(0.5)
             
-            # 等待 iflow 启动
-            await asyncio.sleep(2)
+            # 在 tmux 会话中启动 iflow
+            result = await asyncio.create_subprocess_exec(
+                "tmux", "send-keys", "-t", self.tmux_session,
+                f"iflow --model {model}", "C-m",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await asyncio.wait_for(result.communicate(), timeout=10)
             
-            return True
+            logger.info(f"[IFlowController] iflow starting in tmux session '{self.tmux_session}'")
+            
+            # 等待 iflow 完全启动（最多 25 秒）
+            for i in range(25):
+                await asyncio.sleep(1)
+                if await self.check_iflow_running():
+                    logger.info(f"[IFlowController] iflow fully started after {i+1}s")
+                    return True
+            
+            logger.warning("[IFlowController] iflow may not have started properly (timeout)")
+            return False
             
         except Exception as e:
             logger.error(f"[IFlowController] Error starting iflow: {e}")
             return False
     
     async def stop_iflow(self) -> bool:
-        """停止 iflow CLI
+        """停止 iflow CLI（但保留 tmux 会话）
         
         Returns:
             是否停止成功
@@ -184,7 +305,48 @@ class IFlowController:
             return True
         
         try:
-            # 关闭 tmux 会话
+            # 发送 Ctrl+C 停止 iflow
+            await asyncio.create_subprocess_exec(
+                "tmux", "send-keys", "-t", self.tmux_session, "C-c",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            await asyncio.sleep(0.5)
+            
+            # 发送 exit 命令
+            result = await asyncio.create_subprocess_exec(
+                "tmux", "send-keys", "-t", self.tmux_session, "exit", "C-m",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await asyncio.wait_for(result.communicate(), timeout=5)
+            
+            logger.info(f"[IFlowController] iflow stopped in session '{self.tmux_session}'")
+            return True
+            
+        except Exception as e:
+            logger.error(f"[IFlowController] Error stopping iflow: {e}")
+            return False
+    
+    async def destroy_session(self) -> bool:
+        """销毁 tmux 会话（停止 iflow 并删除会话）
+        
+        Returns:
+            是否销毁成功
+        """
+        if not await self.check_tmux_session():
+            logger.info(f"[IFlowController] tmux session '{self.tmux_session}' not found")
+            return True
+        
+        try:
+            # 先停止 iflow
+            await self.stop_iflow()
+            
+            # 等待一下
+            await asyncio.sleep(0.5)
+            
+            # 强制关闭 tmux 会话
             result = await asyncio.create_subprocess_exec(
                 "tmux", "kill-session", "-t", self.tmux_session,
                 stdout=asyncio.subprocess.PIPE,
@@ -196,11 +358,11 @@ class IFlowController:
                 logger.warning(f"[IFlowController] Failed to kill session")
                 return False
             
-            logger.info(f"[IFlowController] tmux session '{self.tmux_session}' killed")
+            logger.info(f"[IFlowController] tmux session '{self.tmux_session}' destroyed")
             return True
             
         except Exception as e:
-            logger.error(f"[IFlowController] Error stopping iflow: {e}")
+            logger.error(f"[IFlowController] Error destroying session: {e}")
             return False
     
     async def get_session_info(self) -> Optional[dict]:

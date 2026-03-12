@@ -1,1 +1,23 @@
-{"tmux_session": "iflow", "workspace": "~/.iflow", "wechat_work": {"enabled": true, "corp_id": "你的企业ID", "agent_id": "你的应用AgentId", "secret": "你的应用Secret", "user_id": "你的用户账号", "token": "你的Token", "encoding_aes_key": "你的EncodingAESKey", "callback_host": "0.0.0.0", "callback_port": 8788, "allow_from": [], "group_policy": "mention", "group_allow_from": []}}
+{
+  "iflow": {
+    "model": "kimi-k2.5",
+    "workspace": "~/.iflow",
+    "auto_restart": true,
+    "log_interactions": true,
+    "log_dir": "logs/interactions"
+  },
+  "wechat_work": {
+    "enabled": true,
+    "corp_id": "你的企业ID",
+    "agent_id": "你的应用AgentId",
+    "secret": "你的应用Secret",
+    "user_id": "你的用户账号",
+    "token": "你的Token",
+    "encoding_aes_key": "你的EncodingAESKey",
+    "callback_host": "0.0.0.0",
+    "callback_port": 8788,
+    "allow_from": [],
+    "group_policy": "mention",
+    "group_allow_from": []
+  }
+}

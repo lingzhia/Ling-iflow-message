@@ -1,25 +1,59 @@
 """
 IFlow Monitor
 
-持续监听 iflow 的 tmux 输出，提取新消息。
+持续监听 iflow 的 tmux 输出，提取新消息，检测状态变化。
 """
 
 import asyncio
 import hashlib
 import logging
-from typing import List, Dict, Optional, Callable
+from dataclasses import dataclass, field
 from datetime import datetime
-
-from ...core.message import Message, MessageType
-
+from typing import List, Dict, Optional, Callable, Any
+from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+
+class IFlowState(Enum):
+    """iflow 状态"""
+    IDLE = "idle"           # 空闲，等待输入
+    GENERATING = "generating"  # 生成中
+
+
+class MessageType(Enum):
+    """消息类型"""
+    REPLY = "reply"     # 回复（✦ 标记）
+    OTHER = "other"     # 其他（✻ 思考 + 无标记）
+    COMPLETE = "complete"  # 完成通知
+
+
+@dataclass
+class OutboundMessage:
+    """出站消息"""
+    type: MessageType                 # 消息类型
+    content: str                      # 消息内容
+    receiver: str                     # 接收方（来源模块 ID，空表示无特定接收方）
+    scope: str                        # 返回范围（reply_only / all）
+    timestamp: datetime = field(default_factory=datetime.now)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def to_dict(self) -> Dict:
+        """转换为字典"""
+        return {
+            "type": self.type.value,
+            "content": self.content,
+            "receiver": self.receiver,
+            "scope": self.scope,
+            "timestamp": self.timestamp.isoformat(),
+            "metadata": self.metadata
+        }
 
 
 class IFlowMonitor:
     """iflow 监控器
     
-    持续监听 iflow 的 tmux 输出，提取新消息。
+    持续监听 iflow 的 tmux 输出，提取新消息，检测状态变化。
     """
     
     def __init__(self, controller, check_interval: float = 0.5):
@@ -34,19 +68,38 @@ class IFlowMonitor:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         
+        # 状态管理
+        self._state = IFlowState.IDLE
+        self._generating_start_time: Optional[datetime] = None
+        
         # 消息缓存（用于去重）
         self._processed_hashes: set = set()
-        self._last_hashes: set = set()
         
-        # 监听器列表
-        self._listeners: List[Callable] = []
+        # 订阅者列表
+        self._subscribers: List[Callable] = []
+        
+        # 状态变更回调
+        self._on_state_change: Optional[Callable] = None
         
         # 统计信息
         self.stats = {
             "messages_extracted": 0,
             "messages_filtered": 0,
-            "check_count": 0
+            "check_count": 0,
+            "state_changes": 0
         }
+    
+    @property
+    def state(self) -> IFlowState:
+        """当前 iflow 状态"""
+        return self._state
+    
+    @property
+    def generating_duration(self) -> int:
+        """生成持续时间（秒）"""
+        if self._state == IFlowState.GENERATING and self._generating_start_time:
+            return int((datetime.now() - self._generating_start_time).total_seconds())
+        return 0
     
     async def start(self) -> None:
         """启动监控器"""
@@ -74,24 +127,32 @@ class IFlowMonitor:
         
         logger.info("[IFlowMonitor] Monitor stopped")
     
-    def add_listener(self, listener: Callable) -> None:
-        """添加消息监听器
+    def subscribe(self, callback: Callable) -> None:
+        """订阅 iflow 输出消息
         
         Args:
-            listener: 监听器函数，接收 Message 对象
+            callback: 回调函数，接收 OutboundMessage
         """
-        self._listeners.append(listener)
-        logger.debug(f"[IFlowMonitor] Added listener, total: {len(self._listeners)}")
+        self._subscribers.append(callback)
+        logger.debug(f"[IFlowMonitor] Added subscriber, total: {len(self._subscribers)}")
     
-    def remove_listener(self, listener: Callable) -> None:
-        """移除消息监听器
+    def unsubscribe(self, callback: Callable) -> None:
+        """取消订阅
         
         Args:
-            listener: 监听器函数
+            callback: 回调函数
         """
-        if listener in self._listeners:
-            self._listeners.remove(listener)
-            logger.debug(f"[IFlowMonitor] Removed listener, total: {len(self._listeners)}")
+        if callback in self._subscribers:
+            self._subscribers.remove(callback)
+            logger.debug(f"[IFlowMonitor] Removed subscriber, total: {len(self._subscribers)}")
+    
+    def set_state_change_callback(self, callback: Callable) -> None:
+        """设置状态变更回调
+        
+        Args:
+            callback: 回调函数，参数为 (old_state, new_state)
+        """
+        self._on_state_change = callback
     
     async def _monitor_loop(self) -> None:
         """监控循环"""
@@ -106,7 +167,7 @@ class IFlowMonitor:
                 await asyncio.sleep(1)
     
     async def _check(self) -> None:
-        """检查新消息"""
+        """检查新消息和状态"""
         self.stats["check_count"] += 1
         
         try:
@@ -116,21 +177,89 @@ class IFlowMonitor:
             if not output:
                 return
             
+            # 检测状态变化
+            await self._check_state(output)
+            
             # 提取消息
             messages = self._extract_messages(output)
             
             # 过滤新消息
             new_messages = self._filter_new_messages(messages)
             
-            # 通知监听器
+            # 通知订阅者
             for message in new_messages:
-                await self._notify_listeners(message)
+                await self._notify_subscribers(message)
                 self.stats["messages_extracted"] += 1
             
         except Exception as e:
             logger.error(f"[IFlowMonitor] Error checking messages: {e}", exc_info=True)
     
-    def _extract_messages(self, output: str) -> List[Message]:
+    async def _check_state(self, output: str) -> None:
+        """检测 iflow 状态
+        
+        检查界面中是否显示"生成中"。
+        
+        Args:
+            output: tmux 输出
+        """
+        # 检测 "生成中" 关键字
+        is_generating = self._detect_generating(output)
+        
+        old_state = self._state
+        
+        if is_generating and self._state == IFlowState.IDLE:
+            # 状态变更：空闲 -> 生成中
+            self._state = IFlowState.GENERATING
+            self._generating_start_time = datetime.now()
+            self.stats["state_changes"] += 1
+            logger.info(f"[IFlowMonitor] State changed: {old_state.value} -> {self._state.value}")
+            
+            # 触发状态变更回调
+            if self._on_state_change:
+                await self._call_callback(self._on_state_change, old_state, self._state)
+        
+        elif not is_generating and self._state == IFlowState.GENERATING:
+            # 状态变更：生成中 -> 空闲
+            self._state = IFlowState.IDLE
+            duration = self.generating_duration
+            self._generating_start_time = None
+            self.stats["state_changes"] += 1
+            logger.info(f"[IFlowMonitor] State changed: {old_state.value} -> {self._state.value}, duration={duration}s")
+            
+            # 触发状态变更回调
+            if self._on_state_change:
+                await self._call_callback(self._on_state_change, old_state, self._state)
+    
+    def _detect_generating(self, output: str) -> bool:
+        """检测是否处于生成中状态
+        
+        iflow 状态指示器（位于界面输入框上方）：
+        - "⠦ 生成中 XXm XXs ... (按esc取消)" - 正在生成回复（唯一判断标准）
+        - "思考: 开启" - 思考模式开启（与是否生成无关）
+        
+        检测方式：查找包含"生成中"的行，排除其他 UI 元素的干扰。
+        
+        Args:
+            output: tmux 输出
+            
+        Returns:
+            是否处于生成中
+        """
+        lines = output.split('\n')
+        
+        # 检查每一行是否包含"生成中"
+        for line in lines:
+            line_stripped = line.strip()
+            # 检测"生成中"标记（排除误判）
+            # 格式：⠦ 生成中 6m 37s ... (按esc取消)
+            if '生成中' in line_stripped:
+                # 排除"上下文剩余"等无关行
+                if '上下文剩余' not in line_stripped:
+                    return True
+        
+        return False
+    
+    def _extract_messages(self, output: str) -> List[Dict]:
         """从 tmux 输出中提取消息
         
         Args:
@@ -144,11 +273,11 @@ class IFlowMonitor:
         
         current_message = []
         current_marker = None
-        marker_type = None  # '✦' or '✻'
+        marker_type = None  # '✦' or '✻' or None
         
         for line in lines:
             # 检查标记行
-            if '✦' in line or '✻' in line:
+            if '✦' in line:
                 # 保存上一条消息
                 if current_marker and current_message:
                     content = '\n'.join(current_message).strip()
@@ -157,12 +286,26 @@ class IFlowMonitor:
                             'marker_id': current_marker,
                             'content': content,
                             'marker_type': marker_type,
-                            'full_marker': f'{marker_type} {current_marker}'
                         })
                 
-                # 开始新消息
-                current_marker = line.replace('✦', '').replace('✻', '').strip()
-                marker_type = '✦' if '✦' in line else '✻'
+                # 开始新消息（回复）
+                current_marker = line.replace('✦', '').strip()
+                marker_type = '✦'
+                current_message = []
+            elif '✻' in line:
+                # 保存上一条消息
+                if current_marker and current_message:
+                    content = '\n'.join(current_message).strip()
+                    if content:
+                        messages.append({
+                            'marker_id': current_marker,
+                            'content': content,
+                            'marker_type': marker_type,
+                        })
+                
+                # 开始新消息（思考）
+                current_marker = line.replace('✻', '').strip()
+                marker_type = '✻'
                 current_message = []
             else:
                 current_message.append(line)
@@ -175,12 +318,11 @@ class IFlowMonitor:
                     'marker_id': current_marker,
                     'content': content,
                     'marker_type': marker_type,
-                    'full_marker': f'{marker_type} {current_marker}'
                 })
         
         return messages
     
-    def _filter_new_messages(self, messages: List[dict]) -> List[Message]:
+    def _filter_new_messages(self, messages: List[dict]) -> List[OutboundMessage]:
         """过滤新消息
         
         Args:
@@ -192,22 +334,19 @@ class IFlowMonitor:
         new_messages = []
         
         for msg_data in messages:
-            # 只处理 ✦ 标记的消息（实际回复）
-            if msg_data['marker_type'] != '✦':
-                continue
-            
             # 清理消息内容
             content = self._clean_message_content(msg_data['content'])
             
-            # 如果内容为空，使用 marker_id 作为内容（iflow 回复格式：✦ 内容）
+            # 如果内容为空，使用 marker_id 作为内容
             if not content:
-                content = self._clean_message_content(msg_data['marker_id'])
+                content = self._clean_message_content(msg_data.get('marker_id', ''))
             
             if not content:
                 continue
             
             # 计算消息哈希
-            msg_hash = hashlib.md5(content.encode()).hexdigest()
+            marker_type = msg_data.get('marker_type', '')
+            msg_hash = hashlib.md5(f"{marker_type}:{content}".encode()).hexdigest()
             
             # 检查是否已处理
             if msg_hash in self._processed_hashes:
@@ -221,15 +360,18 @@ class IFlowMonitor:
             if len(self._processed_hashes) > 1000:
                 self._processed_hashes = set(list(self._processed_hashes)[-500:])
             
-            # 创建消息对象
-            message = Message(
-                id=Message.generate_id(),
-                type=MessageType.TEXT,
+            # 确定消息类型
+            msg_type = MessageType.REPLY if marker_type == '✦' else MessageType.OTHER
+            
+            # 创建出站消息
+            message = OutboundMessage(
+                type=msg_type,
                 content=content,
-                from_module=self.controller.tmux_session,
+                receiver="",  # 由 IFlowModule 设置
+                scope="reply_only",  # 由 IFlowModule 设置
+                timestamp=datetime.now(),
                 metadata={
-                    'marker_id': msg_data['marker_id'],
-                    'marker_type': msg_data['marker_type']
+                    'marker_type': marker_type
                 }
             )
             
@@ -255,10 +397,6 @@ class IFlowMonitor:
             '══',
             '────────',
             '────────────────',
-            '════════════════',
-            '══════════════════════════',
-            '══════════════════════════════════════',
-            '══════════════════════════════════════════════════',
         ]
         
         # 找到第一个分隔符的位置
@@ -275,20 +413,32 @@ class IFlowMonitor:
         
         return content.strip()
     
-    async def _notify_listeners(self, message: Message) -> None:
-        """通知所有监听器
+    async def _notify_subscribers(self, message: OutboundMessage) -> None:
+        """通知所有订阅者
         
         Args:
-            message: 消息对象
+            message: 出站消息
         """
-        for listener in self._listeners:
+        for callback in self._subscribers:
             try:
-                if asyncio.iscoroutinefunction(listener):
-                    await listener(message)
-                else:
-                    listener(message)
+                await self._call_callback(callback, message)
             except Exception as e:
-                logger.error(f"[IFlowMonitor] Listener error: {e}", exc_info=True)
+                logger.error(f"[IFlowMonitor] Subscriber callback error: {e}", exc_info=True)
+    
+    async def _call_callback(self, callback: Callable, *args) -> None:
+        """调用回调函数
+        
+        Args:
+            callback: 回调函数
+            args: 参数
+        """
+        try:
+            if asyncio.iscoroutinefunction(callback):
+                await callback(*args)
+            else:
+                callback(*args)
+        except Exception as e:
+            logger.error(f"[IFlowMonitor] Callback error: {e}", exc_info=True)
     
     def get_stats(self) -> Dict:
         """获取统计信息
@@ -296,14 +446,19 @@ class IFlowMonitor:
         Returns:
             统计信息字典
         """
-        return self.stats.copy()
+        return {
+            **self.stats,
+            "state": self._state.value,
+            "generating_duration": self.generating_duration
+        }
     
     def reset_stats(self) -> None:
         """重置统计信息"""
         self.stats = {
             "messages_extracted": 0,
             "messages_filtered": 0,
-            "check_count": 0
+            "check_count": 0,
+            "state_changes": 0
         }
         logger.info("[IFlowMonitor] Stats reset")
     
