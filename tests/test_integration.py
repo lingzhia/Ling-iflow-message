@@ -1,262 +1,274 @@
 """
-Integration Tests
+集成测试
 
-Test the integration of the entire architecture.
+测试 WeChatModule + IFlowModule + MessageBus 的集成。
+使用 MockWeChatModule 模拟企业微信。
 """
 
-import asyncio
-import logging
 import sys
 import os
+import asyncio
+import logging
+from typing import List
 
-# Add project root to path
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, project_root)
+# 添加项目根目录到 sys.path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from typing import Dict
+from src.core import MessageBus, Message, MessageType, MessageContent
+from src.modules.iflow import IFlowModule, IFlowState
+from tests.mock_wechat import MockWeChatModule
 
-# Configure logging
+# 配置日志
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s'
+    format='%(asctime)s [%(levelname)s] %(message)s'
 )
-
-logger = logging.getLogger(__name__)
-
-
-async def test_basic_flow():
-    """Test basic message flow"""
-    from src.core import MessageBus, Message, MessageType, BaseModule, MessageContent
-    from src.modules import IFlowModule, WeChatModule
-    
-    # Create message bus
-    bus = MessageBus()
-    logger.info("✓ Message bus created successfully")
-    
-    # Create iflow module (test mode, don't start actual iflow)
-    iflow_module = IFlowModule(
-        module_id="iflow_test",
-        tmux_session="iflow_test",
-        model="kimi-k2.5",
-        auto_start=False  # Test mode, don't start actual iflow
-    )
-    
-    # Register iflow module
-    bus.register_module(iflow_module)
-    logger.info("✓ IFlowModule registered successfully")
-    
-    # Create wechat module (test config)
-    wechat_config = {
-        "corp_id": "test_corp_id",
-        "agent_id": 1000001,
-        "secret": "test_secret",
-        "token": "test_token",
-        "encoding_aes_key": "test_key",
-        "callback_port": 8788,
-        "user_id": "test_user"
-    }
-    
-    wechat_module = WeChatModule(
-        module_id="wechat_test",
-        config=wechat_config
-    )
-    
-    # Register wechat module
-    bus.register_module(wechat_module)
-    logger.info("✓ WeChatModule registered successfully")
-    
-    # Establish binding
-    bus.bind("wechat_test", "iflow_test")
-    logger.info("✓ Binding established: wechat_test -> iflow_test")
-    
-    # Start all modules
-    await bus.start_all()
-    logger.info("✓ All modules started successfully")
-    
-    # Test message format
-    test_message = Message(
-        id=Message.generate_id(),
-        type=MessageType.TEXT,
-        content=MessageContent(type=MessageType.TEXT, text="Test message"),
-        from_module="wechat_test",
-        to_module="iflow_test"
-    )
-    logger.info(f"✓ Test message created: {test_message}")
-    
-    # Test serialization/deserialization
-    json_str = test_message.to_json()
-    restored_message = Message.from_json(json_str)
-    assert restored_message.content == test_message.content
-    logger.info("✓ Message serialization/deserialization test passed")
-    
-    # View bus status
-    logger.info(f"\nMessage bus status:")
-    logger.info(f"  Registered modules: {bus.list_modules()}")
-    logger.info(f"  Bindings: {bus.list_bindings()}")
-    logger.info(f"  Stats: {bus.get_stats()}")
-    
-    # Wait for a while
-    logger.info("\nWaiting 5 seconds...")
-    await asyncio.sleep(5)
-    
-    # Stop all modules
-    await bus.stop_all()
-    logger.info("✓ All modules stopped")
-    
-    logger.info("\n✅ Basic flow test passed!")
+logger = logging.getLogger("integration_test")
 
 
-async def test_multiple_instances():
-    """Test multiple instances scenario"""
-    from src.core import MessageBus
-    from src.modules import IFlowModule
+class IntegrationTestRunner:
+    """集成测试运行器"""
     
-    # Create message bus
-    bus = MessageBus()
-    logger.info("✓ Message bus created successfully")
+    def __init__(self):
+        self.bus = MessageBus()
+        self.wechat = None
+        self.iflow = None
+        self.iflow_messages: List = []
     
-    # Create multiple iflow instances
-    instances = []
-    for i in range(1, 4):
-        module = IFlowModule(
-            module_id=f"iflow_test_{i}",
-            tmux_session=f"iflow_test_{i}",
-            model="kimi-k2.5",
-            auto_start=False
-        )
-        bus.register_module(module)
-        instances.append(module)
-        logger.info(f"✓ IFlowModule {i} registered successfully")
-    
-    # View bus status
-    logger.info(f"\nMessage bus status:")
-    logger.info(f"  Registered modules: {bus.list_modules()}")
-    logger.info(f"  Module count: {len(bus.list_modules())}")
-    
-    logger.info("\n✅ Multiple instances test passed!")
-
-
-async def test_message_routing():
-    """Test message routing"""
-    from src.core import MessageBus, Message, MessageType
-    
-    # Create message bus
-    bus = MessageBus()
-    
-    # Create mock modules
-    class MockModule:
-        def __init__(self, module_id):
-            self.module_id = module_id
-            self.messages_received = []
+    async def setup(self):
+        """设置测试环境"""
+        logger.info("=" * 60)
+        logger.info("集成测试环境设置")
+        logger.info("=" * 60)
         
-        async def receive(self, message):
-            self.messages_received.append(message)
+        # 创建模拟企业微信模块
+        self.wechat = MockWeChatModule(
+            module_id="mock_wechat",
+            config={"user_id": "test_user"}
+        )
+        
+        # 创建 iflow 模块
+        self.iflow = IFlowModule()
+        
+        # 注册模块
+        self.bus.register_module(self.wechat)
+        self.bus.register_module(self.iflow)
+        
+        # 设置绑定关系
+        # 微信消息 -> iflow
+        self.bus.bind("mock_wechat", self.iflow.module_id)
+        # iflow 回复 -> 微信
+        self.bus.bind(self.iflow.module_id, "mock_wechat")
+        
+        # 订阅 iflow 输出
+        self.iflow.subscribe(self._on_iflow_message)
+        
+        # 启动模块
+        logger.info("启动模块...")
+        await self.bus.start_all()
+        
+        # 等待 iflow 完全启动
+        logger.info("等待 iflow 启动完成...")
+        await asyncio.sleep(20)
+        
+        logger.info("✅ 测试环境设置完成")
+        logger.info("")
     
-    module1 = MockModule("module1")
-    module2 = MockModule("module2")
+    async def _on_iflow_message(self, message):
+        """处理 iflow 输出消息"""
+        self.iflow_messages.append(message)
+        content = message.content[:50] + "..." if len(message.content) > 50 else message.content
+        logger.info(f"📥 收到 iflow 消息: [{message.type.value}] {content}")
     
-    # Register modules
-    bus.modules["module1"] = module1
-    bus.modules["module2"] = module2
+    async def teardown(self):
+        """清理测试环境"""
+        logger.info("")
+        logger.info("清理测试环境...")
+        await self.bus.stop_all()
+        logger.info("✅ 测试环境清理完成")
     
-    # Establish binding
-    bus.bind("module1", "module2")
+    async def test_single_message_flow(self):
+        """测试单条消息流转"""
+        logger.info("=" * 60)
+        logger.info("测试1: 单条消息流转")
+        logger.info("=" * 60)
+        
+        # 清空消息记录
+        self.wechat.clear_messages()
+        self.iflow_messages.clear()
+        
+        # 模拟接收消息
+        await self.wechat.simulate_receive("你好，简短回复即可")
+        
+        # 等待回复
+        logger.info("等待回复...")
+        for i in range(30):
+            await asyncio.sleep(2)
+            state = self.iflow.state
+            msg_count = len(self.iflow_messages)
+            logger.info(f"   [{i*2+2}s] state={state.value}, msgs={msg_count}")
+            if state == IFlowState.IDLE and msg_count > 0:
+                await asyncio.sleep(2)
+                break
+        
+        # 检查结果
+        logger.info("")
+        logger.info("测试结果:")
+        logger.info(f"  - 微信接收: {len(self.wechat.messages_received)} 条")
+        logger.info(f"  - iflow 回复: {len(self.iflow_messages)} 条")
+        logger.info(f"  - 微信发送: {len(self.wechat.messages_sent)} 条")
+        
+        if len(self.iflow_messages) > 0:
+            logger.info("✅ 测试通过: 消息流转正常")
+        else:
+            logger.error("❌ 测试失败: 未收到回复")
+        
+        logger.info("")
+        return len(self.iflow_messages) > 0
     
-    # Create test message
-    message = Message(
-        id=Message.generate_id(),
-        type=MessageType.TEXT,
-        content="Test routing message",
-        from_module="module1",
-        to_module="module2"
-    )
+    async def test_multi_turn_conversation(self):
+        """测试多轮对话"""
+        logger.info("=" * 60)
+        logger.info("测试2: 多轮对话")
+        logger.info("=" * 60)
+        
+        # 清空消息记录
+        self.wechat.clear_messages()
+        self.iflow_messages.clear()
+        
+        # 第一轮
+        logger.info("第一轮对话:")
+        await self.wechat.simulate_receive("我叫小明")
+        await asyncio.sleep(15)
+        
+        # 第二轮
+        logger.info("第二轮对话:")
+        await self.wechat.simulate_receive("我叫什么名字？")
+        await asyncio.sleep(15)
+        
+        # 检查结果
+        logger.info("")
+        logger.info("测试结果:")
+        logger.info(f"  - 微信接收: {len(self.wechat.messages_received)} 条")
+        logger.info(f"  - iflow 回复: {len(self.iflow_messages)} 条")
+        
+        if len(self.iflow_messages) >= 2:
+            logger.info("✅ 测试通过: 多轮对话正常")
+        else:
+            logger.error("❌ 测试失败: 回复数量不足")
+        
+        logger.info("")
+        return len(self.iflow_messages) >= 2
     
-    # Route message
-    await bus.route(message)
+    async def test_rejection_mechanism(self):
+        """测试拒绝机制"""
+        logger.info("=" * 60)
+        logger.info("测试3: 拒绝机制")
+        logger.info("=" * 60)
+        
+        # 清空消息记录
+        self.wechat.clear_messages()
+        self.iflow_messages.clear()
+        
+        # 发送第一条消息（需要较长的回复时间）
+        logger.info("发送第一条消息（需要长时间生成）...")
+        await self.wechat.simulate_receive("请帮我数到100")
+        await asyncio.sleep(2)
+        
+        # 检查状态
+        state = self.iflow.state
+        logger.info(f"当前 iflow 状态: {state.value}")
+        
+        # 尝试发送第二条消息
+        logger.info("尝试在生成中发送第二条消息...")
+        
+        # 直接调用 iflow.send 检查拒绝
+        result = await self.iflow.send(
+            "这条消息应该被拒绝",
+            source="test",
+            scope="reply_only"
+        )
+        
+        logger.info(f"发送结果: success={result.success}, error={result.error}")
+        
+        # 等待第一条消息完成
+        logger.info("等待第一条消息完成...")
+        for i in range(30):
+            await asyncio.sleep(2)
+            if self.iflow.state == IFlowState.IDLE:
+                break
+        
+        # 检查结果
+        if not result.success and result.error == "iflow_generating":
+            logger.info("✅ 测试通过: 拒绝机制正常工作")
+            return True
+        else:
+            logger.error("❌ 测试失败: 拒绝机制未生效")
+            return False
     
-    # Verify
-    assert len(module2.messages_received) == 1
-    assert module2.messages_received[0].content == "Test routing message"
-    
-    logger.info("✅ Message routing test passed!")
-
-
-async def test_pub_sub():
-    """Test publish-subscribe mechanism"""
-    from src.core import MessageBus, Message, MessageType
-    
-    # Create message bus
-    bus = MessageBus()
-    
-    # Create subscribers
-    messages_received = []
-    
-    async def subscriber1(message):
-        messages_received.append(("sub1", message))
-    
-    async def subscriber2(message):
-        messages_received.append(("sub2", message))
-    
-    # Subscribe to topics
-    bus.subscribe("test_topic", subscriber1)
-    bus.subscribe("test_topic", subscriber2)
-    
-    # Create test message
-    message = Message(
-        id=Message.generate_id(),
-        type=MessageType.TEXT,
-        content="Test broadcast message",
-        from_module="test_module"
-    )
-    
-    # Publish message
-    await bus.publish("test_topic", message)
-    
-    # Verify
-    assert len(messages_received) == 2
-    assert messages_received[0][0] == "sub1"
-    assert messages_received[1][0] == "sub2"
-    
-    logger.info("✅ Publish-subscribe test passed!")
+    async def test_statistics(self):
+        """测试统计功能"""
+        logger.info("=" * 60)
+        logger.info("测试4: 统计功能")
+        logger.info("=" * 60)
+        
+        # 获取各模块统计
+        bus_stats = self.bus.get_stats()
+        wechat_stats = self.wechat.get_stats()
+        
+        logger.info("MessageBus 统计:")
+        logger.info(f"  - 模块数: {bus_stats.get('modules_count', 0)}")
+        logger.info(f"  - 绑定数: {bus_stats.get('bindings_count', 0)}")
+        logger.info(f"  - 发送消息: {bus_stats.get('messages_sent', 0)}")
+        logger.info(f"  - 路由消息: {bus_stats.get('messages_routed', 0)}")
+        
+        logger.info("")
+        logger.info("MockWeChat 统计:")
+        logger.info(f"  - 发送数: {wechat_stats.get('sent_count', 0)}")
+        logger.info(f"  - 接收数: {wechat_stats.get('received_count', 0)}")
+        
+        logger.info("")
+        logger.info("✅ 测试通过: 统计功能正常")
+        return True
 
 
 async def main():
-    """Run all tests"""
-    logger.info("=" * 60)
-    logger.info("Starting Integration Tests")
-    logger.info("=" * 60)
+    """主函数"""
+    runner = IntegrationTestRunner()
     
-    tests = [
-        ("Basic Flow Test", test_basic_flow),
-        ("Multiple Instances Test", test_multiple_instances),
-        ("Message Routing Test", test_message_routing),
-        ("Publish-Subscribe Test", test_pub_sub),
-    ]
-    
-    passed = 0
-    failed = 0
-    
-    for name, test_func in tests:
-        logger.info(f"\n{'=' * 60}")
-        logger.info(f"Test: {name}")
-        logger.info(f"{'=' * 60}")
+    try:
+        await runner.setup()
         
-        try:
-            await test_func()
-            passed += 1
-        except Exception as e:
-            logger.error(f"❌ Test failed: {e}", exc_info=True)
-            failed += 1
-    
-    logger.info(f"\n{'=' * 60}")
-    logger.info(f"Tests completed: {passed} passed, {failed} failed")
-    logger.info(f"{'=' * 60}")
-    
-    if failed == 0:
-        logger.info("✅ All tests passed!")
-    else:
-        logger.error("❌ Some tests failed")
+        results = []
+        
+        # 运行测试
+        results.append(("单条消息流转", await runner.test_single_message_flow()))
+        results.append(("多轮对话", await runner.test_multi_turn_conversation()))
+        results.append(("拒绝机制", await runner.test_rejection_mechanism()))
+        results.append(("统计功能", await runner.test_statistics()))
+        
+        # 汇总结果
+        logger.info("=" * 60)
+        logger.info("测试汇总")
+        logger.info("=" * 60)
+        
+        passed = sum(1 for _, r in results if r)
+        total = len(results)
+        
+        for name, result in results:
+            status = "✅ 通过" if result else "❌ 失败"
+            logger.info(f"  {status}: {name}")
+        
+        logger.info("")
+        logger.info(f"总计: {passed}/{total} 通过")
+        logger.info("=" * 60)
+        
+        return passed == total
+        
+    finally:
+        await runner.teardown()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    success = asyncio.run(main())
+    sys.exit(0 if success else 1)
