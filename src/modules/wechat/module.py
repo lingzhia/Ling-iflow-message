@@ -248,7 +248,7 @@ python3 -m src.bot config.json
             message = Message(
                 id=Message.generate_id(),
                 type=MessageType.TEXT,
-                content=MessageContent.text(content),
+                content=MessageContent(type=MessageType.TEXT, text=content),
                 from_module=self.module_id,
                 chat_id=chat_id,
                 user_id=sender_id,
