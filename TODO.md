@@ -22,9 +22,9 @@
 - [ ] 与 IFlowModule 集成测试
 
 ### CommandHandler
-- [ ] 与 MessageBus 集成测试
-- [ ] 命令解析测试
-- [ ] 命令执行测试
+- [x] 命令解析测试
+- [x] 命令执行测试
+- [x] 与 MessageBus 集成测试
 
 ### MessageBus
 - [ ] 模块注册/注销测试
