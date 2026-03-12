@@ -208,7 +208,7 @@ python3 -m src.bot config.json
                 return
             
             # 获取聊天ID
-            chat_id = message.chat_id or self.config.get("user_id", "")
+            chat_id = message.metadata.get("chat_id") or message.chat_id or self.config.get("user_id", "")
             is_group = message.is_group
             
             # 发送到企业微信

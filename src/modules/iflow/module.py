@@ -174,6 +174,11 @@ class IFlowModule(BaseModule):
         elif content is None:
             content = str(message) if message else ""
         
+        # 提取来源、范围和聊天ID
+        chat_id = getattr(message, "chat_id", "") or ""
+        user_id = getattr(message, "user_id", "") or ""
+        is_group = getattr(message, "is_group", False)
+        
         # 提取来源和范围
         source = getattr(message, 'from_module', '') or ""
         scope = "reply_only"
@@ -222,6 +227,7 @@ class IFlowModule(BaseModule):
         
         # 记录到消息库
         self.message_store.add(
+            metadata={"chat_id": chat_id, "user_id": user_id, "is_group": is_group},
             message_id=message_id,
             source=source,
             content=content,
@@ -342,6 +348,31 @@ class IFlowModule(BaseModule):
         if self.logger:
             self.logger.log_received(message.content)
         
+        # 发送到消息总线
+        # 获取当前消息的 chat_id
+        current_record = self.message_store.get_current_message()
+        chat_id = current_record.metadata.get("chat_id", "") if current_record else ""
+        is_group = current_record.metadata.get("is_group", False) if current_record else False
+        
+        if self.message_bus:
+            await self.send_to_bus(
+                Message(
+                    id=Message.generate_id(),
+                    type=MessageType.TEXT,
+                    content=MessageContent(type=MessageType.TEXT, text=message.content),
+                    from_module=self.module_id,
+                    metadata={
+                        "msg_type": "iflow_reply",
+                        "reply_type": message.type.value,
+                        "chat_id": chat_id,
+                        "is_group": is_group,
+                        "receiver": message.receiver,
+                        "scope": message.scope
+                    }
+                )
+            )
+            logger.debug(f"[{self.module_id}] 已发送 iflow 回复到消息总线")
+
         # 通知订阅者
         await self._notify_subscribers(message)
     
