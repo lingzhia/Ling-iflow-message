@@ -39,6 +39,7 @@ Ling-iflow/
 │   │   ├── iflow/      # iflow 模块
 │   │   └── command/    # 命令处理器
 │   └── bot.py          # 主程序入口
+├── manage.py           # 项目管理脚本
 ├── src_old/            # 旧版本（备份）
 │   ├── channels/       # 渠道模块
 │   ├── interactive/    # 交互模式核心模块
@@ -57,6 +58,7 @@ Ling-iflow/
 │   ├── 03-微信模块增强方案.md
 │   ├── 04-IFlow模块设计方案.md
 │   ├── 05-消息总线设计方案.md
+│   ├── 06-启动方案设计.md
 │   └── README.md
 ├── tests/              # 测试文件
 │   ├── test_message_bus.py
@@ -85,6 +87,7 @@ Ling-iflow/
 - [design-v2/03-微信模块增强方案.md](design-v2/03-微信模块增强方案.md) - 微信模块设计
 - [design-v2/04-IFlow模块设计方案.md](design-v2/04-IFlow模块设计方案.md) - IFlow模块设计
 - [design-v2/05-消息总线设计方案.md](design-v2/05-消息总线设计方案.md) - 消息总线设计
+- [design-v2/06-启动方案设计.md](design-v2/06-启动方案设计.md) - 启动方案和管理脚本设计
 
 ### 旧版本文档（参考）
 - [src_old/README-old.md](src_old/README-old.md) - 旧版本 README
@@ -122,10 +125,48 @@ vim config.json
 
 ### 启动
 
+#### 方式1: 使用管理脚本（推荐）
+
 ```bash
 # 启动服务
+./manage.py start
+
+# 后台启动
+./manage.py start -d
+
+# 使用指定配置
+./manage.py start -c config-dev.json
+
+# 停止服务
+./manage.py stop
+
+# 重启服务
+./manage.py restart
+
+# 查看状态
+./manage.py status
+
+# 查看日志
+./manage.py logs
+
+# 持续跟踪日志
+./manage.py logs -f
+
+# 清理日志和缓存
+./manage.py clean
+```
+
+#### 方式2: 直接启动
+
+```bash
+# 使用默认配置启动
+python3 -m src.bot
+
+# 指定配置文件启动
 python3 -m src.bot config.json
 ```
+
+**推荐使用方式1**，提供更完整的管理功能。
 
 ## 消息流转流程
 
@@ -191,6 +232,10 @@ python3 tools/wechat_test_tool.py listen
 - ✅ 拒绝机制（生成中拒绝新消息）
 - ✅ 多轮对话来源归属
 - ✅ 交互日志记录
+- ✅ 项目管理脚本（manage.py）
+- ✅ 服务生命周期管理（启动/停止/重启/状态/日志）
+- ✅ 启动/停止通知机制
+- ✅ Message 对象规范化
 
 ### 待实现 🚧
 
