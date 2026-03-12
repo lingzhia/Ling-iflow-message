@@ -222,11 +222,10 @@ class IFlowMonitor:
                         # 稳定2秒，确认结束
                         logger.info(f"[IFlowMonitor] 生成中稳定消失（{stable_time:.1f}s），交互结束")
                         
-                        # 清空候选缓存和重置去重集合，为下一次交互做准备
+                        # 只清空候选缓存，不清空去重集合（防止重复发送）
                         self._candidate_messages = []
-                        self._processed_hashes.clear()
                         self._stable_start_time = None
-                        logger.debug(f"[IFlowMonitor] 已清空候选缓存和去重集合")
+                        logger.debug(f"[IFlowMonitor] 已清空候选缓存，保留去重集合（{len(self._processed_hashes)} 条）")
                     else:
                         logger.debug(f"[IFlowMonitor] 等待稳定... ({stable_time:.1f}s / {self._stable_duration}s)")
             
