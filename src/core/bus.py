@@ -8,12 +8,30 @@ import asyncio
 import logging
 from typing import Dict, List, Optional, Callable, Set
 from collections import defaultdict
+from datetime import datetime
 
 from .message import Message
 from .base import BaseModule
 
 
 logger = logging.getLogger(__name__)
+
+
+def _format_content(content: str, max_len: int = 50) -> str:
+    """格式化消息内容用于日志显示
+    
+    Args:
+        content: 消息内容
+        max_len: 最大显示长度
+        
+    Returns:
+        格式化后的内容
+    """
+    if not content:
+        return "(空)"
+    if len(content) <= max_len:
+        return content
+    return content[:max_len] + "..."
 
 
 class MessageBus:
@@ -42,6 +60,8 @@ class MessageBus:
         }
         
         self._running = False
+        
+        logger.info("[MessageBus] 消息总线初始化完成")
     
     def register_module(self, module: BaseModule) -> bool:
         """注册模块
@@ -55,15 +75,15 @@ class MessageBus:
         module_id = module.module_id
         
         if module_id in self.modules:
-            logger.warning(f"模块 {module_id} 已存在，将被覆盖")
+            logger.warning(f"[MessageBus] 模块 {module_id} 已存在，将被覆盖")
         
         try:
             self.modules[module_id] = module
             module.set_message_bus(self)
-            logger.info(f"[MessageBus] 模块 {module_id} 注册成功")
+            logger.info(f"[MessageBus] ✅ 模块注册成功: {module_id} (总计: {len(self.modules)} 个)")
             return True
         except Exception as e:
-            logger.error(f"[MessageBus] 注册模块 {module_id} 失败: {e}", exc_info=True)
+            logger.error(f"[MessageBus] ❌ 模块注册失败: {module_id}, 错误: {e}", exc_info=True)
             return False
     
     def unregister_module(self, module_id: str) -> bool:
@@ -76,23 +96,26 @@ class MessageBus:
             是否注销成功
         """
         if module_id not in self.modules:
-            logger.warning(f"模块 {module_id} 不存在")
+            logger.warning(f"[MessageBus] 模块 {module_id} 不存在，无法注销")
             return False
         
         try:
             # 移除模块
             del self.modules[module_id]
             
-            # 移除绑定关系
+            # 移除相关绑定关系
+            removed_bindings = []
             self.bindings = {
                 k: v for k, v in self.bindings.items()
                 if k != module_id and v != module_id
             }
+            if removed_bindings:
+                logger.debug(f"[MessageBus] 移除相关绑定: {removed_bindings}")
             
-            logger.info(f"[MessageBus] 模块 {module_id} 注销成功")
+            logger.info(f"[MessageBus] ✅ 模块注销成功: {module_id} (剩余: {len(self.modules)} 个)")
             return True
         except Exception as e:
-            logger.error(f"[MessageBus] 注销模块 {module_id} 失败: {e}", exc_info=True)
+            logger.error(f"[MessageBus] ❌ 模块注销失败: {module_id}, 错误: {e}", exc_info=True)
             return False
     
     def bind(self, from_module: str, to_module: str) -> bool:
@@ -106,15 +129,20 @@ class MessageBus:
             是否绑定成功
         """
         if from_module not in self.modules:
-            logger.error(f"发送模块 {from_module} 不存在")
+            logger.error(f"[MessageBus] ❌ 绑定失败: 发送模块 {from_module} 不存在")
             return False
         
         if to_module not in self.modules:
-            logger.error(f"接收模块 {to_module} 不存在")
+            logger.error(f"[MessageBus] ❌ 绑定失败: 接收模块 {to_module} 不存在")
             return False
         
+        # 检查是否已存在绑定
+        old_binding = self.bindings.get(from_module)
+        if old_binding:
+            logger.debug(f"[MessageBus] 更新绑定: {from_module} -> {old_binding} 改为 -> {to_module}")
+        
         self.bindings[from_module] = to_module
-        logger.info(f"[MessageBus] 绑定 {from_module} -> {to_module}")
+        logger.info(f"[MessageBus] ✅ 绑定成功: {from_module} -> {to_module} (总计: {len(self.bindings)} 个绑定)")
         return True
     
     def unbind(self, from_module: str) -> bool:
@@ -126,11 +154,14 @@ class MessageBus:
         Returns:
             是否解绑成功
         """
-        if from_module in self.bindings:
-            del self.bindings[from_module]
-            logger.info(f"[MessageBus] 解绑 {from_module}")
-            return True
-        return False
+        if from_module not in self.bindings:
+            logger.debug(f"[MessageBus] 模块 {from_module} 未绑定，无需解绑")
+            return False
+        
+        to_module = self.bindings[from_module]
+        del self.bindings[from_module]
+        logger.info(f"[MessageBus] ✅ 解绑成功: {from_module} -> {to_module} (剩余: {len(self.bindings)} 个绑定)")
+        return True
     
     def get_binding(self, from_module: str) -> Optional[str]:
         """获取绑定关系
@@ -153,22 +184,31 @@ class MessageBus:
             是否发送成功
         """
         if not message.to_module:
-            logger.error("[MessageBus] 消息未指定接收模块")
+            logger.error(f"[MessageBus] ❌ 发送失败: 消息 {message.id} 未指定接收模块")
             self.stats["errors"] += 1
             return False
         
         if message.to_module not in self.modules:
-            logger.error(f"[MessageBus] 接收模块 {message.to_module} 不存在")
+            logger.error(f"[MessageBus] ❌ 发送失败: 接收模块 {message.to_module} 不存在 (消息: {message.id})")
             self.stats["errors"] += 1
             return False
         
         try:
             target_module = self.modules[message.to_module]
+            content_preview = _format_content(message.content.text if message.content else "")
+            
+            logger.debug(f"[MessageBus] 📤 发送消息: {message.id}")
+            logger.debug(f"   从: {message.from_module or '(未知)'}")
+            logger.debug(f"   到: {message.to_module}")
+            logger.debug(f"   内容: {content_preview}")
+            
             await target_module.receive(message)
             self.stats["messages_sent"] += 1
+            
+            logger.info(f"[MessageBus] ✅ 消息发送成功: {message.id} -> {message.to_module}")
             return True
         except Exception as e:
-            logger.error(f"[MessageBus] 发送消息失败: {e}", exc_info=True)
+            logger.error(f"[MessageBus] ❌ 消息发送异常: {message.id}, 错误: {e}", exc_info=True)
             self.stats["errors"] += 1
             return False
     
@@ -184,13 +224,21 @@ class MessageBus:
         from_module = message.from_module
         
         if from_module not in self.bindings:
-            logger.warning(f"[MessageBus] 模块 {from_module} 未绑定")
+            logger.warning(f"[MessageBus] ⚠️ 路由失败: 模块 {from_module} 未绑定 (消息: {message.id})")
             return False
         
         to_module = self.bindings[from_module]
         message.to_module = to_module
         
-        return await self.send_to_module(message)
+        content_preview = _format_content(message.content.text if message.content else "")
+        logger.info(f"[MessageBus] 🔀 路由消息: {message.id}")
+        logger.debug(f"   {from_module} -> {to_module}")
+        logger.debug(f"   内容: {content_preview}")
+        
+        result = await self.send_to_module(message)
+        if result:
+            self.stats["messages_routed"] += 1
+        return result
     
     async def publish(self, topic: str, message: Message) -> bool:
         """发布消息到主题（广播）
@@ -203,11 +251,17 @@ class MessageBus:
             是否发布成功
         """
         if topic not in self.subscribers:
-            logger.warning(f"[MessageBus] 主题 {topic} 没有订阅者")
+            logger.warning(f"[MessageBus] ⚠️ 发布失败: 主题 {topic} 没有订阅者 (消息: {message.id})")
             return False
         
         try:
             callbacks = self.subscribers[topic]
+            subscriber_count = len(callbacks)
+            
+            content_preview = _format_content(message.content.text if message.content else "")
+            logger.info(f"[MessageBus] 📢 发布消息: {message.id} 到主题 {topic}")
+            logger.debug(f"   订阅者数量: {subscriber_count}")
+            logger.debug(f"   内容: {content_preview}")
             
             # 并发调用所有订阅者
             tasks = [callback(message) for callback in callbacks]
@@ -218,15 +272,17 @@ class MessageBus:
             
             if success_count < len(results):
                 errors = [r for r in results if isinstance(r, Exception)]
-                logger.error(f"[MessageBus] {len(errors)} 个订阅者处理失败: {errors}")
+                logger.error(f"[MessageBus] ❌ 发布部分失败: {len(errors)}/{subscriber_count} 个订阅者处理失败")
+                for i, err in enumerate(errors):
+                    logger.error(f"   错误 {i+1}: {err}")
                 self.stats["errors"] += len(errors)
             
             self.stats["messages_published"] += 1
-            logger.debug(f"[MessageBus] 发布消息到主题 {topic}，{success_count}/{len(results)} 成功")
+            logger.info(f"[MessageBus] ✅ 发布完成: {success_count}/{subscriber_count} 成功")
             return success_count > 0
             
         except Exception as e:
-            logger.error(f"[MessageBus] 发布消息失败: {e}", exc_info=True)
+            logger.error(f"[MessageBus] ❌ 发布异常: 主题 {topic}, 错误: {e}", exc_info=True)
             self.stats["errors"] += 1
             return False
     
@@ -241,11 +297,11 @@ class MessageBus:
             是否订阅成功
         """
         if not asyncio.iscoroutinefunction(callback):
-            logger.error("[MessageBus] 订阅回调必须是协程函数")
+            logger.error(f"[MessageBus] ❌ 订阅失败: 回调必须是协程函数 (主题: {topic})")
             return False
         
         self.subscribers[topic].append(callback)
-        logger.debug(f"[MessageBus] 订阅主题 {topic}，订阅者数量: {len(self.subscribers[topic])}")
+        logger.info(f"[MessageBus] ✅ 订阅成功: 主题 {topic} (订阅者: {len(self.subscribers[topic])})")
         return True
     
     def unsubscribe(self, topic: str, callback: Callable) -> bool:
@@ -259,13 +315,15 @@ class MessageBus:
             是否取消成功
         """
         if topic not in self.subscribers:
+            logger.debug(f"[MessageBus] 主题 {topic} 不存在，无法取消订阅")
             return False
         
         if callback in self.subscribers[topic]:
             self.subscribers[topic].remove(callback)
-            logger.debug(f"[MessageBus] 取消订阅主题 {topic}")
+            logger.info(f"[MessageBus] ✅ 取消订阅: 主题 {topic} (剩余订阅者: {len(self.subscribers[topic])})")
             return True
         
+        logger.debug(f"[MessageBus] 回调不在主题 {topic} 的订阅者列表中")
         return False
     
     def list_modules(self) -> List[str]:
@@ -298,17 +356,24 @@ class MessageBus:
         Returns:
             统计信息字典
         """
-        return self.stats.copy()
+        stats = self.stats.copy()
+        stats["modules_count"] = len(self.modules)
+        stats["bindings_count"] = len(self.bindings)
+        stats["topics_count"] = len(self.subscribers)
+        return stats
     
     def reset_stats(self) -> None:
         """重置统计信息"""
+        old_stats = self.stats.copy()
         self.stats = {
             "messages_sent": 0,
             "messages_routed": 0,
             "messages_published": 0,
             "errors": 0
         }
-        logger.info("[MessageBus] 统计信息已重置")
+        logger.info(f"[MessageBus] 📊 统计信息已重置 (之前: sent={old_stats['messages_sent']}, "
+                   f"routed={old_stats['messages_routed']}, published={old_stats['messages_published']}, "
+                   f"errors={old_stats['errors']})")
     
     async def start_all(self) -> bool:
         """启动所有模块
@@ -316,31 +381,49 @@ class MessageBus:
         Returns:
             是否全部启动成功
         """
+        logger.info(f"[MessageBus] 🚀 开始启动所有模块 (共 {len(self.modules)} 个)")
+        
         success_count = 0
+        failed_modules = []
+        
         for module_id, module in self.modules.items():
             try:
                 if await module.start():
                     success_count += 1
+                    logger.info(f"[MessageBus]   ✅ {module_id} 启动成功")
+                else:
+                    failed_modules.append(module_id)
+                    logger.warning(f"[MessageBus]   ⚠️ {module_id} 启动返回 False")
             except Exception as e:
-                logger.error(f"[MessageBus] 启动模块 {module_id} 失败: {e}", exc_info=True)
+                failed_modules.append(module_id)
+                logger.error(f"[MessageBus]   ❌ {module_id} 启动失败: {e}", exc_info=True)
         
         self._running = True
-        logger.info(f"[MessageBus] 启动 {success_count}/{len(self.modules)} 个模块")
+        
+        if success_count == len(self.modules):
+            logger.info(f"[MessageBus] ✅ 所有模块启动成功 ({success_count}/{len(self.modules)})")
+        else:
+            logger.warning(f"[MessageBus] ⚠️ 部分模块启动失败: {failed_modules} ({success_count}/{len(self.modules)} 成功)")
+        
         return success_count == len(self.modules)
     
     async def stop_all(self) -> None:
         """停止所有模块"""
         if not self._running:
+            logger.debug("[MessageBus] 消息总线未运行，无需停止")
             return
+        
+        logger.info(f"[MessageBus] 🛑 开始停止所有模块 (共 {len(self.modules)} 个)")
         
         for module_id, module in self.modules.items():
             try:
                 await module.stop()
+                logger.info(f"[MessageBus]   ✅ {module_id} 已停止")
             except Exception as e:
-                logger.error(f"[MessageBus] 停止模块 {module_id} 失败: {e}", exc_info=True)
+                logger.error(f"[MessageBus]   ❌ {module_id} 停止失败: {e}", exc_info=True)
         
         self._running = False
-        logger.info("[MessageBus] 所有模块已停止")
+        logger.info("[MessageBus] ✅ 所有模块已停止")
     
     def __repr__(self) -> str:
         return f"MessageBus(modules={len(self.modules)}, bindings={len(self.bindings)}, topics={len(self.subscribers)})"
