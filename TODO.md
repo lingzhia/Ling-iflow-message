@@ -27,10 +27,10 @@
 - [x] 与 MessageBus 集成测试
 
 ### MessageBus
-- [ ] 模块注册/注销测试
-- [ ] 消息路由测试
-- [ ] 绑定关系测试
-- [ ] 发布订阅测试
+- [x] 模块注册/注销测试
+- [x] 消息路由测试
+- [x] 绑定关系测试
+- [x] 发布订阅测试
 
 ---
 
@@ -56,9 +56,9 @@
 ## 功能完善待办
 
 ### P0 - 核心功能
-- [ ] WeChatModule 与 IFlowModule 完整集成
-- [ ] MessageBus 绑定机制完善
-- [ ] CommandHandler 集成到消息流
+- [x] WeChatModule 与 IFlowModule 完整集成
+- [x] MessageBus 绑定机制完善
+- [x] CommandHandler 集成到消息流（已集成到 WeChatModule）
 
 ### P1 - 增强功能
 - [ ] 多机器人支持（多微信实例绑定多 iflow 实例）
@@ -81,15 +81,14 @@
 
 ### 待解决
 1. [待解决] WeChatModule 需要真实企业微信环境测试
-2. [待解决] CommandHandler 需要集成到消息流
 
 ---
 
 ## 下一步工作
 
-1. **集成测试**：WeChatModule + IFlowModule + MessageBus
-2. **工具测试**：wechat_test_tool.py 功能验证
-3. **文档更新**：README.md 和使用说明
+1. **企业微信测试**：WeChatModule 需要真实企业微信环境
+2. **工具测试**：wechat_test_tool.py 功能验证（需要企业微信配置）
+3. **P1 增强**：多机器人支持、错误处理、日志优化
 
 ---
 
