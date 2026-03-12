@@ -183,15 +183,25 @@ class IFlowController:
             return False
         
         try:
-            # 发送消息内容（使用 -l 选项逐字发送）
+            # 1. 先发送 C-c 清除当前输入框（参考旧版本实现）
+            proc0 = await asyncio.create_subprocess_exec(
+                "tmux", "send-keys", "-t", self.tmux_session, "C-c",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await proc0.communicate()
+            await asyncio.sleep(0.1)
+            
+            # 2. 发送消息内容（使用 -l 选项逐字发送）
             proc1 = await asyncio.create_subprocess_exec(
                 "tmux", "send-keys", "-t", self.tmux_session, "-l", message,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             await proc1.communicate()
+            await asyncio.sleep(0.1)
             
-            # 发送回车键
+            # 3. 发送回车键
             proc2 = await asyncio.create_subprocess_exec(
                 "tmux", "send-keys", "-t", self.tmux_session, "C-m",
                 stdout=asyncio.subprocess.PIPE,
@@ -254,29 +264,18 @@ class IFlowController:
                 return False
         
         try:
-            # 创建新的 tmux 会话（启动 bash）
-            result = await asyncio.create_subprocess_exec(
-                "tmux", "new-session", "-d", "-s", self.tmux_session,
+            # 参考旧版本：直接在创建 tmux 会话时启动 iflow
+            # 使用 shell=True 来解析命令
+            result = await asyncio.create_subprocess_shell(
+                f"tmux new-session -d -s {self.tmux_session} 'iflow --model {model}'",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             await asyncio.wait_for(result.communicate(), timeout=30)
             
             if result.returncode != 0:
-                logger.error(f"[IFlowController] Failed to create tmux session")
+                logger.error(f"[IFlowController] Failed to create tmux session with iflow")
                 return False
-            
-            # 等待会话创建
-            await asyncio.sleep(0.5)
-            
-            # 在 tmux 会话中启动 iflow
-            result = await asyncio.create_subprocess_exec(
-                "tmux", "send-keys", "-t", self.tmux_session,
-                f"iflow --model {model}", "C-m",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            await asyncio.wait_for(result.communicate(), timeout=10)
             
             logger.info(f"[IFlowController] iflow starting in tmux session '{self.tmux_session}'")
             

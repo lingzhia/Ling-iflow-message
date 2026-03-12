@@ -138,6 +138,60 @@ class MessageRecord:
 
 ---
 
+## iflow 交互实现
+
+### 启动 iflow
+
+参考旧版本实现，直接在创建 tmux 会话时启动 iflow：
+
+```bash
+tmux new-session -d -s <session_name> 'iflow --model <model>'
+```
+
+**优点**：
+- 避免分两步启动可能导致的时序问题
+- iflow 直接成为 tmux 会话的主进程
+
+### 发送消息
+
+参考旧版本实现，发送消息前先清除输入框：
+
+```
+1. 发送 C-c 清除当前输入框
+   tmux send-keys -t <session> C-c
+   等待 0.1 秒
+
+2. 发送消息内容（使用 -l 选项逐字发送）
+   tmux send-keys -t <session> -l <message>
+   等待 0.1 秒
+
+3. 发送回车键
+   tmux send-keys -t <session> C-m
+```
+
+**为什么要先发送 C-c**：
+- iflow 输入框可能已有残留内容
+- 确保消息从空白输入框开始
+- 避免与之前的输入混淆
+
+### 读取消息
+
+从 tmux 输出中提取消息：
+
+```
+1. 捕获最后 1000 行 tmux 输出
+   tmux capture-pane -t <session> -S -1000 -p
+
+2. 检测状态：查找"生成中"关键字
+
+3. 提取标记消息（✦ 回复、✻ 思考）
+   - 找到标记行
+   - 收集标记后的扩展内容
+   - 清理 UI 元素
+```
+
+---
+
 ## 消息处理流程
 
 ### 入站流程（外部 → iflow）
