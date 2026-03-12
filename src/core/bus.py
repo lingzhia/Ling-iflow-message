@@ -59,8 +59,6 @@ class MessageBus:
             "errors": 0
         }
         
-        self._running = False
-        
         logger.info("[MessageBus] 消息总线初始化完成")
     
     def register_module(self, module: BaseModule) -> bool:
@@ -375,55 +373,7 @@ class MessageBus:
                    f"routed={old_stats['messages_routed']}, published={old_stats['messages_published']}, "
                    f"errors={old_stats['errors']})")
     
-    async def start_all(self) -> bool:
-        """启动所有模块
-        
-        Returns:
-            是否全部启动成功
-        """
-        logger.info(f"[MessageBus] 🚀 开始启动所有模块 (共 {len(self.modules)} 个)")
-        
-        success_count = 0
-        failed_modules = []
-        
-        for module_id, module in self.modules.items():
-            try:
-                if await module.start():
-                    success_count += 1
-                    logger.info(f"[MessageBus]   ✅ {module_id} 启动成功")
-                else:
-                    failed_modules.append(module_id)
-                    logger.warning(f"[MessageBus]   ⚠️ {module_id} 启动返回 False")
-            except Exception as e:
-                failed_modules.append(module_id)
-                logger.error(f"[MessageBus]   ❌ {module_id} 启动失败: {e}", exc_info=True)
-        
-        self._running = True
-        
-        if success_count == len(self.modules):
-            logger.info(f"[MessageBus] ✅ 所有模块启动成功 ({success_count}/{len(self.modules)})")
-        else:
-            logger.warning(f"[MessageBus] ⚠️ 部分模块启动失败: {failed_modules} ({success_count}/{len(self.modules)} 成功)")
-        
-        return success_count == len(self.modules)
-    
-    async def stop_all(self) -> None:
-        """停止所有模块"""
-        if not self._running:
-            logger.debug("[MessageBus] 消息总线未运行，无需停止")
-            return
-        
-        logger.info(f"[MessageBus] 🛑 开始停止所有模块 (共 {len(self.modules)} 个)")
-        
-        for module_id, module in self.modules.items():
-            try:
-                await module.stop()
-                logger.info(f"[MessageBus]   ✅ {module_id} 已停止")
-            except Exception as e:
-                logger.error(f"[MessageBus]   ❌ {module_id} 停止失败: {e}", exc_info=True)
-        
-        self._running = False
-        logger.info("[MessageBus] ✅ 所有模块已停止")
+
     
     def __repr__(self) -> str:
         return f"MessageBus(modules={len(self.modules)}, bindings={len(self.bindings)}, topics={len(self.subscribers)})"

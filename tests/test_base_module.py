@@ -87,8 +87,6 @@ async def test_message_bus_integration():
     await bus.send_to_module(msg)
     assert len(module.received_messages) == 1
     print("✅ test_message_bus_integration - send passed")
-    
-    await bus.stop_all()
 
 
 async def test_background_task():

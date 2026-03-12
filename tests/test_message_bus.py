@@ -159,7 +159,7 @@ async def test_publish_subscribe():
 
 
 async def test_batch_operations():
-    """测试批量操作"""
+    """测试批量操作 - 直接启动/停止模块"""
     bus = MessageBus()
     module1 = MockModule("module1")
     module2 = MockModule("module2")
@@ -168,18 +168,21 @@ async def test_batch_operations():
     bus.register_module(module1)
     bus.register_module(module2)
     
-    # 测试启动所有模块
-    result = await bus.start_all()
-    assert result is True
+    # 直接启动模块
+    result1 = await module1.start()
+    result2 = await module2.start()
+    assert result1 is True
+    assert result2 is True
     assert module1.running
     assert module2.running
-    print("✅ test_batch_operations - start_all passed")
+    print("✅ test_batch_operations - start modules passed")
     
-    # 测试停止所有模块
-    await bus.stop_all()
+    # 直接停止模块
+    await module1.stop()
+    await module2.stop()
     assert not module1.running
     assert not module2.running
-    print("✅ test_batch_operations - stop_all passed")
+    print("✅ test_batch_operations - stop modules passed")
 
 
 async def test_statistics():

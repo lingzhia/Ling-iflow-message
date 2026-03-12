@@ -65,7 +65,8 @@ class IntegrationTestRunner:
         
         # 启动模块
         logger.info("启动模块...")
-        await self.bus.start_all()
+        await self.wechat.start()
+        await self.iflow.start()
         
         # 等待 iflow 完全启动
         logger.info("等待 iflow 启动完成...")
@@ -84,7 +85,8 @@ class IntegrationTestRunner:
         """清理测试环境"""
         logger.info("")
         logger.info("清理测试环境...")
-        await self.bus.stop_all()
+        await self.iflow.stop()
+        await self.wechat.stop()
         logger.info("✅ 测试环境清理完成")
     
     async def test_single_message_flow(self):
