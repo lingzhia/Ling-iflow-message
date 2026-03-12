@@ -77,11 +77,13 @@ class IFlowMonitor:
         
         # 候选消息缓存（用于延迟提取）
         self._candidate_messages: List[Dict] = []  # 当前所有标记消息
+        self._last_candidate_messages: List[Dict] = []  # 上次的标记消息（用于检测新增）
         
         # 稳定检测（用于确认生成中真正消失）
         self._stable_start_time: Optional[datetime] = None  # 稳定开始时间
         self._stable_duration: float = 2.0  # 稳定持续时间（秒）
         self._interaction_complete: bool = False  # 当前交互是否完成
+        self._generating_state_started: bool = False  # 生成状态是否已开始
         
         # 订阅者列表
         self._subscribers: List[Callable] = []
@@ -192,20 +194,27 @@ class IFlowMonitor:
             is_generating = self._detect_generating(output)
             
             # 检测新标记（使用长度比较）
-            if not self._interaction_complete and len(current_messages) > len(self._candidate_messages):
+            if not self._interaction_complete and len(current_messages) > len(self._last_candidate_messages):
                 # 有新标记
-                new_message_count = len(current_messages) - len(self._candidate_messages)
+                new_message_count = len(current_messages) - len(self._last_candidate_messages)
                 
-                logger.debug(f"[IFlowMonitor] 检测到 {new_message_count} 个新标记，当前总数: {len(current_messages)}")
+                logger.debug(f"[IFlowMonitor] 检测到 {new_message_count} 个新标记，当前总数: {len(current_messages)}，上次总数: {len(self._last_candidate_messages)}")
                 
-                # 倒数第二原则：发送上一个候选的最后一个（倒数第二，已完整）
-                if len(self._candidate_messages) > 0:
-                    message_to_send = self._candidate_messages[-1]
-                    logger.debug(f"[IFlowMonitor] 发送倒数第二个标记（第 {len(self._candidate_messages)} 个）")
-                    logger.debug(f"[IFlowMonitor] 发送内容: {message_to_send['content']}")
-                    await self._send_message(message_to_send)
+                # 发送新增的标记
+                if new_message_count > 0:
+                    start_index = len(self._last_candidate_messages)
+                    end_index = len(current_messages)
+                    
+                    logger.debug(f"[IFlowMonitor] 发送标记范围: {start_index} 到 {end_index}")
+                    
+                    for i in range(start_index, end_index):
+                        message_to_send = current_messages[i]
+                        logger.debug(f"[IFlowMonitor] 发送标记 #{i+1}/{len(current_messages)}")
+                        logger.debug(f"[IFlowMonitor] 发送内容: {message_to_send['content']}")
+                        await self._send_message(message_to_send)
                 
-                # 更新候选缓存
+                # 更新缓存
+                self._last_candidate_messages = self._candidate_messages  # 保存上次
                 self._candidate_messages = current_messages
                 
                 logger.debug(f"[IFlowMonitor] 候选缓存更新为 {len(self._candidate_messages)} 个标记")
@@ -229,16 +238,37 @@ class IFlowMonitor:
                         # 稳定2秒，确认结束
                         logger.info(f"[IFlowMonitor] 生成中稳定消失（{stable_time:.1f}s），交互结束")
                         
-                        # 发送最后一个标记（现在已经完整了）
+                        # 发送最后一个标记（只有在未发送的情况下）
                         if len(self._candidate_messages) > 0:
                             message_to_send = self._candidate_messages[-1]
-                            logger.debug(f"[IFlowMonitor] 发送最后一个标记（第 {len(self._candidate_messages)} 个）")
-                            logger.debug(f"[IFlowMonitor] 发送内容: {message_to_send['content']}")
-                            await self._send_message(message_to_send)
+                            # 计算哈希检查是否已发送
+                            msg_hash = hashlib.md5(f"{message_to_send['marker_type']}:{message_to_send['content']}".encode()).hexdigest()
+                            
+                            if msg_hash not in self._processed_hashes:
+                                # 检查是否有部分重叠的消息（iflow 可能逐步生成消息）
+                                # 如果前一条消息是当前消息的前缀，则认为它们是同一条消息
+                                if len(self._candidate_messages) > 1:
+                                    prev_message = self._candidate_messages[-2]
+                                    prev_hash = hashlib.md5(f"{prev_message['marker_type']}:{prev_message['content']}".encode()).hexdigest()
+                                    
+                                    # 检查前一条消息是否是当前消息的前缀
+                                    if message_to_send['content'].startswith(prev_message['content']) and prev_hash in self._processed_hashes:
+                                        logger.debug(f"[IFlowMonitor] 检测到部分重叠，移除重复发送")
+                                        # 从已发送集合中移除前一条消息
+                                        self._processed_hashes.discard(prev_hash)
+                                        logger.debug(f"[IFlowMonitor] 已移除前一条消息的哈希")
+                                
+                                logger.debug(f"[IFlowMonitor] 发送最后一个标记（第 {len(self._candidate_messages)} 个）")
+                                logger.debug(f"[IFlowMonitor] 发送内容: {message_to_send['content']}")
+                                await self._send_message(message_to_send)
+                            else:
+                                logger.debug(f"[IFlowMonitor] 最后一个标记已发送，跳过")
                         
                         # 清空候选缓存
                         self._candidate_messages = []
+                        self._last_candidate_messages = []
                         self._stable_start_time = None
+                        self._generating_state_started = False
                         
                         # 设置交互完成标志，防止旧消息被重复检测
                         self._interaction_complete = True
@@ -258,7 +288,18 @@ class IFlowMonitor:
                     self._interaction_complete = False
             
             # 检测状态变化
+            old_generating = self._state == IFlowState.GENERATING
             await self._check_state(output)
+            
+            # 检测生成状态是否首次开始
+            new_generating = self._state == IFlowState.GENERATING
+            if new_generating and not old_generating:
+                # 生成状态首次开始，清空缓存
+                logger.debug(f"[IFlowMonitor] 生成状态首次开始，清空缓存")
+                self._candidate_messages = []
+                self._last_candidate_messages = []
+                self._processed_hashes.clear()
+                self._generating_state_started = True
             
         except Exception as e:
             logger.error(f"[IFlowMonitor] Error checking messages: {e}", exc_info=True)
