@@ -264,9 +264,10 @@ class IFlowMonitor:
         """从 tmux 输出中提取消息
         
         iflow 输出格式：
-        - ✦ 回复内容...  (回复消息，内容直接在标记行)
-        - ✻ 思考中...    (思考状态)
-        - 后续行通常是 UI 元素（如 "生成中 XXs"）
+        - ✦ 回复内容...  (回复消息，标记行)
+        - ✻ 思考中...    (思考状态，标记行)
+        - 后续缩进行：消息延续内容
+        - UI 行（不包含）：生成中、分隔符等
         
         Args:
             output: tmux 输出
@@ -277,18 +278,46 @@ class IFlowMonitor:
         messages = []
         lines = output.split('\n')
         
-        for line in lines:
+        for i, line in enumerate(lines):
             # 检查标记行
             if '✦' in line or '✻' in line:
                 # 提取标记内容（去掉标记符号）
                 marker_type = '✦' if '✦' in line else '✻'
                 marker_content = line.replace('✦', '').replace('✻', '').strip()
                 
-                if marker_content:  # 只有非空内容才添加
-                    messages.append({
-                        'content': marker_content,
-                        'marker_type': marker_type,
-                    })
+                if not marker_content:
+                    continue
+                
+                # 收集后续行（消息延续）
+                content_lines = [marker_content]
+                
+                # 遍历后续行，收集缩进的内容
+                for j in range(i + 1, len(lines)):
+                    next_line = lines[j]
+                    
+                    # 如果遇到新的标记行或分隔符，停止
+                    if '✦' in next_line or '✻' in next_line or next_line.startswith('---') or next_line.startswith('═') or next_line.startswith('─'):
+                        break
+                    
+                    # 跳过"生成中"等 UI 行
+                    if '生成中' in next_line and '按' in next_line:
+                        continue
+                    
+                    # 如果行以缩进开头，认为是消息延续
+                    if next_line.startswith('  ') or next_line.startswith('\t'):
+                        content_lines.append(next_line.strip())
+                    else:
+                        # 非缩进行，停止
+                        break
+                
+                # 合并内容
+                full_content = '\n'.join(content_lines)
+                
+                messages.append({
+                    'content': full_content,
+                    'marker_type': marker_type,
+                    'marker_only': marker_content  # 用于哈希计算
+                })
         
         return messages
     
@@ -304,19 +333,12 @@ class IFlowMonitor:
         new_messages = []
         
         for msg_data in messages:
-            # 清理消息内容
-            content = self._clean_message_content(msg_data['content'])
-            
-            # 如果内容为空，使用 marker_id 作为内容
-            if not content:
-                content = self._clean_message_content(msg_data.get('marker_id', ''))
-            
-            if not content:
-                continue
-            
-            # 计算消息哈希
+            # 使用标记行内容进行哈希计算（忽略后续行，避免动态 UI 影响）
+            marker_content = msg_data.get('marker_only', msg_data.get('content', ''))
             marker_type = msg_data.get('marker_type', '')
-            msg_hash = hashlib.md5(f"{marker_type}:{content}".encode()).hexdigest()
+            
+            # 计算哈希（只基于标记行，避免动态内容影响）
+            msg_hash = hashlib.md5(f"{marker_type}:{marker_content}".encode()).hexdigest()
             
             # 检查是否已处理
             if msg_hash in self._processed_hashes:
@@ -333,10 +355,12 @@ class IFlowMonitor:
             # 确定消息类型
             msg_type = MessageType.REPLY if marker_type == '✦' else MessageType.OTHER
             
-            # 创建出站消息
+            # 创建出站消息（使用完整内容）
+            full_content = msg_data['content']
+            
             message = OutboundMessage(
                 type=msg_type,
-                content=content,
+                content=full_content,
                 receiver="",  # 由 IFlowModule 设置
                 scope="reply_only",  # 由 IFlowModule 设置
                 timestamp=datetime.now(),
