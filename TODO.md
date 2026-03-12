@@ -47,9 +47,9 @@
 - [x] `/spam` 拒绝机制测试
 
 ### tools/wechat_test_tool.py
-- [ ] listen 模式测试
-- [ ] send 模式测试
-- [ ] 与 IFlowModule 联动测试
+- [x] listen 模式测试
+- [x] send 模式测试
+- [x] 与 IFlowModule 联动测试（需用户配合发送消息）
 
 ---
 
