@@ -4,23 +4,18 @@ Ling-iflow 是一个 iflow CLI 交互模式管理工具，通过 tmux 管理和�
 
 ## 项目状态
 
-🚧 **正在重构中**
+✅ **重构完成**
 
-当前项目正在进行架构重构，从紧耦合的架构升级到基于消息总线的松耦合架构：
+项目已完成从紧耦合架构到基于消息总线的松耦合架构的重构。
 
-| 版本 | 状态 | 说明 |
-|------|------|------|
-| `src/` | ✅ 稳定 | 旧版本代码，功能完整 |
-| `src-v2/` | 🚧 开发中 | 新版本代码，重构架构 |
-
-## 新架构概述
+## 架构概述
 
 基于**发布-订阅模式**和**消息总线**设计，实现模块解耦：
 
 ### 三大核心模块
 
 1. **企业微信消息模块** - 纯粹的企业微信 API 封装
-2. **消息分发模块（消息总线）** - 模块间消息路由和分发
+2. **消息总线** - 模块间消息路由和分发
 3. **iflow 消息模块** - iflow CLI 的完整管理
 
 ### 核心优势
@@ -34,7 +29,17 @@ Ling-iflow 是一个 iflow CLI 交互模式管理工具，通过 tmux 管理和�
 
 ```
 Ling-iflow/
-├── src/                # 旧版本（稳定）
+├── src/                # 新版本（重构完成）
+│   ├── core/           # 核心基础类
+│   │   ├── base.py     # 模块基类
+│   │   ├── bus.py      # 消息总线
+│   │   └── message.py  # 消息定义
+│   ├── modules/        # 模块实现
+│   │   ├── wechat/     # 企业微信模块
+│   │   ├── iflow/      # iflow 模块
+│   │   └── command/    # 命令处理器
+│   └── bot.py          # 主程序入口
+├── src_old/            # 旧版本（备份）
 │   ├── channels/       # 渠道模块
 │   ├── interactive/    # 交互模式核心模块
 │   ├── config/         # 配置管理模块
@@ -46,16 +51,25 @@ Ling-iflow/
 │   ├── wechat_bot.py   # 企业微信 Bot 主程序
 │   ├── tmux_manager.py # tmux 管理工具
 │   └── README-old.md   # 旧版本 README 备份
-├── src-v2/             # 新版本（开发中）
-│   ├── core/           # 核心基础类
-│   │   └── bus/        # 消息总线
-│   └── modules/        # 模块实现
-│       ├── wechat/     # 企业微信模块
-│       └── iflow/      # iflow 模块
 ├── design-v2/          # 重构设计方案
 │   ├── 01-模块重构方案.md
+│   ├── 02-重构计划.md
+│   ├── 03-微信模块增强方案.md
+│   ├── 04-IFlow模块设计方案.md
+│   ├── 05-消息总线设计方案.md
 │   └── README.md
 ├── tests/              # 测试文件
+│   ├── test_message_bus.py
+│   ├── test_base_module.py
+│   ├── test_iflow_module.py
+│   ├── test_wechat_module.py
+│   ├── test_command_handler.py
+│   ├── test_integration.py
+│   ├── test_full_integration.py
+│   └── mock_wechat.py
+├── tools/              # 测试工具
+│   ├── iflow_interactive_tool.py
+│   └── wechat_test_tool.py
 ├── logs/               # 日志目录
 ├── config.json         # 配置文件
 ├── config.example.json # 配置示例
@@ -65,16 +79,16 @@ Ling-iflow/
 
 ## 文档
 
-### 重构设计文档
+### 设计文档
 - [design-v2/01-模块重构方案.md](design-v2/01-模块重构方案.md) - 详细的模块拆分方案
-- [design-v2/README.md](design-v2/README.md) - 重构进度和说明
+- [design-v2/02-重构计划.md](design-v2/02-重构计划.md) - 重构计划和进度
+- [design-v2/03-微信模块增强方案.md](design-v2/03-微信模块增强方案.md) - 微信模块设计
+- [design-v2/04-IFlow模块设计方案.md](design-v2/04-IFlow模块设计方案.md) - IFlow模块设计
+- [design-v2/05-消息总线设计方案.md](design-v2/05-消息总线设计方案.md) - 消息总线设计
 
-### 旧版本文档
-- [src/design/](src/design/) - 旧版本完整设计文档
-- [src/README-old.md](src/README-old.md) - 旧版本 README
-- [src/AGENTS.md](src/AGENTS.md) - Agent 上下文文档
-- [src/TOOLS.md](src/TOOLS.md) - 工具说明文档
-- [src/WECHAT_SETUP.md](src/WECHAT_SETUP.md) - 企业微信配置说明文档
+### 旧版本文档（参考）
+- [src_old/README-old.md](src_old/README-old.md) - 旧版本 README
+- [src_old/WECHAT_SETUP.md](src_old/WECHAT_SETUP.md) - 企业微信配置说明
 
 ## 快速开始
 
@@ -86,6 +100,9 @@ pip install -e .
 
 # 安装企业微信依赖
 pip install -e ".[wechat]"
+
+# 完整安装（包含开发和微信功能）
+pip install -e ".[dev,wechat]"
 ```
 
 ### 配置
@@ -98,36 +115,94 @@ cp config.example.json config.json
 vim config.json
 ```
 
-### 启动旧版本（稳定）
+配置项说明：
+- `tmux_sessions`: iflow 会话配置（支持多实例）
+- `bots`: 企业微信机器人配置（支持多机器人）
+- `log_level`: 日志级别
+
+### 启动
 
 ```bash
-# 启动服务（iflow + 企业微信）
-python src/manage.py start
-
-# 启动指定序号
-python src/manage.py start 2
-
-# 仅启动 iflow
-python src/manage.py start --no-wechat
-
-# 前台模式
-python src/manage.py start --foreground
+# 启动服务
+python3 -m src.bot config.json
 ```
 
-### 启动新版本（开发中）
+## 消息流转流程
 
-新版本正在开发中，暂不提供启动方式。
+```
+企业微信用户发送消息
+        ↓
+[WeChatChannel] 接收回调
+        ↓
+[WeChatModule] 处理消息
+        ↓
+[MessageBus] 路由到 iflow 模块
+        ↓
+[IFlowController] 注入到 iflow CLI
+        ↓
+iflow CLI 处理并返回
+        ↓
+[IFlowMonitor] 监听并提取输出
+        ↓
+[IFlowModule] 封装为消息
+        ↓
+[MessageBus] 路由回 WeChat 模块
+        ↓
+[WeChatChannel] 发送到企业微信
+        ↓
+用户收到回复
+```
 
-## 重构进度
+## 测试
 
-- [x] 方案设计
-- [x] 项目结构调整
-- [ ] 核心基础类实现
-- [ ] 消息总线实现
-- [ ] 企业微信模块实现
-- [ ] iflow 模块实现
-- [ ] 集成测试
-- [ ] 代码清理
+### 运行测试
+
+```bash
+# 运行所有测试
+pytest tests/
+
+# 运行特定测试
+pytest tests/test_message_bus.py
+pytest tests/test_iflow_module.py
+```
+
+### 测试工具
+
+```bash
+# IFlow 交互测试工具
+python3 tools/iflow_interactive_tool.py
+
+# 企业微信测试工具
+python3 tools/wechat_test_tool.py listen
+```
+
+## 功能特性
+
+### 已实现 ✅
+
+- ✅ IFlow 完整管理（启动/停止/消息注入/输出监控）
+- ✅ 企业微信回调接收和消息发送
+- ✅ 消息总线路由和绑定
+- ✅ 命令处理（/help, /status, /new, /sessions）
+- ✅ 多 iflow 实例支持
+- ✅ 多企业微信机器人支持
+- ✅ 消息状态检测（idle/generating）
+- ✅ 消息分类（reply/other/complete）
+- ✅ 拒绝机制（生成中拒绝新消息）
+- ✅ 多轮对话来源归属
+- ✅ 交互日志记录
+
+### 待实现 🚧
+
+- 🚧 错误处理和重试机制
+- 🚧 日志系统优化
+- 🚧 Web 控制台
+- 🚧 配置热更新
+- 🚧 监控告警
+
+## 贡献
+
+欢迎提交 Issue 和 Pull Request。
 
 ## 许可证
 
