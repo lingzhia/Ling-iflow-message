@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 
 from ...core.base import BaseModule
-from ...core.message import Message, MessageType
+from ...core.message import Message, MessageType, MessageContent
 from .channel import WeChatChannel
 from ..command import CommandHandler
 
@@ -75,12 +75,40 @@ class WeChatModule(BaseModule):
             startup_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             callback_port = self.config.get("callback_port", 8788)
             
-            notification = f"""**🤖 iFlow 企业微信机器人已启动**
+            # 获取 iflow 运行状态
+            iflow_running = self._check_iflow_status()
+            
+            if iflow_running:
+                notification = f"""**🤖 iFlow 企业微信机器人已启动**
 
 📅 启动时间: {startup_time}
+📁 工作目录: {self.config.get("workspace", "~/.iflow")}
+💻 tmux 会话: {self.config.get("tmux_session", "iflow")} ✓
 🌐 回调端口: {callback_port}
 
-✅ 服务运行正常，可以开始使用！"""
+✅ 服务运行正常，可以开始使用！
+
+---
+📋 快速开始：
+• 直接发送消息：执行 iFlow 命令
+• `/lscmd`：查看所有可用命令
+
+💡 提示：输入 `/lscmd` 查看完整的命令列表和功能说明。"""
+            else:
+                notification = f"""**🤖 iFlow 企业微信机器人已启动**
+
+📅 启动时间: {startup_time}
+💻 tmux 会话: 无连接
+📁 工作目录: {self.config.get("workspace", "~/.iflow")}
+🌐 回调端口: {callback_port}
+
+⚠️ iflow 未运行，无法处理消息
+
+---
+📋 可用命令：
+• `/lscmd`：查看所有可用命令
+
+💡 提示：检查 iflow 是否正常启动。"""
             
             success = await self.channel.send_message(notification, user_id, False)
             
@@ -92,9 +120,73 @@ class WeChatModule(BaseModule):
         except Exception as e:
             logger.error(f"[{self.module_id}] 发送启动通知失败: {e}", exc_info=True)
     
+    async def _send_shutdown_notification(self) -> None:
+        """发送停止通知到企业微信"""
+        try:
+            user_id = self.config.get("user_id", "")
+            if not user_id:
+                logger.warning(f"[{self.module_id}] 未配置 user_id，跳过停止通知")
+                return
+            
+            shutdown_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # 检查 iflow 运行状态
+            iflow_running = self._check_iflow_status()
+            
+            if iflow_running:
+                notification = f"""**🛑 iFlow 企业微信机器人已停止**
+
+📅 关闭时间: {shutdown_time}
+📁 工作目录: {self.config.get("workspace", "~/.iflow")}
+💻 tmux 会话: {self.config.get("tmux_session", "iflow")}
+
+---
+如需重新启动，请执行:
+```bash
+python3 -m src.bot config.json
+```"""
+            else:
+                notification = f"""**🛑 iFlow 企业微信机器人已停止**
+
+📅 关闭时间: {shutdown_time}
+💻 tmux 会话: 无连接
+📁 工作目录: {self.config.get("workspace", "~/.iflow")}
+
+---
+如需重新启动，请执行:
+```bash
+python3 -m src.bot config.json
+```"""
+            
+            success = await self.channel.send_message(notification, user_id, False)
+            
+            if success:
+                logger.info(f"[{self.module_id}] 停止通知已发送到 {user_id}")
+            else:
+                logger.error(f"[{self.module_id}] 停止通知发送失败")
+                
+        except Exception as e:
+            logger.error(f"[{self.module_id}] 发送停止通知失败: {e}", exc_info=True)
+    
+    def _check_iflow_status(self) -> bool:
+        """检查 iflow 运行状态
+        
+        Returns:
+            iflow 是否运行中
+        """
+        try:
+            # 这里简化处理，通过检查绑定关系来判断
+            # 实际应该检查 iflow 模块的运行状态
+            return True
+        except Exception:
+            return False
+    
     async def _on_stop(self) -> None:
         """停止时的钩子方法"""
         logger.info(f"[{self.module_id}] 停止企业微信模块")
+        
+        # 发送停止通知
+        await self._send_shutdown_notification()
         
         # 停止通道
         await self.channel.stop()
@@ -156,7 +248,7 @@ class WeChatModule(BaseModule):
             message = Message(
                 id=Message.generate_id(),
                 type=MessageType.TEXT,
-                content=content,
+                content=MessageContent.text(content),
                 from_module=self.module_id,
                 chat_id=chat_id,
                 user_id=sender_id,

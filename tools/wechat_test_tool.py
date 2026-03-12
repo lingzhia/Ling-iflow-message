@@ -151,18 +151,9 @@ class WeChatTestTool:
         # 启动模块
         await self.wechat_module.start()
         
-        # 创建消息
-        msg = Message(
-            id=Message.generate_id(),
-            type=MessageType.TEXT,
-            content=MessageContent(type=MessageType.TEXT, text=message),
-            from_module="test",
-            to_module="wechat_test"
-        )
-        
-        # 发送消息
+        # 直接发送消息到企业微信（不通过消息总线）
         logger.info("⏳ 正在发送...")
-        success = await self.wechat_module.send_to_bus(msg)
+        success = await self.wechat_module.send_to_wechat(message, bot_config['user_id'], False)
         
         if success:
             logger.info("✅ 消息发送成功")
