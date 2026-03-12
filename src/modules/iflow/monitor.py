@@ -81,6 +81,7 @@ class IFlowMonitor:
         # 稳定检测（用于确认生成中真正消失）
         self._stable_start_time: Optional[datetime] = None  # 稳定开始时间
         self._stable_duration: float = 2.0  # 稳定持续时间（秒）
+        self._interaction_complete: bool = False  # 当前交互是否完成
         
         # 订阅者列表
         self._subscribers: List[Callable] = []
@@ -191,7 +192,7 @@ class IFlowMonitor:
             is_generating = self._detect_generating(output)
             
             # 检测新标记（使用长度比较）
-            if len(current_messages) > len(self._candidate_messages):
+            if not self._interaction_complete and len(current_messages) > len(self._candidate_messages):
                 # 有新标记
                 new_message_count = len(current_messages) - len(self._candidate_messages)
                 
@@ -222,18 +223,26 @@ class IFlowMonitor:
                         # 稳定2秒，确认结束
                         logger.info(f"[IFlowMonitor] 生成中稳定消失（{stable_time:.1f}s），交互结束")
                         
-                        # 只清空候选缓存，不清空去重集合（防止重复发送）
+                        # 清空候选缓存
                         self._candidate_messages = []
                         self._stable_start_time = None
-                        logger.debug(f"[IFlowMonitor] 已清空候选缓存，保留去重集合（{len(self._processed_hashes)} 条）")
+                        
+                        # 设置交互完成标志，防止旧消息被重复检测
+                        self._interaction_complete = True
+                        logger.debug(f"[IFlowMonitor] 交互完成标志已设置")
                     else:
                         logger.debug(f"[IFlowMonitor] 等待稳定... ({stable_time:.1f}s / {self._stable_duration}s)")
             
-            # 生成中重新出现，重置计时器
+            # 生成中重新出现，重置计时器和交互完成标志
             elif is_generating:
                 if self._stable_start_time is not None:
                     logger.debug(f"[IFlowMonitor] 生成中重新出现，重置稳定计时器")
                     self._stable_start_time = None
+                
+                # 生成中重新出现，重置交互完成标志
+                if self._interaction_complete:
+                    logger.debug(f"[IFlowMonitor] 生成中重新出现，重置交互完成标志")
+                    self._interaction_complete = False
             
             # 检测状态变化
             await self._check_state(output)
