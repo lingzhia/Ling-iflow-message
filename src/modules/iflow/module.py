@@ -188,7 +188,7 @@ class IFlowModule(BaseModule):
             scope = message.metadata.get('scope', 'reply_only')
         
         # 发送消息
-        response = await self.send(content, source, scope)
+        response = await self.send(content, source, scope, chat_id, user_id, is_group)
         
         if not response.success:
             logger.warning(f"[{self.module_id}] 消息发送失败: {response.message}")
@@ -199,7 +199,10 @@ class IFlowModule(BaseModule):
         self,
         content: str,
         source: str = "",
-        scope: str = "reply_only"
+        scope: str = "reply_only",
+        chat_id: str = "",
+        user_id: str = "",
+        is_group: bool = False
     ) -> Response:
         """发送消息到 iflow
         
@@ -207,6 +210,9 @@ class IFlowModule(BaseModule):
             content: 消息内容
             source: 来源模块 ID（可选）
             scope: 返回范围（reply_only / all）
+            chat_id: 聊天 ID（可选）
+            user_id: 用户 ID（可选）
+            is_group: 是否为群聊（可选）
             
         Returns:
             Response: 成功或拒绝响应
