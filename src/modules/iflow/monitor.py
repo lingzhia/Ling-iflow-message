@@ -198,10 +198,11 @@ class IFlowMonitor:
                 
                 logger.debug(f"[IFlowMonitor] 检测到 {new_message_count} 个新标记，当前总数: {len(current_messages)}")
                 
-                # 发送所有新消息（从上一个候选之后的消息）
-                for i in range(len(self._candidate_messages), len(current_messages)):
-                    message_to_send = current_messages[i]
+                # 倒数第二原则：发送上一个候选的最后一个（倒数第二，已完整）
+                if len(self._candidate_messages) > 0:
+                    message_to_send = self._candidate_messages[-1]
                     await self._send_message(message_to_send)
+                    logger.debug(f"[IFlowMonitor] 发送倒数第二个标记（第 {len(self._candidate_messages)} 个）")
                 
                 # 更新候选缓存
                 self._candidate_messages = current_messages
@@ -222,6 +223,12 @@ class IFlowMonitor:
                     if stable_time >= self._stable_duration:
                         # 稳定2秒，确认结束
                         logger.info(f"[IFlowMonitor] 生成中稳定消失（{stable_time:.1f}s），交互结束")
+                        
+                        # 发送最后一个标记（现在已经完整了）
+                        if len(self._candidate_messages) > 0:
+                            message_to_send = self._candidate_messages[-1]
+                            await self._send_message(message_to_send)
+                            logger.debug(f"[IFlowMonitor] 发送最后一个标记（第 {len(self._candidate_messages)} 个）")
                         
                         # 清空候选缓存
                         self._candidate_messages = []
