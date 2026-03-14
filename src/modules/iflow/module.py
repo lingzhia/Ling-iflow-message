@@ -406,18 +406,18 @@ class IFlowModule(BaseModule):
     
     async def _on_state_change(self, old_state: IFlowState, new_state: IFlowState, duration: int = 0) -> None:
         """处理状态变更
-        
+
         Args:
             old_state: 旧状态
             new_state: 新状态
             duration: 生成持续时间（秒）
         """
         logger.info(f"[{self.module_id}] State changed: {old_state.value} -> {new_state.value}, duration={duration}s")
-        
+
         if new_state == IFlowState.IDLE and old_state == IFlowState.GENERATING:
             # 生成完成
             completed = self.message_store.complete_current()
-            
+
             if completed:
                 # 发送完成通知
                 complete_message = OutboundMessage(
@@ -430,8 +430,38 @@ class IFlowModule(BaseModule):
                         "duration": duration
                     }
                 )
-                
+
+                # 通知订阅者
                 await self._notify_subscribers(complete_message)
+
+                # 发送到消息总线（与 REPLY/OTHER 消息保持一致）
+                msg = Message(
+                    id=Message.generate_id(),
+                    type=CoreMessageType.TEXT,
+                    content=MessageContent(type=CoreMessageType.TEXT, text=complete_message.content),
+                    from_module=self.module_id,
+                    metadata={
+                        "msg_type": "iflow_complete",
+                        "complete_type": complete_message.type.value,
+                        "receiver": complete_message.receiver,
+                        "scope": complete_message.scope,
+                        "reply_count": completed.reply_count,
+                        "duration": duration
+                    }
+                )
+
+                # 调用钩子（用于测试）
+                if self._message_sent_hook:
+                    try:
+                        await self._message_sent_hook(msg)
+                    except Exception as e:
+                        logger.error(f"[{self.module_id}] 消息发送钩子错误: {e}", exc_info=True)
+
+                # 发送到消息总线
+                if self.message_bus:
+                    await self.send_to_bus(msg)
+                    logger.debug(f"[{self.module_id}] 已发送 iflow 完成通知到消息总线")
+
                 logger.info(f"[{self.module_id}] 消息处理完成: {completed.message_id}, replies={completed.reply_count}")
     
     async def _notify_subscribers(self, message: OutboundMessage) -> None:
