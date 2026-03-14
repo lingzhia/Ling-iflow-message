@@ -26,14 +26,16 @@ class LingIflowBot:
     管理消息总线和所有模块的生命周期。
     """
     
-    def __init__(self, config_path: str = "config.json"):
+    def __init__(self, config_path: str = "config.json", active_group: str = "all"):
         """初始化机器人
         
         Args:
             config_path: 配置文件路径
+            active_group: 要启动的组 (all, bot1, bot2)
         """
         self.config_path = config_path
         self.config: Dict = {}
+        self.active_group = active_group
         
         # 核心组件
         self.bus: Optional[MessageBus] = None
@@ -109,18 +111,55 @@ class LingIflowBot:
     
     async def _setup_iflow_modules(self) -> None:
         """创建并注册 IFlowModule"""
-        tmux_sessions = self.config.get("tmux_sessions", [])
+        # 组名映射：g1 -> bot1, g2 -> bot2
+        group_mapping = {
+            "g1": "bot1",
+            "g2": "bot2"
+        }
+        
+        # 创建反向映射：bot名 -> tmux_session名
+        bot_to_session = {}
+        bots = self.config.get("bots", [])
+        for bot_config in bots:
+            if bot_config.get("enabled", False):
+                bot_name = bot_config.get("name")
+                tmux_session = bot_config.get("tmux_session", "iflow")
+                bot_to_session[bot_name] = tmux_session
+        
+        # 收集需要启动的 tmux_session
+        active_sessions = set()
+        if self.active_group != "all":
+            # 将组名转换为 bot 名，然后获取对应的 tmux_session
+            target_bot_name = group_mapping.get(self.active_group, self.active_group)
+            if target_bot_name in bot_to_session:
+                active_sessions.add(bot_to_session[target_bot_name])
+        else:
+            # 收集所有启用的 bot 的 tmux_session
+            active_sessions.update(bot_to_session.values())
+        
+        # 如果没有找到任何 session，使用默认的
+        if not active_sessions:
+            active_sessions.add(self.config.get("tmux_session", "iflow"))
+        
+        # 获取所有 tmux_sessions 配置
+        tmux_sessions_config = self.config.get("tmux_sessions", [])
         
         # 如果没有配置 tmux_sessions，使用默认配置
-        if not tmux_sessions:
-            tmux_sessions = [{
+        if not tmux_sessions_config:
+            tmux_sessions_config = [{
                 "name": self.config.get("tmux_session", "iflow"),
                 "workspace": self.config.get("workspace", "~/.iflow"),
                 "model": self.config.get("model", "kimi-k2.5")
             }]
         
-        for session_config in tmux_sessions:
+        for session_config in tmux_sessions_config:
             session_name = session_config.get("name", "iflow")
+            
+            # 组过滤
+            if session_name not in active_sessions:
+                logger.info(f"会话 {session_name} 不在启动组 {self.active_group} 中，跳过")
+                continue
+            
             module_id = f"iflow_{session_name}"
             
             logger.info(f"创建 IFlowModule: {module_id}")
@@ -132,7 +171,7 @@ class LingIflowBot:
                 workspace=session_config.get("workspace", "~/.iflow")
             )
             
-            # 注册到消息总线
+            # 注册到 message 总线
             self.bus.register_module(iflow)
             self.iflow_modules[session_name] = iflow
             
@@ -140,6 +179,12 @@ class LingIflowBot:
     
     async def _setup_wechat_modules(self) -> None:
         """创建并注册 WeChatModule"""
+        # 组名映射：g1 -> bot1, g2 -> bot2
+        group_mapping = {
+            "g1": "bot1",
+            "g2": "bot2"
+        }
+        
         bots = self.config.get("bots", [])
         
         for bot_config in bots:
@@ -148,6 +193,15 @@ class LingIflowBot:
                 continue
             
             bot_name = bot_config.get("name", "default")
+            
+            # 组过滤
+            if self.active_group != "all":
+                # 将组名转换为 bot 名
+                target_bot_name = group_mapping.get(self.active_group, self.active_group)
+                if bot_name != target_bot_name:
+                    logger.info(f"机器人 {bot_name} 不在启动组 {self.active_group} 中，跳过")
+                    continue
+            
             module_id = f"wechat_{bot_name}"
             
             logger.info(f"创建 WeChatModule: {module_id}")
@@ -186,16 +240,19 @@ class LingIflowBot:
         """启动所有模块"""
         logger.info("启动所有模块...")
         
-        # 启动 IFlowModule
+        # 先启动 IFlowModule（确保 iflow 准备好）
         for session_name, iflow in self.iflow_modules.items():
             try:
                 logger.info(f"启动 IFlowModule: {session_name}")
-                await iflow.start()
-                logger.info(f"IFlowModule {session_name} 启动成功")
+                success = await iflow.start()
+                if success:
+                    logger.info(f"IFlowModule {session_name} 启动成功")
+                else:
+                    logger.warning(f"IFlowModule {session_name} 启动失败")
             except Exception as e:
                 logger.error(f"启动 IFlowModule {session_name} 失败: {e}", exc_info=True)
         
-        # 启动 WeChatModule
+        # 后启动 WeChatModule（用户会等待启动消息）
         for bot_name, wechat in self.wechat_modules.items():
             try:
                 logger.info(f"启动 WeChatModule: {bot_name}")
@@ -273,10 +330,25 @@ async def main():
     """主函数"""
     # 支持命令行参数指定配置文件
     config_path = "config.json"
-    if len(sys.argv) > 1:
-        config_path = sys.argv[1]
+    active_group = "all"
     
-    bot = LingIflowBot(config_path)
+    if len(sys.argv) > 1:
+        # 解析命令行参数
+        i = 1
+        while i < len(sys.argv):
+            if sys.argv[i] == "--group" or sys.argv[i] == "-g":
+                if i + 1 < len(sys.argv):
+                    active_group = sys.argv[i + 1]
+                    i += 2
+                else:
+                    i += 1
+            else:
+                # 第一个非参数的参数是配置文件
+                if not sys.argv[i].startswith("-"):
+                    config_path = sys.argv[i]
+                i += 1
+    
+    bot = LingIflowBot(config_path, active_group)
     await bot.run()
 
 

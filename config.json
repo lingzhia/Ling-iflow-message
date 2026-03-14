@@ -1,10 +1,10 @@
 {
   "workspace": "~/.iflow",
   "model": "kimi-k2.5",
-  "tmux_session": "iflow",
+  "tmux_session": "iflow1",
   "tmux_sessions": [
     {
-      "name": "iflow",
+      "name": "iflow1",
       "workspace": "~/.iflow",
       "model": "kimi-k2.5"
     },
@@ -31,7 +31,7 @@
       "allow_from": [],
       "group_policy": "mention",
       "group_allow_from": [],
-      "tmux_session": "iflow"
+      "tmux_session": "iflow1"
     },
     {
       "name": "bot2",

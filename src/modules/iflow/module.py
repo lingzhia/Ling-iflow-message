@@ -9,8 +9,8 @@ IFlow Module
 import asyncio
 import logging
 import uuid
+from typing import Optional, Callable, List, Dict, Any
 from dataclasses import dataclass
-from typing import Optional, Callable, Dict, Any
 
 from ...core.base import BaseModule
 from ...core.message import Message, MessageContent, MessageType as CoreMessageType
@@ -36,15 +36,15 @@ class Response:
 
 class IFlowModule(BaseModule):
     """iflow 模块
-    
+
     完整的 iflow 管理，包括启动、停止、消息注入、输出监控、状态管理、
     消息归属、订阅通知和交互记录。
-    
+
     模块实例与 tmux/iflow 生命周期同步：
     - 启动模块 → 自动创建 tmux 会话并启动 iflow
     - 停止模块 → 自动停止 iflow 并销毁 tmux 会话
     """
-    
+
     def __init__(
         self,
         module_id: Optional[str] = None,
@@ -56,7 +56,7 @@ class IFlowModule(BaseModule):
         log_dir: str = "logs/interactions"
     ):
         """初始化 iflow 模块
-        
+
         Args:
             module_id: 模块唯一标识符，如果为 None 则自动生成
             tmux_session: tmux 会话名称，如果为 None 则自动分配
@@ -68,20 +68,20 @@ class IFlowModule(BaseModule):
         """
         self._temp_module_id = module_id
         super().__init__(module_id or "iflow_placeholder")
-        
+
         self._tmux_session_param = tmux_session
         self.model = model
         self.workspace = workspace
         self.auto_restart = auto_restart
         self.log_interactions_enabled = log_interactions
         self.log_dir = log_dir
-        
+
         # 创建控制器（会话名称延迟分配）
-        self.controller = IFlowController(tmux_session)
+        self.controller = IFlowController(self._tmux_session_param)
         self.monitor = IFlowMonitor(self.controller)
-        
+
         # 创建会话管理器
-        self.session_manager = SessionManager(workspace)
+        self.session_manager = SessionManager(self.workspace)
         
         # 消息库
         self.message_store = MessageStore()
@@ -91,6 +91,9 @@ class IFlowModule(BaseModule):
         
         # 订阅者列表
         self._subscribers: list = []
+        
+        # 消息发送钩子（用于测试）
+        self._message_sent_hook: Optional[Callable] = None
         
         # 设置监控器回调
         self.monitor.subscribe(self._on_monitor_message)
@@ -286,6 +289,15 @@ class IFlowModule(BaseModule):
             self._subscribers.remove(callback)
             logger.debug(f"[{self.module_id}] Removed subscriber, total: {len(self._subscribers)}")
     
+    def set_message_sent_hook(self, hook: Callable) -> None:
+        """设置消息发送钩子（用于测试）
+        
+        Args:
+            hook: 钩子函数，接收 Message 对象
+        """
+        self._message_sent_hook = hook
+        logger.debug(f"[{self.module_id}] 消息发送钩子已设置")
+    
     async def get_status(self) -> dict:
         """获取状态
         
@@ -361,23 +373,32 @@ class IFlowModule(BaseModule):
         chat_id = current_record.metadata.get("chat_id", "") if current_record else ""
         is_group = current_record.metadata.get("is_group", False) if current_record else False
         
+        # 创建消息
+        msg = Message(
+            id=Message.generate_id(),
+            type=CoreMessageType.TEXT,
+            content=MessageContent(type=CoreMessageType.TEXT, text=message.content),
+            from_module=self.module_id,
+            metadata={
+                "msg_type": "iflow_reply",
+                "reply_type": message.type.value,
+                "chat_id": chat_id,
+                "is_group": is_group,
+                "receiver": message.receiver,
+                "scope": message.scope
+            }
+        )
+        
+        # 调用钩子（用于测试）
+        if self._message_sent_hook:
+            try:
+                await self._message_sent_hook(msg)
+            except Exception as e:
+                logger.error(f"[{self.module_id}] 消息发送钩子错误: {e}", exc_info=True)
+        
+        # 发送到消息总线
         if self.message_bus:
-            await self.send_to_bus(
-                Message(
-                    id=Message.generate_id(),
-                    type=CoreMessageType.TEXT,
-                    content=MessageContent(type=CoreMessageType.TEXT, text=message.content),
-                    from_module=self.module_id,
-                    metadata={
-                        "msg_type": "iflow_reply",
-                        "reply_type": message.type.value,
-                        "chat_id": chat_id,
-                        "is_group": is_group,
-                        "receiver": message.receiver,
-                        "scope": message.scope
-                    }
-                )
-            )
+            await self.send_to_bus(msg)
             logger.debug(f"[{self.module_id}] 已发送 iflow 回复到消息总线")
 
         # 通知订阅者

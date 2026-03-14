@@ -143,7 +143,7 @@ class IFlowController:
         
         try:
             # 捕获输出，检查是否有 iflow 的特征（增加行数确保捕获完整界面）
-            output = await self.capture_output(200)
+            output = await self.capture_output(1000)
             
             # 检查输出中是否有 iflow 的特征：
             # 1. 输入框 ">   输入消息或@文件路径"
@@ -183,37 +183,49 @@ class IFlowController:
             return False
         
         try:
-            # 1. 先发送 C-c 清除当前输入框（参考旧版本实现）
-            proc0 = await asyncio.create_subprocess_exec(
-                "tmux", "send-keys", "-t", self.tmux_session, "C-c",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            await proc0.communicate()
-            await asyncio.sleep(0.1)
-            
-            # 2. 发送消息内容（使用 -l 选项逐字发送）
-            proc1 = await asyncio.create_subprocess_exec(
-                "tmux", "send-keys", "-t", self.tmux_session, "-l", message,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            await proc1.communicate()
-            await asyncio.sleep(0.1)
-            
-            # 3. 发送回车键
-            proc2 = await asyncio.create_subprocess_exec(
-                "tmux", "send-keys", "-t", self.tmux_session, "C-m",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await asyncio.wait_for(proc2.communicate(), timeout=5)
-            
-            if proc2.returncode != 0:
-                logger.error(f"[IFlowController] Failed to send message (returncode={proc2.returncode})")
+            # 0. 先检查 iflow 是否真的准备好了
+            if not await self.check_iflow_running():
+                logger.warning(f"[IFlowController] iflow not running, cannot send message")
                 return False
             
+            # 1. 清除输入框（使用 C-c）
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    ["tmux", "send-keys", "-t", self.tmux_session, "C-c"],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+            )
+            await asyncio.sleep(0.2)
+            
+            # 2. 直接发送消息内容
+            await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    ["tmux", "send-keys", "-t", self.tmux_session, message],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+            )
+            await asyncio.sleep(1.0)
+            
+            # 3. 发送回车键
+            await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    ["tmux", "send-keys", "-t", self.tmux_session, "C-m"],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+            )
+            
             logger.info(f"[IFlowController] 发送消息到 iflow: {message[:50]}...")
+            logger.debug(f"[IFlowController] 发送完成，等待 iflow 回复...")
             return True
             
         except Exception as e:
@@ -253,8 +265,8 @@ class IFlowController:
                 )
                 await asyncio.wait_for(result.communicate(), timeout=10)
                 
-                # 等待 iflow 完全启动（最多 25 秒）
-                for i in range(25):
+                # 等待 iflow 完全启动（最多 35 秒）
+                for i in range(35):
                     await asyncio.sleep(1)
                     if await self.check_iflow_running():
                         logger.info(f"[IFlowController] iflow started in existing tmux session '{self.tmux_session}' after {i+1}s")
@@ -279,8 +291,8 @@ class IFlowController:
             
             logger.info(f"[IFlowController] iflow starting in tmux session '{self.tmux_session}'")
             
-            # 等待 iflow 完全启动（最多 25 秒）
-            for i in range(25):
+            # 等待 iflow 完全启动（最多 35 秒）
+            for i in range(35):
                 await asyncio.sleep(1)
                 if await self.check_iflow_running():
                     logger.info(f"[IFlowController] iflow fully started after {i+1}s")

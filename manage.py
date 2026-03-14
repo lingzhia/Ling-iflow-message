@@ -56,16 +56,31 @@ def print_info(message: str):
 @app.command()
 def start(
     config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径"),
-    daemon: bool = typer.Option(False, "--daemon", "-d", help="后台运行")
+    daemon: bool = typer.Option(False, "--daemon", "-d", help="后台运行"),
+    group: str = typer.Option("all", "--group", "-g", help="启动的机器人组 (all, g1, g2, ls)")
 ):
     """启动服务
 
     示例:
-        ./manage.py start                    # 使用默认配置前台启动
+        ./manage.py start                    # 启动所有组
+        ./manage.py start -g g1             # 只启动 g1 组
+        ./manage.py start -g g2             # 只启动 g2 组
+        ./manage.py start -g ls             # 列出所有组
         ./manage.py start -d                 # 后台运行
         ./manage.py start -c config-dev.json # 使用指定配置
     """
     print_header("启动服务")
+
+    # 特殊处理：列出所有组
+    if group == "ls":
+        print_info("可用组:")
+        print()
+        print("  g1  - bot1 + iflow")
+        print("  g2  - bot2 + iflow2")
+        print("  all - 所有组")
+        print()
+        print_info("使用示例: ./manage.py start --group g1")
+        return
 
     # 检查配置文件
     config_path = Path(config)
@@ -74,11 +89,19 @@ def start(
         print_info("使用示例: ./manage.py start -c config.json")
         raise typer.Exit(1)
 
+    # 验证组名
+    if group not in ["all", "g1", "g2"]:
+        print_error(f"无效的组名: {group}")
+        print_info("可用组: all, g1, g2")
+        print_info("使用 --group ls 查看详细信息")
+        raise typer.Exit(1)
+
     print_info(f"配置文件: {config}")
     print_info(f"运行模式: {'后台' if daemon else '前台'}")
+    print_info(f"启动组: {group}")
 
     # 构建启动命令
-    cmd = ["python3", "-m", "src.bot", config]
+    cmd = ["python3", "-m", "src.bot", config, "--group", group]
 
     if daemon:
         # 后台运行
@@ -87,7 +110,7 @@ def start(
 
         print_info("后台运行，日志输出到: logs/bot.log")
 
-        full_cmd = f"nohup python3 -m src.bot {config} > logs/bot.log 2>&1 &"
+        full_cmd = f"nohup python3 -m src.bot {config} --group {group} > logs/bot.log 2>&1 &"
         subprocess.run(full_cmd, shell=True)
 
         print_success("服务已在后台启动")
@@ -97,72 +120,168 @@ def start(
         # 前台运行
         print_info("前台运行，按 Ctrl+C 停止")
         print()
-        subprocess.run(["python3", "-m", "src.bot", config])
+        subprocess.run(["python3", "-m", "src.bot", config, "--group", group])
 
 
 @app.command()
-def stop():
-    """停止服务"""
+def stop(
+    group: str = typer.Option("all", "--group", "-g", help="停止的机器人组 (all, g1, g2, ls)")
+):
+    """停止服务
+
+    示例:
+        ./manage.py stop            # 停止所有组
+        ./manage.py stop -g g1      # 只停止 g1 组
+        ./manage.py stop -g g2      # 只停止 g2 组
+        ./manage.py stop -g ls      # 列出所有组
+    """
     print_header("停止服务")
 
-    # 检查服务是否运行
-    result = subprocess.run(
-        "ps aux | grep 'src.bot' | grep -v grep",
-        shell=True,
-        capture_output=True,
-        text=True
-    )
+    # 特殊处理：列出所有组
+    if group == "ls":
+        print_info("可用组:")
+        print()
+        print("  g1  - bot1 + iflow")
+        print("  g2  - bot2 + iflow2")
+        print("  all - 所有组")
+        print()
+        print_info("使用示例: ./manage.py stop --group g1")
+        return
 
-    if result.returncode != 0:
-        print_warning("服务未运行")
-        raise typer.Exit(0)
+    # 验证组名
+    if group not in ["all", "g1", "g2"]:
+        print_error(f"无效的组名: {group}")
+        print_info("可用组: all, g1, g2")
+        print_info("使用 --group ls 查看详细信息")
+        raise typer.Exit(1)
 
-    print_info("正在停止服务...")
+    # 根据组确定要停止的进程
+    if group == "all":
+        # 停止所有进程
+        print_info("停止所有组...")
+        subprocess.run("pkill -9 -f 'src.bot'", shell=True)
+    else:
+        # 停止指定组的进程
+        print_info(f"停止组: {group}...")
+        # 通过查找包含 --group 参数的进程来停止
+        result = subprocess.run(
+            f"ps aux | grep 'src.bot.*--group {group}' | grep -v grep | awk '{{print $2}}'",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0 and result.stdout.strip():
+            pids = result.stdout.strip().split('\n')
+            for pid in pids:
+                subprocess.run(f"kill -9 {pid}", shell=True)
+                print_success(f"已停止进程: {pid}")
+        else:
+            print_warning(f"未找到运行中的 {group} 组进程")
 
-    # 停止服务
-    subprocess.run("pkill -f 'src.bot'", shell=True)
+    # 停止对应的 tmux 会话
+    if group == "g1" or group == "all":
+        print_info("停止 tmux 会话: iflow")
+        subprocess.run("tmux kill-session -t iflow 2>/dev/null", shell=True)
+    
+    if group == "g2" or group == "all":
+        print_info("停止 tmux 会话: iflow2")
+        subprocess.run("tmux kill-session -t iflow2 2>/dev/null", shell=True)
 
     # 等待进程结束
     import time
-    for _ in range(10):
-        result = subprocess.run(
-            "ps aux | grep 'src.bot' | grep -v grep",
-            shell=True,
-            capture_output=True
-        )
-        if result.returncode != 0:
-            break
-        time.sleep(0.5)
+    time.sleep(2)
 
-    # 检查是否成功停止
-    result = subprocess.run(
-        "ps aux | grep 'src.bot' | grep -v grep",
-        shell=True,
-        capture_output=True
-    )
-
-    if result.returncode != 0:
-        print_success("服务已停止")
-    else:
-        print_warning("服务停止超时，请手动检查")
+    print_success("停止完成")
 
 
 @app.command()
 def restart(
     config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径"),
-    daemon: bool = typer.Option(False, "--daemon", "-d", help="后台运行")
+    daemon: bool = typer.Option(False, "--daemon", "-d", help="后台运行"),
+    group: str = typer.Option("all", "--group", "-g", help="重启的机器人组 (all, g1, g2, ls)")
 ):
-    """重启服务"""
+    """重启服务
+
+    示例:
+        ./manage.py restart               # 重启所有组
+        ./manage.py restart -g g1         # 只重启 g1 组
+        ./manage.py restart -g g2         # 只重启 g2 组
+        ./manage.py restart -g ls         # 列出所有组
+        ./manage.py restart -d            # 后台运行
+    """
     print_header("重启服务")
 
+    # 特殊处理：列出所有组
+    if group == "ls":
+        print_info("可用组:")
+        print()
+        print("  g1  - bot1 + iflow")
+        print("  g2  - bot2 + iflow2")
+        print("  all - 所有组")
+        print()
+        print_info("使用示例: ./manage.py restart --group g1")
+        return
+
+    # 验证组名
+    if group not in ["all", "g1", "g2"]:
+        print_error(f"无效的组名: {group}")
+        print_info("可用组: all, g1, g2")
+        print_info("使用 --group ls 查看详细信息")
+        raise typer.Exit(1)
+
+    print_info(f"重启组: {group}")
+
+    # 停止服务
     print_info("正在停止服务...")
-    subprocess.run("pkill -f 'src.bot'", shell=True)
+    stop_group = group  # 传递给 stop 的 group 参数
+    
+    # 根据 group 停止进程
+    if stop_group == "all":
+        subprocess.run("pkill -9 -f 'src.bot'", shell=True)
+    else:
+        result = subprocess.run(
+            f"ps aux | grep 'src.bot.*--group {stop_group}' | grep -v grep | awk '{{print $2}}'",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            pids = result.stdout.strip().split('\n')
+            for pid in pids:
+                subprocess.run(f"kill -9 {pid}", shell=True)
+    
+    # 停止 tmux 会话
+    if stop_group == "g1" or stop_group == "all":
+        subprocess.run("tmux kill-session -t iflow 2>/dev/null", shell=True)
+    if stop_group == "g2" or stop_group == "all":
+        subprocess.run("tmux kill-session -t iflow2 2>/dev/null", shell=True)
 
     import time
     time.sleep(2)
 
+    # 启动服务
     print_info("正在启动服务...")
-    start(config, daemon)
+    
+    # 构建 start 命令
+    cmd = ["python3", "-m", "src.bot", config, "--group", group]
+
+    if daemon:
+        # 后台运行
+        log_file = Path("logs/bot.log")
+        log_file.parent.mkdir(exist_ok=True)
+
+        full_cmd = f"nohup python3 -m src.bot {config} --group {group} > logs/bot.log 2>&1 &"
+        subprocess.run(full_cmd, shell=True)
+
+        print_success("服务已在后台重启")
+        print_info("查看日志: ./manage.py logs")
+        print_info("查看状态: ./manage.py status")
+    else:
+        # 前台运行
+        print_info("前台运行，按 Ctrl+C 停止")
+        print()
+        subprocess.run(cmd)
 
 
 @app.command()

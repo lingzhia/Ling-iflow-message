@@ -527,3 +527,642 @@ async def _on_iflow_message(self, message: OutboundMessage):
 3. **工作目录**：默认 `~/.iflow`，确保有读写权限
 4. **状态检测**：通过监控界面左下角"生成中"指示器判断状态
 5. **日志目录**：默认 `logs/interactions`，确保有写入权限
+
+---
+
+## 模块组成总结
+
+### 三大核心组件
+
+IFlowModule 由以下三大部分组成：
+
+#### 1. IFlowController - 进程管理层
+**职责**：管理 tmux 会话和 iflow 进程
+- 创建/销毁 tmux 会话
+- 启动/停止 iflow CLI
+- 发送消息到 iflow
+- 捕获 tmux 输出
+
+**特点**：
+- 模块启动时自动创建 tmux 会话并启动 iflow
+- 模块停止时自动停止 iflow 并销毁 tmux 会话
+- 完全自动化生命周期管理
+
+#### 2. IFlowMonitor - 消息同步层
+**职责**：监控 iflow 输出并提取消息
+- 持续监听 tmux 输出
+- 检测状态变化（空闲/生成中）
+- 提取标记消息（✦ 回复、✻ 思考）
+- 消息去重和过滤
+
+**特点**：
+- 所有消息都会被提取（✦ 和 ✻ 都会提取）
+- 提取的消息全部记录，不受 scope 影响
+- 消息分类：✦ 为回复，✻ 为思考
+
+#### 3. IFlowModule - 消息交互层
+**职责**：与消息总线交互，管理消息流转
+- 接收消息总线的消息
+- 管理消息库和交互记录
+- 发送消息到消息总线
+- 管理订阅者通知
+
+**特点**：
+- 默认 scope="reply_only"，只发送 ✦ 回复
+- scope="all" 时，发送所有消息（✦ 和 ✻）
+- 所有消息都完整记录到日志
+
+### 辅助组件
+
+#### MessageStore - 消息库
+- 记录消息来源（source）
+- 管理消息状态（pending/processing/completed）
+- 统计回复数量
+
+#### InteractionLogger - 交互记录器
+- 记录所有发送和接收的消息
+- 持久化存储到文件
+- 提供交互历史查询
+
+#### SessionManager - 会话管理器
+- 管理 iflow 会话
+- 提供会话查询和创建功能
+
+### 生命周期管理
+
+```
+启动流程：
+  IFlowModule._on_start()
+    ↓
+  IFlowController.start_iflow()
+    ↓
+  创建 tmux 会话
+    ↓
+  启动 iflow CLI
+    ↓
+  IFlowMonitor.start()
+    ↓
+  开始监控输出
+
+停止流程：
+  IFlowModule._on_stop()
+    ↓
+  IFlowMonitor.stop()
+    ↓
+  停止监控
+    ↓
+  IFlowController.destroy_session()
+    ↓
+  销毁 tmux 会话
+    ↓
+  停止 iflow CLI
+```
+
+### 消息处理原则
+
+#### 记录原则
+**所有消息都完整记录**：
+- ✦ 回复消息 → 记录
+- ✻ 思考消息 → 记录
+- 其他输出 → 记录
+- 记录位置：InteractionLogger + MessageStore
+- 记录时机：不受 scope 影响
+
+#### 发送原则
+**发送时按 scope 过滤**：
+
+| scope | ✦ 回复 | ✻ 思考 | 其他 |
+|-------|--------|---------|------|
+| reply_only (默认) | ✅ 发送 | ❌ 过滤 | ❌ 过滤 |
+| all | ✅ 发送 | ✅ 发送 | ✅ 发送 |
+
+- 发送位置：消息总线 + 订阅者
+- 发送时机：根据 scope 参数过滤
+
+### 核心特性
+
+1. **自动化生命周期**：模块与 tmux/iflow 完全同步
+2. **完整记录**：所有消息都记录，不丢失任何信息
+3. **灵活过滤**：scope 参数控制发送内容
+4. **状态管理**：生成中时拒绝新消息
+5. **消息归属**：记录消息来源，支持多轮对话
+6. **订阅机制**：通过订阅通知关注方
+
+---
+
+## 完整消息流转图
+
+### 入站流程（外部 → iflow）
+
+```
+消息总线
+    ↓
+IFlowModule._on_receive(message)
+    ↓
+提取消息信息：
+  - content: 消息内容
+  - source: 来源模块 ID
+  - scope: 返回范围（reply_only / all）
+    ↓
+IFlowModule.send(content, source, scope)
+    ↓
+┌─────────────────────────────────────┐
+│ 状态检查                             │
+│ - 空闲 → 继续处理                   │
+│ - 生成中 → 拒绝（返回 duration）    │
+└─────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────┐
+│ 记录消息（全部记录）                 │
+│ - MessageStore.add()                │
+│ - InteractionLogger.log_sent()      │
+│ - 状态更新为 processing             │
+└─────────────────────────────────────┘
+    ↓
+IFlowController.send_message(content)
+    ↓
+发送 C-c 清除输入框
+    ↓
+发送消息内容（tmux send-keys -l）
+    ↓
+发送回车键（C-m）
+    ↓
+iflow 处理并输出
+```
+
+### 出站流程（iflow → 外部）
+
+```
+iflow 输出（tmux）
+    ↓
+IFlowMonitor 持续监控
+    ↓
+┌─────────────────────────────────────┐
+│ 捕获 tmux 输出                       │
+│ tmux capture-pane -S -1000 -p       │
+└─────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────┐
+│ 提取消息（全部提取）                 │
+│ - 检测标记行（✦ 或 ✻）              │
+│ - 收集后续缩进内容                   │
+│ - 清理 UI 元素                       │
+└─────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────┐
+│ 分类消息                             │
+│ - ✦ → MessageType.REPLY             │
+│ - ✻ → MessageType.OTHER             │
+└─────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────┐
+│ 记录消息（全部记录）                 │
+│ - InteractionLogger.log_received()  │
+│ - MessageStore.increment_reply()    │
+└─────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────┐
+│ scope 过滤                           │
+│ - reply_only → 只发送 ✦             │
+│ - all → 发送所有（✦ + ✻）          │
+└─────────────────────────────────────┘
+    ↓
+构造 OutboundMessage
+    ↓
+┌─────────────────────────────────────┐
+│ 调用钩子（用于测试）                 │
+│ - _message_sent_hook()              │
+└─────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────┐
+│ 发送到消息总线                       │
+│ - send_to_bus(message)               │
+│ - 根据 binding 路由到目标模块       │
+└─────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────┐
+│ 通知订阅者                           │
+│ - _notify_subscribers(message)      │
+│ - 所有订阅者都会收到通知             │
+└─────────────────────────────────────┘
+```
+
+### 状态变化流程
+
+```
+IFlowMonitor 监控状态
+    ↓
+┌─────────────────────────────────────┐
+│ 检测到 "生成中" 关键字               │
+│ - 状态：IDLE → GENERATING           │
+│ - 记录生成开始时间                   │
+│ - 触发状态变更回调                   │
+└─────────────────────────────────────┘
+    ↓
+iflow 正在生成
+    ↓
+┌─────────────────────────────────────┐
+│ "生成中" 不再显示                    │
+│ - 等待稳定 2 秒                      │
+│ - 状态：GENERATING → IDLE           │
+│ - 记录生成持续时间                   │
+│ - 触发状态变更回调                   │
+└─────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────┐
+│ 生成结束处理                         │
+│ - 查询消息库 processing 状态记录     │
+│ - 构造 COMPLETE 消息                 │
+│ - 通知订阅者                         │
+│ - 更新状态为 completed               │
+└─────────────────────────────────────┘
+```
+
+### 记录 vs 发送对比
+
+```
+所有消息的记录和发送：
+
+消息类型       │ 记录          │ 发送（scope=reply_only）│ 发送（scope=all）
+───────────────┼───────────────┼────────────────────────┼────────────────────
+✦ 回复消息     │ ✅ 全部记录   │ ✅ 发送                │ ✅ 发送
+✻ 思考消息     │ ✅ 全部记录   │ ❌ 过滤                │ ✅ 发送
+其他输出       │ ✅ 全部记录   │ ❌ 过滤                │ ✅ 发送
+
+关键原则：
+1. 所有消息都完整记录（InteractionLogger + MessageStore）
+2. 记录不受 scope 影响
+3. 发送时按 scope 过滤
+4. 默认 scope="reply_only"（只发送 ✦ 回复）
+```
+
+### 多轮对话消息归属
+
+```
+第一次对话（source="wechat_bot1", scope="reply_only"）
+  ↓
+MessageStore 记录：message_id="abc123", source="wechat_bot1", scope="reply_only"
+  ↓
+iflow 返回 ✦ 回复1、✻ 思考1、✦ 回复2
+  ↓
+IFlowMonitor 提取所有消息
+  ↓
+scope 过滤：只发送 ✦ 回复1 和 ✦ 回复2
+  ↓
+设置 receiver="wechat_bot1"
+  ↓
+发送到消息总线，路由到 wechat_bot1
+
+第二次对话（source="wechat_bot1", scope="reply_only"）
+  ↓
+MessageStore 记录：message_id="def456", source="wechat_bot1", scope="reply_only"
+  ↓
+iflow 返回 ✦ 回复3
+  ↓
+设置 receiver="wechat_bot1"
+  ↓
+发送到消息总线，路由到 wechat_bot1
+
+消息归属原则：
+1. 每次对话都有唯一的 message_id
+2. 回复时使用请求时的 source 作为 receiver
+3. 支持多轮对话，每次对话独立归属
+```
+
+---
+
+## 新消息监测和记录方案（两阶段检测）
+
+### 核心理念
+
+**两阶段检测策略**：
+- **阶段1（轻量级检测）**：未检测到"生成中"时，每 0.5 秒提取 50 行，仅检测状态
+- **阶段2（完整记录）**：检测到"生成中"后，每 0.5 秒提取 1000 行，完整记录消息
+
+**核心改进**：
+1. **性能优化**：未在生成中时只提取 50 行，减少不必要的处理
+2. **内容清理**：去掉 TUI 界面和无关内容
+3. **精确提取**：区分 iflow 收到的消息和带标记的消息
+4. **字符串定位**：用标记行字符串定位，简化去重逻辑
+5. **延迟发送**：最后统一发送，避免发送不完整的中间版本
+
+---
+
+### 监测流程（两阶段）
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ 阶段1：轻量级检测（未检测到"生成中"）                    │
+└─────────────────────────────────────────────────────────┘
+    ↓
+每 0.5 秒提取 tmux 中的 50 行
+    ↓
+检测是否有"生成中"
+    ↓
+┌─────────────────────────────────────┐
+│ 没有"生成中" → 不处理，继续检测    │
+└─────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────┐
+│ 有"生成中" → 切换到阶段2            │
+│ - 切换为提取 1000 行                │
+│ - 开始记录模式                      │
+└─────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│ 阶段2：完整记录（检测到"生成中"）                          │
+└─────────────────────────────────────────────────────────┘
+    ↓
+每 0.5 秒提取 tmux 中的 1000 行
+    ↓
+内容处理
+    ↓
+┌─────────────────────────────────────┐
+│ 1. 去掉 TUI 界面内容               │
+│ 2. 去掉最新一条发送消息前的内容     │
+└─────────────────────────────────────┘
+    ↓
+消息提取
+    ↓
+┌─────────────────────────────────────┐
+│ 1. 提取 iflow 收到的消息           │
+│ 2. 提取带标记的消息（✦、✻）        │
+│ 3. 保留原始顺序                    │
+└─────────────────────────────────────┘
+    ↓
+消息记录
+    ↓
+┌─────────────────────────────────────┐
+│ 首次扫描：                          │
+│ - 记录除最后一条外的所有消息        │
+│ - 保存最后一条标记消息的标记行      │
+└─────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────┐
+│ 后续扫描：                          │
+│ - 找到上次记录的最后标记行          │
+│ - 记录中间的新消息                  │
+│ - 更新最后标记行                    │
+└─────────────────────────────────────┘
+    ↓
+检查"生成中"是否存在
+    ↓
+┌─────────────────────────────────────┐
+│ 仍存在 → 继续记录                  │
+└─────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────┐
+│ 不存在 → 记录最后一条，结束         │
+│ - 记录最后一条标记消息              │
+│ - 统一发送所有记录的消息            │
+│ - 清空缓存                          │
+└─────────────────────────────────────┘
+```
+
+---
+
+### 内容处理逻辑
+
+```python
+def process_output(raw_output: str, last_sent_message: str) -> str:
+    """处理 tmux 输出
+    
+    Args:
+        raw_output: 原始 tmux 输出
+        last_sent_message: 最新一条发送给 iflow 的消息
+    
+    Returns:
+        处理后的输出
+    """
+    lines = raw_output.split('\n')
+    processed_lines = []
+    
+    # 1. 去掉 TUI 界面内容
+    tui_markers = ['生成中', '思考:', '上下文剩余', '---', '══', '────']
+    
+    for line in lines:
+        is_tui = False
+        for marker in tui_markers:
+            if marker in line:
+                is_tui = True
+                break
+        
+        if not is_tui:
+            processed_lines.append(line)
+    
+    # 2. 去掉最新一条发送消息前的内容
+    if last_sent_message:
+        sent_message_idx = -1
+        for i, line in enumerate(processed_lines):
+            if last_sent_message in line:
+                sent_message_idx = i
+                break
+        
+        if sent_message_idx >= 0:
+            processed_lines = processed_lines[sent_message_idx:]
+    
+    return '\n'.join(processed_lines)
+```
+
+---
+
+### 消息提取逻辑
+
+```python
+def extract_messages(processed_output: str) -> Dict[str, List[Dict]]:
+    """提取消息
+    
+    Returns:
+        {
+            'received_messages': [...],  # iflow 收到的消息
+            'marked_messages': [...]       # 带标记的消息
+        }
+    """
+    lines = processed_output.split('\n')
+    
+    received_messages = []
+    marked_messages = []
+    
+    # 提取带标记的消息
+    for i, line in enumerate(lines):
+        if '✦' in line or '✻' in line:
+            marker_type = '✦' if '✦' in line else '✻'
+            marker_content = line.replace('✦', '').replace('✻', '').strip()
+            
+            content_lines = [marker_content]
+            for j in range(i + 1, len(lines)):
+                next_line = lines[j]
+                if '✦' in next_line or '✻' in next_line or next_line.startswith('---'):
+                    break
+                if not next_line.strip():
+                    continue
+                if next_line.startswith('  ') or next_line.startswith('\t'):
+                    content_lines.append(next_line.strip())
+                else:
+                    break
+            
+            full_content = '\n'.join(content_lines)
+            
+            marked_messages.append({
+                'content': full_content,
+                'marker_type': marker_type,
+                'marker_line': line,
+                'line_index': i
+            })
+    
+    # 提取 iflow 收到的消息
+    for i, line in enumerate(lines):
+        line_stripped = line.strip()
+        if '✦' in line or '✻' in line or not line_stripped:
+            continue
+        if '生成中' in line or '思考:' in line:
+            continue
+        
+        in_marked_section = False
+        for marked_msg in marked_messages:
+            if i > marked_msg['line_index']:
+                in_marked_section = True
+                break
+        
+        if not in_marked_section:
+            received_messages.append({
+                'content': line_stripped,
+                'line_index': i
+            })
+    
+    return {
+        'received_messages': received_messages,
+        'marked_messages': marked_messages
+    }
+```
+
+---
+
+### 消息记录逻辑
+
+#### 首次扫描
+
+```python
+def first_scan_record(messages: Dict[str, List[Dict]]) -> str:
+    """首次扫描记录
+    
+    Returns:
+        最后一条标记消息的标记行
+    """
+    marked_messages = messages['marked_messages']
+    
+    if len(marked_messages) < 2:
+        return ""
+    
+    # 记录除最后一条外的所有消息
+    for i in range(len(marked_messages) - 1):
+        msg = marked_messages[i]
+        record_message(msg)
+    
+    # 返回最后一条标记消息的标记行
+    return marked_messages[-1]['marker_line']
+```
+
+#### 后续扫描
+
+```python
+def subsequent_scan_record(
+    messages: Dict[str, List[Dict]],
+    last_marker_line: str
+) -> str:
+    """后续扫描记录
+    
+    Returns:
+        最新的最后标记行
+    """
+    marked_messages = messages['marked_messages']
+    marker_lines = [msg['marker_line'] for msg in marked_messages]
+    
+    try:
+        last_idx = marker_lines.index(last_marker_line)
+    except ValueError:
+        return first_scan_record(messages)
+    
+    # 记录中间的新消息
+    for i in range(last_idx + 1, len(marked_messages)):
+        msg = marked_messages[i]
+        record_message(msg)
+    
+    return marked_messages[-1]['marker_line']
+```
+
+#### 结束检测
+
+```python
+def finish_record(messages: Dict[str, List[Dict]], last_marker_line: str) -> None:
+    """结束记录（生成中消失）"""
+    marked_messages = messages['marked_messages']
+    
+    if not marked_messages:
+        return
+    
+    # 记录最后一条标记消息
+    last_msg = marked_messages[-1]
+    record_message(last_msg)
+    
+    # 发送所有记录的消息
+    send_all_recorded_messages()
+    
+    # 清空缓存
+    clear_message_cache()
+```
+
+---
+
+### 与旧方案的对比
+
+| 方面 | 旧方案 | 新方案 | 改进 |
+|-----|-------|--------|------|
+| **提取行数** | 固定 1000 行 | 动态：50 行（检测中）→ 1000 行（记录中） | ✅ 性能优化 |
+| **状态检测** | 始终检测"生成中" | 检测到"生成中"才开始记录 | ✅ 减少不必要处理 |
+| **消息发送** | 立即发送新增标记 | 延迟记录，最后统一发送 | ✅ 避免中间版本 |
+| **内容处理** | 完整保留 | 去掉 TUI 界面 + 去掉发送消息前的内容 | ✅ 精确提取 |
+| **消息类型** | 只提取带标记的消息 | 提取 iflow 收到的消息 + 带标记的消息 | ✅ 更完整 |
+| **去重机制** | 哈希去重 | 字符串定位（基于标记行） | ✅ 简化逻辑 |
+| **结束检测** | 稳定检测（2 秒） | "生成中"消失 + 记录最后一条 | ✅ 简化逻辑 |
+
+---
+
+### 需要去掉的旧方案内容
+
+- ❌ 哈希去重
+- ❌ 稳定检测（2秒）
+- ❌ 交互完成标志
+- ❌ 消息重叠检测
+- ❌ 立即发送新增标记
+- ❌ 标记更新处理
+
+---
+
+### 需要新增的功能
+
+- ✅ 两阶段检测（50/1000行）
+- ✅ 内容处理（去掉TUI界面 + 去掉发送消息前的内容）
+- ✅ 提取 iflow 收到的消息
+- ✅ 标记行字符串定位
+- ✅ 首次扫描逻辑
+- ✅ 后续扫描逻辑（增量）
+- ✅ 结束检测和统一发送
+
+---
+
+### 待解决的问题
+
+1. **如何识别 iflow 收到的消息？**
+   - 方法1：查找符合特定格式的行（如用户输入格式）
+   - 方法2：查找在"用户:"、"You:"等标识符之后的行
+   - 方法3：查找没有标记，但在标记之前的行
+   - 建议：先分析 iflow 的实际输出格式，再确定具体方法
+
+2. **如何准确识别 TUI 界面？**
+   - 可能的特征：包含"生成中"、"思考:"、"上下文剩余"、分隔符等
+   - 建议：收集实际的 iflow 输出样本，分析 TUI 界面的特征
+
+3. **如何准确识别发送消息的分界线？**
+   - 方法：通过 IFlowController 记录最后发送的消息
+   - 建议：使用 IFlowController 记录最后发送的消息，然后在提取时过滤
