@@ -8,7 +8,18 @@
 import sys
 import os
 import asyncio
+import logging
 from pathlib import Path
+from datetime import datetime
+
+# 配置日志
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 
 # 添加项目根目录到 sys.path
 project_root = Path(__file__).resolve().parent.parent
@@ -56,8 +67,21 @@ async def test_complete_notification():
         log_interactions=False
     )
 
+    # 清理监控器状态（防止之前的测试干扰）
+    module.monitor._processed_hashes.clear()
+    module.monitor._candidate_messages = []
+    module.monitor._last_candidate_messages = []
+    module.monitor._interaction_complete = False
+    module.monitor._stable_start_time = None
+    module.monitor._generating_state_started = False
+    print("✅ 监控器状态已清理")
+
     # 设置消息总线
     module.message_bus = bus
+
+    # 注册模块到消息总线
+    bus.register_module(module)
+    print("✅ 模块已注册到消息总线")
 
     # 用于存储订阅的消息
     subscribed_messages = []
@@ -75,6 +99,23 @@ async def test_complete_notification():
 
     # 订阅 iflow 输出
     module.subscribe(subscribe_handler)
+
+    # 监控状态变更
+    state_changes = []
+
+    async def state_change_handler(old_state, new_state, duration=0):
+        """处理状态变更"""
+        state_changes.append({
+            'old_state': old_state.value,
+            'new_state': new_state.value,
+            'duration': duration,
+            'timestamp': datetime.now().isoformat()
+        })
+        print(f"🔄 状态变更: {old_state.value} -> {new_state.value}, duration={duration}s")
+
+    # 设置状态变更回调
+    module.monitor.set_state_change_callback(state_change_handler)
+    print("✅ 状态变更回调已设置")
 
     try:
         # 启动模块
@@ -120,6 +161,11 @@ async def test_complete_notification():
 
             if wait_count % 5 == 0:
                 print(f"   等待中... ({wait_count}s / {max_wait_time}s), 已收到 {len(subscribed_messages)} 条消息")
+                # 打印监控器状态
+                print(f"   监控器状态: state={module.monitor.state.value}, interaction_complete={module.monitor._interaction_complete}, candidates={len(module.monitor._candidate_messages)}")
+                # 打印状态变更历史
+                if state_changes:
+                    print(f"   状态变更历史: {state_changes}")
 
         # 验证结果
         print("\n" + "=" * 60)

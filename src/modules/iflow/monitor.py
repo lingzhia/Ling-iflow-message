@@ -58,7 +58,7 @@ class IFlowMonitor:
     
     def __init__(self, controller, check_interval: float = 0.5):
         """初始化监控器
-        
+
         Args:
             controller: IFlowController 实例
             check_interval: 检查间隔（秒）
@@ -67,10 +67,14 @@ class IFlowMonitor:
         self.check_interval = check_interval
         self._running = False
         self._task: Optional[asyncio.Task] = None
-        
+
         # 状态管理
         self._state = IFlowState.IDLE
         self._generating_start_time: Optional[datetime] = None
+
+        # 初始化状态标志（防止在模块初始化期间触发错误的状态变更）
+        self._is_initialized = False
+        self._initialization_time: Optional[datetime] = None
         
         # 消息缓存（用于去重）
         self._processed_hashes: set = set()
@@ -182,14 +186,30 @@ class IFlowMonitor:
     async def _check(self) -> None:
         """检查新消息和状态（优化后的策略）"""
         self.stats["check_count"] += 1
-        
+
         try:
             # 捕获 tmux 输出
             output = await self.controller.capture_output(lines=1000)
-            
+
             if not output:
                 return
-            
+
+            # 检查是否处于初始化期间（启动后 3 秒内）
+            if not self._is_initialized:
+                if self._initialization_time is None:
+                    self._initialization_time = datetime.now()
+                    logger.debug(f"[IFlowMonitor] 开始初始化计时")
+
+                initialization_duration = (datetime.now() - self._initialization_time).total_seconds()
+                if initialization_duration < 3.0:
+                    # 仍在初始化期间，跳过状态检测和消息提取
+                    logger.debug(f"[IFlowMonitor] 初始化期间，跳过检查 ({initialization_duration:.1f}s / 3.0s)")
+                    return
+                else:
+                    # 初始化完成
+                    self._is_initialized = True
+                    logger.info(f"[IFlowMonitor] 初始化完成 ({initialization_duration:.1f}s)")
+
             # 先检测状态变化（在所有逻辑之前）
             await self._check_state(output)
             
