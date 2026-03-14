@@ -416,7 +416,10 @@ class IFlowModule(BaseModule):
 
         if new_state == IFlowState.IDLE and old_state == IFlowState.GENERATING:
             # 生成完成
+            logger.debug(f"[{self.module_id}] 检测到生成完成，调用 complete_current()")
+            logger.debug(f"[{self.module_id}] 当前消息 ID: {self.message_store._current_message_id}")
             completed = self.message_store.complete_current()
+            logger.debug(f"[{self.module_id}] complete_current() 返回: {completed}")
 
             if completed:
                 # 发送完成通知

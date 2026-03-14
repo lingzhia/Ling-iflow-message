@@ -364,12 +364,18 @@ class IFlowMonitor:
                     # 没有候选消息，直接变回 idle
                     logger.debug(f"[IFlowMonitor] 生成中消失且无候选消息，直接变回 idle")
                     duration = self.generating_duration
+                    old_state = self._state
                     self._state = IFlowState.IDLE
                     self._generating_start_time = None
                     self._stable_start_time = None
                     self._generating_state_started = False
                     self._interaction_complete = False
+                    self.stats["state_changes"] += 1
                     logger.info(f"[IFlowMonitor] State changed: {IFlowState.GENERATING.value} -> {IFlowState.IDLE.value}, duration={duration}秒")
+
+                    # 触发状态变更回调（传递 duration）
+                    if self._on_state_change:
+                        await self._call_callback(self._on_state_change, old_state, self._state, duration)
 
             # 生成中存在，处理新增的消息
             elif is_generating:
