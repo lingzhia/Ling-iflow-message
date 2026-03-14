@@ -316,7 +316,7 @@ class IFlowMonitor:
                     else:
                         # 检查稳定时间
                         stable_time = (datetime.now() - self._stable_start_time).total_seconds()
-                        logger.debug(f"[IFlowMonitor] 等待稳定... ({stable_time:.1f}s / {self._stable_duration}s)")
+                        logger.debug(f"[IFlowMonitor] 等待稳定... ({stable_time:.1f}秒 / {self._stable_duration}秒)")
                         
                         if stable_time >= self._stable_duration:
                             # 稳定2秒，确认结束
@@ -364,13 +364,13 @@ class IFlowMonitor:
                             self._state = IFlowState.IDLE
                             self._generating_start_time = None
                             self.stats["state_changes"] += 1
-                            logger.info(f"[IFlowMonitor] State changed: {old_state.value} -> {self._state.value}, duration={duration}s}")
+                            logger.info(f"[IFlowMonitor] State changed: {old_state.value} -> {self._state.value}, duration={duration}s")
 
                             # 触发状态变更回调（传递 duration）
                             if self._on_state_change:
                                 await self._call_callback(self._on_state_change, old_state, self._state, duration)
                         else:
-                            logger.debug(f"[IFlowMonitor] 等待稳定... ({stable_time:.1f}s / {self._stable_duration}s)")
+                            logger.debug(f"[IFlowMonitor] 等待稳定... ({stable_time:.1f}秒 / {self._stable_duration}秒)")
                 else:
                     # 没有候选消息，直接变回 idle
                     logger.debug(f"[IFlowMonitor] 生成中消失且无候选消息，直接变回 idle")
@@ -380,7 +380,7 @@ class IFlowMonitor:
                     self._stable_start_time = None
                     self._generating_state_started = False
                     self._interaction_complete = False
-                    logger.info(f"[IFlowMonitor] State changed: {IFlowState.GENERATING.value} -> {IFlowState.IDLE.value}, duration={duration}s")
+                    logger.info(f"[IFlowMonitor] State changed: {IFlowState.GENERATING.value} -> {IFlowState.IDLE.value}, duration={duration}秒")
             
             # 生成中重新出现，重置计时器和交互完成标志
             elif is_generating:
@@ -437,7 +437,7 @@ class IFlowMonitor:
                 self._state = IFlowState.IDLE
                 self._generating_start_time = None
                 self.stats["state_changes"] += 1
-                logger.info(f"[IFlowMonitor] State changed: {old_state.value} -> {self._state.value}, duration={duration}s")
+                logger.info(f"[IFlowMonitor] State changed: {old_state.value} -> {self._state.value}, duration={duration}秒")
                 
                 # 触发状态变更回调（传递 duration）
                 if self._on_state_change:
@@ -450,7 +450,7 @@ class IFlowMonitor:
                 self._stable_start_time = None
                 self._generating_state_started = False
                 self._interaction_complete = False
-                logger.info(f"[IFlowMonitor] State changed: GENERATING -> IDLE, duration={duration}s (无候选消息)")
+                logger.info(f"[IFlowMonitor] State changed: GENERATING -> IDLE, duration={duration}秒 (无候选消息)")
             else:
                 logger.debug(f"[IFlowMonitor] 交互未完成，保持状态: {self._state.value}")
     
