@@ -467,18 +467,40 @@ class IFlowMonitor:
         - 以 `>` 开头的行
         - 例如：`> 用户的消息内容`
         
+        排除的行（iflow 提示符）：
+        - `输入消息或@文件路径`
+        - 其他 iflow 系统提示
+        
         Args:
             lines: tmux 输出行列表
         
         Returns:
             (消息内容, 消息行号) 或 (None, None)
         """
-        # 从下往上扫描，找到最后一个 `>` 开头的行
+        # iflow 提示符关键词（用于过滤）
+        iflow_prompt_keywords = ['输入消息', '@文件路径']
+        
+        # 从下往上扫描，找到最后一个用户发送的消息
         for i in range(len(lines) - 1, -1, -1):
-            line = lines[i].strip()
-            if line.startswith('>'):
+            line_stripped = lines[i].strip()
+            
+            if line_stripped.startswith('>'):
+                # 提取消息内容（去掉 `>` 前缀）
+                message_content = line_stripped[1:].strip()
+                
+                # 检查是否是 iflow 提示符
+                is_prompt = False
+                for keyword in iflow_prompt_keywords:
+                    if keyword in message_content:
+                        is_prompt = True
+                        break
+                
+                if is_prompt:
+                    # 这是 iflow 提示符，继续往上查找
+                    logger.debug(f"[IFlowMonitor] 跳过 iflow 提示符: {line_stripped}")
+                    continue
+                
                 # 找到了用户消息
-                message_content = line[1:].strip()  # 去掉 `>` 前缀
                 return message_content, i
         
         return None, None
