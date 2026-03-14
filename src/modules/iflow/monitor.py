@@ -565,6 +565,7 @@ class IFlowMonitor:
                 # 遍历后续行，收集缩进的内容
                 for j in range(i + 1, len(lines)):
                     next_line = lines[j]
+                    next_line_stripped = next_line.strip()
                     
                     # 跳过 TUI 界面行
                     if self._is_tui_line(next_line):
@@ -577,16 +578,18 @@ class IFlowMonitor:
                         break
                     
                     # 跳过空行
-                    if not next_line.strip():
+                    if not next_line_stripped:
                         logger.debug(f"[IFlowMonitor] 跳过空行")
                         continue
                     
-                    # 如果行以缩进开头，认为是消息延续
+                    # 关键修复：检查行是否以空格开头（表示是前一条消息的延续）
+                    # 使用 strip() 后的行来判断是否是延续
                     if next_line.startswith('  ') or next_line.startswith('\t'):
+                        # 这是前一条消息的延续
                         logger.debug(f"[IFlowMonitor] 收集缩进行: {next_line[:80]}")
-                        content_lines.append(next_line.strip())
+                        content_lines.append(next_line_stripped)
                     else:
-                        # 非缩进行，停止
+                        # 非缩进行，停止收集
                         logger.debug(f"[IFlowMonitor] 遇到非缩进行，停止收集: {next_line[:50]}")
                         break
                 
