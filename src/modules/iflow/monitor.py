@@ -357,18 +357,7 @@ class IFlowMonitor:
                             # 设置交互完成标志，防止旧消息被重复检测
                             self._interaction_complete = True
                             logger.debug(f"[IFlowMonitor] 交互完成标志已设置")
-
-                            # 同时将状态设置为 idle，防止标志被重置
-                            duration = self.generating_duration
-                            old_state = self._state
-                            self._state = IFlowState.IDLE
-                            self._generating_start_time = None
-                            self.stats["state_changes"] += 1
-                            logger.info(f"[IFlowMonitor] State changed: {old_state.value} -> {self._state.value}, duration={duration}s")
-
-                            # 触发状态变更回调（传递 duration）
-                            if self._on_state_change:
-                                await self._call_callback(self._on_state_change, old_state, self._state, duration)
+                            # 状态变更和回调将在 _check_state() 中触发
                         else:
                             logger.debug(f"[IFlowMonitor] 等待稳定... ({stable_time:.1f}秒 / {self._stable_duration}秒)")
                 else:
@@ -430,7 +419,7 @@ class IFlowMonitor:
         elif not is_generating and self._state == IFlowState.GENERATING:
             # 状态变更：生成中 -> 空闲
             logger.debug(f"[IFlowMonitor] 检测到状态可能变更: is_generating={is_generating}, state={self._state.value}, interaction_complete={self._interaction_complete}, candidate_count={len(self._candidate_messages)}")
-            
+
             # 如果有交互完成标志，说明已稳定，可以变回 idle
             if self._interaction_complete:
                 duration = self.generating_duration
@@ -438,21 +427,14 @@ class IFlowMonitor:
                 self._generating_start_time = None
                 self.stats["state_changes"] += 1
                 logger.info(f"[IFlowMonitor] State changed: {old_state.value} -> {self._state.value}, duration={duration}秒")
-                
+
                 # 触发状态变更回调（传递 duration）
                 if self._on_state_change:
                     await self._call_callback(self._on_state_change, old_state, self._state, duration)
-            # 如果没有候选消息，说明 iflow 取消了，也变回 idle
-            elif len(self._candidate_messages) == 0:
-                duration = self.generating_duration
-                self._state = IFlowState.IDLE
-                self._generating_start_time = None
-                self._stable_start_time = None
-                self._generating_state_started = False
-                self._interaction_complete = False
-                logger.info(f"[IFlowMonitor] State changed: GENERATING -> IDLE, duration={duration}秒 (无候选消息)")
+            # 如果没有候选消息，说明 iflow 可能取消了，但需要等待稳定检测
+            # 不要在这里直接变回 idle，让 _check() 中的稳定检测逻辑处理
             else:
-                logger.debug(f"[IFlowMonitor] 交互未完成，保持状态: {self._state.value}")
+                logger.debug(f"[IFlowMonitor] 交互未完成，保持状态: {self._state.value}，等待稳定检测")
     
     def _detect_generating(self, output: str) -> bool:
         """检测是否处于生成中状态
