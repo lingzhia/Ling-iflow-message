@@ -204,7 +204,9 @@ class IFlowInteractiveTool:
         })
         
         # 显示消息
-        if reply_type == 'reply':
+        if reply_type == 'complete':
+            print(f"\n✅ [完成] {message.content.text}")
+        elif reply_type == 'reply':
             print(f"\n📤 [✦ 回复] {message.content.text}")
         else:
             # 思考消息，根据 scope 决定是否显示

@@ -429,6 +429,7 @@ class IFlowModule(BaseModule):
                     receiver=completed.source,
                     scope=completed.scope,
                     metadata={
+                        "reply_type": "complete",  # 统一使用 reply_type 字段
                         "reply_count": completed.reply_count,
                         "duration": duration
                     }
@@ -445,6 +446,7 @@ class IFlowModule(BaseModule):
                     from_module=self.module_id,
                     metadata={
                         "msg_type": "iflow_complete",
+                        "reply_type": "complete",  # 统一使用 reply_type 字段
                         "complete_type": complete_message.type.value,
                         "receiver": complete_message.receiver,
                         "scope": complete_message.scope,
