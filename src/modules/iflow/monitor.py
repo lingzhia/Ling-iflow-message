@@ -305,8 +305,8 @@ class IFlowMonitor:
                     # 重置稳定计时器
                     self._stable_start_time = None
             
-            # 检测生成中消失（需要稳定2秒）
-            elif not is_generating:
+            # 优先处理生成中消失的检测（即使是在生成状态下）
+            if not is_generating:
                 if len(self._candidate_messages) > 0:
                     # 有候选消息，需要稳定检测
                     if self._stable_start_time is None:
@@ -317,37 +317,37 @@ class IFlowMonitor:
                         # 检查稳定时间
                         stable_time = (datetime.now() - self._stable_start_time).total_seconds()
                         logger.debug(f"[IFlowMonitor] 等待稳定... ({stable_time:.1f}秒 / {self._stable_duration}秒)")
-                        
+
                         if stable_time >= self._stable_duration:
                             # 稳定2秒，确认结束
                             logger.info(f"[IFlowMonitor] 生成中稳定消失（{stable_time:.1f}s），交互结束")
-                            
+
                             # 只发送最后一个标记（忽略中间的所有更新版本）
                             if len(self._candidate_messages) > 0:
                                 # 发送最后一个标记（当前标记）
                                 message_to_send = self._candidate_messages[-1]
                                 msg_hash = hashlib.md5(f"{message_to_send['marker_type']}:{message_to_send['content']}".encode()).hexdigest()
-                                
+
                                 if msg_hash not in self._processed_hashes:
                                     # 检查是否有部分重叠的消息（iflow 可能逐步生成消息）
                                     # 如果前一条消息是当前消息的前缀，则认为它们是同一条消息
                                     if len(self._candidate_messages) > 1:
                                         prev_message = self._candidate_messages[-2]
                                         prev_hash = hashlib.md5(f"{prev_message['marker_type']}:{prev_message['content']}".encode()).hexdigest()
-                                        
+
                                         # 检查前一条消息是否是当前消息的前缀
                                         if message_to_send['content'].startswith(prev_message['content']) and prev_hash in self._processed_hashes:
                                             logger.debug(f"[IFlowMonitor] 标记 #{len(self._candidate_messages)} 与标记 #{len(self._candidate_messages)-1} 部分重叠，移除重复发送")
                                             # 从已发送集合中移除前一条消息
                                             self._processed_hashes.discard(prev_hash)
                                             logger.debug(f"[IFlowMonitor] 已移除标记 #{len(self._candidate_messages)-1} 的哈希")
-                                    
+
                                     logger.debug(f"[IFlowMonitor] 发送最后一个标记（第 {len(self._candidate_messages)} 个）")
                                     logger.debug(f"[IFlowMonitor] 发送内容: {message_to_send['content']}")
                                     await self._send_message(message_to_send)
                                 else:
                                     logger.debug(f"[IFlowMonitor] 最后一个标记已发送，跳过")
-                            
+
                             # 清空候选缓存
                             self._candidate_messages = []
                             self._last_candidate_messages = []
@@ -370,8 +370,8 @@ class IFlowMonitor:
                     self._generating_state_started = False
                     self._interaction_complete = False
                     logger.info(f"[IFlowMonitor] State changed: {IFlowState.GENERATING.value} -> {IFlowState.IDLE.value}, duration={duration}秒")
-            
-            # 生成中重新出现，重置计时器和交互完成标志
+
+            # 生成中存在，处理新增的消息
             elif is_generating:
                 if self._stable_start_time is not None:
                     logger.debug(f"[IFlowMonitor] 生成中重新出现，重置稳定计时器")
