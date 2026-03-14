@@ -85,6 +85,9 @@ class IFlowMonitor:
         self._interaction_complete: bool = False  # 当前交互是否完成
         self._generating_state_started: bool = False  # 生成状态是否已开始
         
+        # 消息定位（用于过滤发送消息前的内容）
+        self._last_received_line: Optional[int] = None  # 记录接收消息的行号
+        
         # 订阅者列表
         self._subscribers: List[Callable] = []
         
@@ -457,13 +460,64 @@ class IFlowMonitor:
 
         return False
     
+    def _extract_received_message(self, lines: List[str]) -> tuple[Optional[str], Optional[int]]:
+        """从 tmux 输出中提取发给 iflow 的消息
+        
+        发送给 iflow 的消息特征：
+        - 以 `>` 开头的行
+        - 例如：`> 用户的消息内容`
+        
+        Args:
+            lines: tmux 输出行列表
+        
+        Returns:
+            (消息内容, 消息行号) 或 (None, None)
+        """
+        # 从下往上扫描，找到最后一个 `>` 开头的行
+        for i in range(len(lines) - 1, -1, -1):
+            line = lines[i].strip()
+            if line.startswith('>'):
+                # 找到了用户消息
+                message_content = line[1:].strip()  # 去掉 `>` 前缀
+                return message_content, i
+        
+        return None, None
+    
+    def _is_tui_line(self, line: str) -> bool:
+        """判断一行是否为 TUI 界面内容
+        
+        TUI 界面特征：
+        - 包含 "生成中"
+        - 包含 "思考:"
+        - 包含 "上下文剩余"
+        - 是分隔符（---, ══, ────）
+        
+        Args:
+            line: 要检查的行
+        
+        Returns:
+            是否为 TUI 界面行
+        """
+        tui_markers = ['生成中', '思考:', '上下文剩余', '---', '══', '────']
+        
+        line_stripped = line.strip()
+        
+        # 检查是否包含 TUI 标记
+        for marker in tui_markers:
+            if marker in line_stripped:
+                return True
+        
+        return False
+    
     def _extract_messages(self, output: str) -> List[Dict]:
         """从 tmux 输出中提取消息
         
         提取策略：
+        - 提取发给 iflow 的消息并记录行号
+        - 过滤掉发送消息前的内容
         - 检测标记行（✦ 或 ✻）
         - 收集标记行及所有后续缩进的内容
-        - 跳过 UI 行（生成中、分隔符等）
+        - 跳过 TUI 界面行（生成中、思考、分隔符等）
         
         Args:
             output: tmux 输出
@@ -474,7 +528,25 @@ class IFlowMonitor:
         messages = []
         lines = output.split('\n')
         
+        # 提取发给 iflow 的消息
+        received_message, received_line = self._extract_received_message(lines)
+        
+        # 如果找到了接收消息，记录行号
+        if received_line is not None:
+            self._last_received_line = received_line
+            logger.debug(f"[IFlowMonitor] 找到接收消息: {received_message[:50]}..., 行号: {received_line}")
+        
+        # 过滤掉发送消息前的内容
+        if self._last_received_line is not None:
+            lines = lines[self._last_received_line + 1:]
+            logger.debug(f"[IFlowMonitor] 过滤掉发送消息前的内容，剩余 {len(lines)} 行")
+        
         for i, line in enumerate(lines):
+            # 跳过 TUI 界面行
+            if self._is_tui_line(line):
+                logger.debug(f"[IFlowMonitor] 跳过 TUI 界面行: {line[:50]}")
+                continue
+            
             # 检查标记行
             if '✦' in line or '✻' in line:
                 # 提取标记内容（去掉标记符号）
@@ -494,15 +566,15 @@ class IFlowMonitor:
                 for j in range(i + 1, len(lines)):
                     next_line = lines[j]
                     
-                    # 如果遇到新的标记行或分隔符，停止
-                    if '✦' in next_line or '✻' in next_line or next_line.startswith('---') or next_line.startswith('═') or next_line.startswith('─'):
-                        logger.debug(f"[IFlowMonitor] 遇到新标记或分隔符，停止收集: {next_line[:50]}")
-                        break
-                    
-                    # 跳过"生成中"等 UI 行
-                    if '生成中' in next_line and '按' in next_line:
-                        logger.debug(f"[IFlowMonitor] 跳过 UI 行: {next_line[:50]}")
+                    # 跳过 TUI 界面行
+                    if self._is_tui_line(next_line):
+                        logger.debug(f"[IFlowMonitor] 跳过 TUI 界面行: {next_line[:50]}")
                         continue
+                    
+                    # 如果遇到新的标记行，停止
+                    if '✦' in next_line or '✻' in next_line:
+                        logger.debug(f"[IFlowMonitor] 遇到新标记，停止收集: {next_line[:50]}")
+                        break
                     
                     # 跳过空行
                     if not next_line.strip():

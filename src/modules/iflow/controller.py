@@ -30,6 +30,8 @@ class IFlowController:
         """
         self._tmux_session = tmux_session
         self._session_assigned = tmux_session is not None
+        self._last_sent_message: Optional[str] = None  # 记录最后发送的消息
+        self._last_sent_time: Optional[float] = None   # 记录发送时间
     
     @property
     def tmux_session(self) -> str:
@@ -226,6 +228,11 @@ class IFlowController:
             
             logger.info(f"[IFlowController] 发送消息到 iflow: {message[:50]}...")
             logger.debug(f"[IFlowController] 发送完成，等待 iflow 回复...")
+            
+            # 记录最后发送的消息
+            self._last_sent_message = message
+            self._last_sent_time = time.time()
+            
             return True
             
         except Exception as e:
@@ -425,3 +432,11 @@ class IFlowController:
         except Exception as e:
             logger.error(f"[IFlowController] Error capturing output: {e}")
             return ""
+    
+    def get_last_sent_message(self) -> Optional[str]:
+        """获取最后发送的消息
+        
+        Returns:
+            最后发送的消息，如果没有发送过则返回 None
+        """
+        return self._last_sent_message
