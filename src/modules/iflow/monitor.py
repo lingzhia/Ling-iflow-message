@@ -353,10 +353,22 @@ class IFlowMonitor:
                             self._last_candidate_messages = []
                             self._stable_start_time = None
                             self._generating_state_started = False
-                            
+
                             # 设置交互完成标志，防止旧消息被重复检测
                             self._interaction_complete = True
                             logger.debug(f"[IFlowMonitor] 交互完成标志已设置")
+
+                            # 同时将状态设置为 idle，防止标志被重置
+                            duration = self.generating_duration
+                            old_state = self._state
+                            self._state = IFlowState.IDLE
+                            self._generating_start_time = None
+                            self.stats["state_changes"] += 1
+                            logger.info(f"[IFlowMonitor] State changed: {old_state.value} -> {self._state.value}, duration={duration}s}")
+
+                            # 触发状态变更回调（传递 duration）
+                            if self._on_state_change:
+                                await self._call_callback(self._on_state_change, old_state, self._state, duration)
                         else:
                             logger.debug(f"[IFlowMonitor] 等待稳定... ({stable_time:.1f}s / {self._stable_duration}s)")
                 else:
