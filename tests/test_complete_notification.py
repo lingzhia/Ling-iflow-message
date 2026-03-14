@@ -113,8 +113,18 @@ async def test_complete_notification():
         })
         print(f"🔄 状态变更: {old_state.value} -> {new_state.value}, duration={duration}s")
 
-    # 设置状态变更回调
-    module.monitor.set_state_change_callback(state_change_handler)
+    # 保存原有的状态变更回调
+    original_state_change_callback = module.monitor._on_state_change
+
+    # 设置新的状态变更回调（同时调用原有回调和新回调）
+    async def combined_state_change_handler(old_state, new_state, duration=0):
+        # 调用原有回调
+        if original_state_change_callback:
+            await original_state_change_callback(old_state, new_state, duration)
+        # 调用测试回调
+        await state_change_handler(old_state, new_state, duration)
+
+    module.monitor.set_state_change_callback(combined_state_change_handler)
     print("✅ 状态变更回调已设置")
 
     try:

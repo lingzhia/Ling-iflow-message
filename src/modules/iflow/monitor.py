@@ -738,19 +738,20 @@ class IFlowMonitor:
     
     async def _call_callback(self, callback: Callable, *args) -> None:
         """调用回调函数
-        
+    
         Args:
             callback: 回调函数
             args: 参数
         """
         try:
+            logger.debug(f"[IFlowMonitor] Calling callback: {callback.__name__ if hasattr(callback, '__name__') else 'unknown'}")
             if asyncio.iscoroutinefunction(callback):
                 await callback(*args)
             else:
                 callback(*args)
+            logger.debug(f"[IFlowMonitor] Callback completed successfully")
         except Exception as e:
-            logger.error(f"[IFlowMonitor] Callback error: {e}", exc_info=True)
-    
+            logger.error(f"[IFlowMonitor] Callback error: {e}", exc_info=True)    
     def get_stats(self) -> Dict:
         """获取统计信息
         
