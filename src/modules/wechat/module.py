@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional
 
 from ...core.base import BaseModule
 from ...core.message import Message, MessageType, MessageContent
-from .channel import WeChatChannel
+from ..channel import WeChatChannel
 from ..command import CommandHandler
 
 
