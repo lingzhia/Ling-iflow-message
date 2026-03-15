@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .core import MessageBus, Message
+from .core import MessageBus, Message, ModuleManager
 from .modules import WeChatModule, IFlowModule
 
 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class LingIflowBot:
     """Ling-iflow 机器人主类
     
-    管理消息总线和所有模块的生命周期。
+    使用 ModuleManager 管理消息总线和所有模块的生命周期。
     """
     
     def __init__(self, config_path: str = "config.json", active_group: str = "all"):
@@ -39,6 +39,7 @@ class LingIflowBot:
         
         # 核心组件
         self.bus: Optional[MessageBus] = None
+        self.manager: Optional[ModuleManager] = None
         self.wechat_modules: Dict[str, WeChatModule] = {}
         self.iflow_modules: Dict[str, IFlowModule] = {}
         
@@ -93,14 +94,21 @@ class LingIflowBot:
             logger.info("创建消息总线...")
             self.bus = MessageBus()
             
-            # 2. 创建并注册 IFlowModule
+            # 2. 创建模块管理器
+            logger.info("创建模块管理器...")
+            self.manager = ModuleManager(self.bus)
+            
+            # 3. 创建并注册 IFlowModule
             await self._setup_iflow_modules()
             
-            # 3. 创建并注册 WeChatModule
+            # 4. 创建并注册 WeChatModule
             await self._setup_wechat_modules()
             
-            # 4. 设置绑定关系
+            # 5. 设置绑定关系
             self._setup_bindings()
+            
+            # 6. 定义模块组
+            await self._setup_groups()
             
             logger.info("所有组件初始化完成")
             return True
@@ -110,7 +118,7 @@ class LingIflowBot:
             return False
     
     async def _setup_iflow_modules(self) -> None:
-        """创建并注册 IFlowModule"""
+        """创建并注册 IFlowModule（使用 ModuleManager）"""
         # 组名映射：g1 -> bot1, g2 -> bot2
         group_mapping = {
             "g1": "bot1",
@@ -164,21 +172,30 @@ class LingIflowBot:
             
             logger.info(f"创建 IFlowModule: {module_id}")
             
-            iflow = IFlowModule(
+            # 使用 ModuleManager 创建模块
+            iflow = await self.manager.create_module(
+                module_type="iflow",
                 module_id=module_id,
-                tmux_session=session_name,
-                model=session_config.get("model", "kimi-k2.5"),
-                workspace=session_config.get("workspace", "~/.iflow")
+                config={
+                    "tmux_session": session_name,
+                    "model": session_config.get("model", "kimi-k2.5"),
+                    "workspace": session_config.get("workspace", "~/.iflow")
+                }
             )
             
-            # 注册到 message 总线
-            self.bus.register_module(iflow)
+            # 注册到消息总线
+            await self.manager.register_module(module_id)
+            
+            # 设置消息总线引用
+            self.manager.set_message_bus_for_module(module_id)
+            
+            # 存储引用
             self.iflow_modules[session_name] = iflow
             
-            logger.info(f"IFlowModule {module_id} 注册成功")
+            logger.info(f"IFlowModule {module_id} 创建和注册成功")
     
     async def _setup_wechat_modules(self) -> None:
-        """创建并注册 WeChatModule"""
+        """创建并注册 WeChatModule（使用 ModuleManager）"""
         # 组名映射：g1 -> bot1, g2 -> bot2
         group_mapping = {
             "g1": "bot1",
@@ -206,16 +223,23 @@ class LingIflowBot:
             
             logger.info(f"创建 WeChatModule: {module_id}")
             
-            wechat = WeChatModule(
+            # 使用 ModuleManager 创建模块
+            wechat = await self.manager.create_module(
+                module_type="wechat",
                 module_id=module_id,
                 config=bot_config
             )
             
             # 注册到消息总线
-            self.bus.register_module(wechat)
+            await self.manager.register_module(module_id)
+            
+            # 设置消息总线引用
+            self.manager.set_message_bus_for_module(module_id)
+            
+            # 存储引用
             self.wechat_modules[bot_name] = wechat
             
-            logger.info(f"WeChatModule {module_id} 注册成功")
+            logger.info(f"WeChatModule {module_id} 创建和注册成功")
     
     def _setup_bindings(self) -> None:
         """设置模块绑定关系（双向绑定）"""
@@ -236,56 +260,82 @@ class LingIflowBot:
             self.bus.bind(iflow_id, wechat_id)
             logger.info(f"双向绑定: {wechat_id} <-> {iflow_id}")
     
+    async def _setup_groups(self) -> None:
+        """定义模块组"""
+        # 根据 active_group 定义组
+        if self.active_group == "all":
+            # 创建包含所有模块的组
+            all_modules = list(self.iflow_modules.keys()) + list(self.wechat_modules.keys())
+            # 转换为 module_id
+            all_module_ids = [f"iflow_{name}" for name in self.iflow_modules.keys()] + \
+                              [f"wechat_{name}" for name in self.wechat_modules.keys()]
+            self.manager.define_group("all", all_module_ids)
+            logger.info(f"定义组 'all': {len(all_module_ids)} 个模块")
+        else:
+            # 根据 active_group 定义特定的组
+            group_mapping = {
+                "g1": "bot1",
+                "g2": "bot2"
+            }
+            target_bot = group_mapping.get(self.active_group, self.active_group)
+            
+            # 查找对应的 tmux_session
+            target_session = None
+            bots = self.config.get("bots", [])
+            for bot_config in bots:
+                if bot_config.get("name") == target_bot:
+                    target_session = bot_config.get("tmux_session", "iflow")
+                    break
+            
+            if target_session:
+                # 定义特定组的模块
+                group_modules = [f"iflow_{target_session}", f"wechat_{target_bot}"]
+                self.manager.define_group(self.active_group, group_modules)
+                logger.info(f"定义组 '{self.active_group}': {group_modules}")
+            else:
+                logger.warning(f"无法找到组 '{self.active_group}' 对应的配置")
+    
     async def start(self) -> None:
-        """启动所有模块"""
+        """启动所有模块（使用 ModuleManager）"""
         logger.info("启动所有模块...")
         
-        # 先启动 IFlowModule（确保 iflow 准备好）
-        for session_name, iflow in self.iflow_modules.items():
-            try:
-                logger.info(f"启动 IFlowModule: {session_name}")
-                success = await iflow.start()
+        # 使用 ModuleManager 启动模块
+        if self.active_group == "all":
+            # 启动所有模块
+            for module_id in self.manager.modules.keys():
+                success = await self.manager.start_module(module_id)
                 if success:
-                    logger.info(f"IFlowModule {session_name} 启动成功")
+                    logger.info(f"模块 {module_id} 启动成功")
                 else:
-                    logger.warning(f"IFlowModule {session_name} 启动失败")
-            except Exception as e:
-                logger.error(f"启动 IFlowModule {session_name} 失败: {e}", exc_info=True)
+                    logger.warning(f"模块 {module_id} 启动失败")
+        else:
+            # 启动指定组的模块
+            results = await self.manager.start_group(self.active_group)
+            for module_id, success in results.items():
+                if success:
+                    logger.info(f"模块 {module_id} 启动成功")
+                else:
+                    logger.warning(f"模块 {module_id} 启动失败")
         
-        # 后启动 WeChatModule（用户会等待启动消息）
-        for bot_name, wechat in self.wechat_modules.items():
-            try:
-                logger.info(f"启动 WeChatModule: {bot_name}")
-                await wechat.start()
-                logger.info(f"WeChatModule {bot_name} 启动成功")
-            except Exception as e:
-                logger.error(f"启动 WeChatModule {bot_name} 失败: {e}", exc_info=True)
+        # 启动健康监控
+        await self.manager.start_health_monitor()
         
         self._running = True
         logger.info("所有模块启动完成")
     
     async def stop(self) -> None:
-        """停止所有模块"""
+        """停止所有模块（使用 ModuleManager）"""
         if not self._running:
             return
         
         logger.info("停止所有模块...")
         
-        # 停止 WeChatModule
-        for bot_name, wechat in self.wechat_modules.items():
-            try:
-                logger.info(f"停止 WeChatModule: {bot_name}")
-                await wechat.stop()
-            except Exception as e:
-                logger.error(f"停止 WeChatModule {bot_name} 失败: {e}")
+        # 停止健康监控
+        await self.manager.stop_health_monitor()
         
-        # 停止 IFlowModule
-        for session_name, iflow in self.iflow_modules.items():
-            try:
-                logger.info(f"停止 IFlowModule: {session_name}")
-                await iflow.stop()
-            except Exception as e:
-                logger.error(f"停止 IFlowModule {session_name} 失败: {e}")
+        # 使用 ModuleManager 停止模块
+        for module_id in self.manager.modules.keys():
+            await self.manager.stop_module(module_id)
         
         self._running = False
         logger.info("所有模块已停止")
