@@ -12,14 +12,24 @@ IFlowModule 交互式体验工具
     # 交互模式
     python tools/iflow_interactive_tool.py [选项]
 
-    # 命令行模式
+    # 命令行模式（默认保持会话）
     python tools/iflow_interactive_tool.py --message "你好" [选项]
+
+    # 命令行模式（执行后销毁会话）
+    python tools/iflow_interactive_tool.py --message "你好" --cleanup
+
+    # 连续执行（复用会话）
+    python tools/iflow_interactive_tool.py --message "第一条消息"
+    python tools/iflow_interactive_tool.py --message "第二条消息"
+    python tools/iflow_interactive_tool.py --message "第三条消息"
 
 选项：
     --config PATH    配置文件路径（默认 config.json）
     --message TEXT   命令行模式：发送消息后退出
     --scope MODE     scope 模式：all 或 reply_only（默认）
     --clean          清理残留的 tmux 会话（默认不复用）
+    --keep-alive     保持 tmux 会话（默认，命令行模式）
+    --cleanup        销毁 tmux 会话（命令行模式）
 """
 
 import sys
@@ -139,18 +149,20 @@ class IFlowInteractiveTool:
     模拟消息总线与 IFlowModule 交互。
     """
 
-    def __init__(self, config_path: str = "config.json", clean: bool = False):
+    def __init__(self, config_path: str = "config.json", clean: bool = False, keep_alive: bool = True):
         """初始化工具
 
         Args:
             config_path: 配置文件路径
             clean: 是否清理残留的 tmux 会话
+            keep_alive: 是否保持 tmux 会话（默认 True）
         """
         self.config_path = config_path
         self.config = self._load_config(config_path)
         self.mock_bus = MockMessageBus()
         self.module: Optional[IFlowModule] = None
         self.clean = clean  # 是否清理残留的 tmux 会话
+        self.keep_alive = keep_alive  # 是否保持 tmux 会话
 
         # 当前身份和模式
         self.current_source: str = "tool"
@@ -222,6 +234,15 @@ class IFlowInteractiveTool:
                 await asyncio.sleep(1.0)
                 print(f"  已清理残留的 tmux 会话")
 
+        # 检查 iflow 是否已经在运行
+        from src.modules.iflow.controller import IFlowController
+        temp_controller = IFlowController(tmux_session)
+        iflow_running = await temp_controller.check_iflow_running()
+        
+        if iflow_running and self.keep_alive:
+            print(f"  检测到 iflow 已在运行（会话: {tmux_session}）")
+            print(f"  将复用现有 iflow 实例，保持会话上下文")
+        
         # 创建模块实例
         self.module = IFlowModule(
             tmux_session=tmux_session,
@@ -271,12 +292,33 @@ class IFlowInteractiveTool:
         
         print("=" * 60)
     
-    async def stop(self):
-        """停止工具"""
+    async def stop(self, keep_alive: Optional[bool] = None):
+        """停止工具
+        
+        Args:
+            keep_alive: 是否保持 tmux 会话（None 表示使用实例变量）
+        """
+        # 确定是否保持会话
+        should_keep_alive = keep_alive if keep_alive is not None else self.keep_alive
+        
         if self.module:
-            print("\n正在停止模块...")
-            await self.module.stop()
-            print("✅ 模块已停止（tmux 会话已销毁）")
+            if should_keep_alive:
+                # 保持会话，只停止监控器（不销毁 tmux 和 iflow）
+                print("\n正在停止模块（保持 tmux 和 iflow 进程）...")
+                
+                # 停止监控器
+                await self.module.monitor.stop()
+                
+                # 停止模块但不销毁会话
+                self.module._running = False
+                
+                print("✅ 模块已停止（tmux 和 iflow 进程已保留）")
+                print(f"   下次启动将复用现有 iflow 会话（{self.module.tmux_session}）")
+            else:
+                # 销毁会话
+                print("\n正在停止模块...")
+                await self.module.stop()
+                print("✅ 模块已停止（tmux 会话已销毁）")
     
     async def _on_iflow_message(self, message: Message):
         """接收 IFlowModule 返回的消息（通过钩子）"""
@@ -684,6 +726,7 @@ async def main():
     command_line_message = None
     scope = "reply_only"
     clean = False
+    keep_alive = True  # 默认保持会话
 
     # 解析命令行参数
     args = sys.argv[1:]
@@ -704,9 +747,13 @@ async def main():
             i += 1
         elif arg == '--clean':
             clean = True
+        elif arg == '--keep-alive':
+            keep_alive = True
+        elif arg == '--cleanup':
+            keep_alive = False
         i += 1
 
-    tool = IFlowInteractiveTool(config_path, clean=clean)
+    tool = IFlowInteractiveTool(config_path, clean=clean, keep_alive=keep_alive)
 
     try:
         await tool.start()
@@ -715,12 +762,21 @@ async def main():
             # 命令行模式：发送消息后退出
             tool.current_scope = scope
             await tool.send_message(command_line_message)
-            await tool.wait_for_complete()
+            completed = await tool.wait_for_complete()
+            
+            if not completed:
+                print("⚠️ 等待被中断或超时")
             
             # 显示历史
             print("\n" + "=" * 60)
             tool._show_history()
             print("=" * 60)
+            
+            # 提示会话状态
+            if tool.keep_alive:
+                print(f"\n💡 提示：tmux 会话已保留，下次执行将继续使用该会话")
+            else:
+                print(f"\n💡 提示：tmux 会话将被销毁")
         else:
             # 交互模式：进入交互式循环
             await tool.interactive_loop()
@@ -728,7 +784,11 @@ async def main():
         logger.error(f"运行错误: {e}", exc_info=True)
         sys.exit(1)
     finally:
-        await tool.stop()
+        # 根据配置决定是否停止
+        if not tool.keep_alive:
+            await tool.stop(keep_alive=False)
+        else:
+            await tool.stop(keep_alive=True)
 
 
 if __name__ == "__main__":
