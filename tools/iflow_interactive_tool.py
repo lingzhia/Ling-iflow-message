@@ -19,6 +19,7 @@ IFlowModule 交互式体验工具
     --config PATH    配置文件路径（默认 config.json）
     --message TEXT   命令行模式：发送消息后退出
     --scope MODE     scope 模式：all 或 reply_only（默认）
+    --clean          清理残留的 tmux 会话（默认不复用）
 """
 
 import sys
@@ -38,13 +39,43 @@ from src.modules.iflow.monitor import IFlowState
 from src.core.message import Message, MessageContent, MessageType as CoreMessageType
 from src.core.base import BaseModule
 
-# 设置日志级别，减少日志输出
+# 设置日志配置
 import logging
-logging.basicConfig(
-    level=logging.WARNING,  # 只显示 WARNING 和 ERROR
-    format='%(asctime)s [%(levelname)s] %(message)s'
+
+# 创建日志目录
+log_dir = Path("logs")
+log_dir.mkdir(exist_ok=True)
+
+# 配置日志文件
+log_file = log_dir / "iflow_tool.log"
+
+# 创建日志格式器
+file_formatter = logging.Formatter(
+    '%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
+
+# 文件处理器（记录所有日志）
+file_handler = logging.FileHandler(log_file, encoding='utf-8')
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(file_formatter)
+
+# 控制台处理器（只显示 WARNING 和 ERROR）
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.WARNING)
+console_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+console_handler.setFormatter(console_formatter)
+
+# 配置根日志
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.DEBUG)
+root_logger.addHandler(file_handler)
+root_logger.addHandler(console_handler)
+
+# 工具专用日志
 logger = logging.getLogger("iflow_tool")
+logger.setLevel(logging.DEBUG)
+logger.info(f"日志文件: {log_file.absolute()}")
 
 
 class MockMessageBus:
@@ -52,19 +83,54 @@ class MockMessageBus:
 
     def __init__(self):
         self._iflow_module = None
+        self._message_callback = None  # 消息回调（用于接收来自 iflow 的消息）
+        self._processed_message_ids = set()  # 已处理的消息 ID（用于去重）
 
     def bind(self, from_module, to_module, bidirectional=False):
         """绑定（简化版，不需要路由逻辑）"""
         pass
 
     async def route(self, message: Message):
-        """路由消息（直接调用 IFlowModule）"""
-        if self._iflow_module:
+        """路由消息
+        
+        注意：避免将来自 IFlowModule 的消息发送回 IFlowModule，防止循环
+        """
+        if not self._iflow_module:
+            return
+
+        # 检查消息来源
+        is_from_iflow = (message.from_module == self._iflow_module.module_id)
+
+        if is_from_iflow:
+            # 来自 iflow 的消息，通过回调处理
+            # 去重：检查是否已处理
+            if message.id in self._processed_message_ids:
+                logger.debug(f"[MockMessageBus] 消息已处理，跳过: {message.id}")
+                return
+            
+            # 添加到已处理集合
+            self._processed_message_ids.add(message.id)
+            
+            # 限制集合大小
+            if len(self._processed_message_ids) > 1000:
+                self._processed_message_ids = set(list(self._processed_message_ids)[-500:])
+            
+            if self._message_callback:
+                try:
+                    await self._message_callback(message)
+                except Exception as e:
+                    logger.error(f"[MockMessageBus] 消息回调错误: {e}", exc_info=True)
+        else:
+            # 来自其他模块的消息，发送到 iflow
             await self._iflow_module.receive(message)
 
     def set_iflow_module(self, module):
         """设置 IFlowModule"""
         self._iflow_module = module
+
+    def set_message_callback(self, callback):
+        """设置消息回调（用于接收来自 iflow 的消息）"""
+        self._message_callback = callback
 
 
 class IFlowInteractiveTool:
@@ -73,23 +139,28 @@ class IFlowInteractiveTool:
     模拟消息总线与 IFlowModule 交互。
     """
 
-    def __init__(self, config_path: str = "config.json"):
+    def __init__(self, config_path: str = "config.json", clean: bool = False):
         """初始化工具
 
         Args:
             config_path: 配置文件路径
+            clean: 是否清理残留的 tmux 会话
         """
         self.config_path = config_path
         self.config = self._load_config(config_path)
         self.mock_bus = MockMessageBus()
         self.module: Optional[IFlowModule] = None
+        self.clean = clean  # 是否清理残留的 tmux 会话
 
         # 当前身份和模式
         self.current_source: str = "tool"
-        self.current_scope: str = "reply_only"
+        self.current_scope: str = "reply_only"  # 默认只显示回复消息
 
         # 消息历史
         self.message_history: List[dict] = []
+        
+        # 中断标志
+        self._interrupt_event = asyncio.Event()
     
     def _load_config(self, config_path: str) -> dict:
         """加载配置文件"""
@@ -132,8 +203,8 @@ class IFlowInteractiveTool:
         log_interactions = self.config.get("log_interactions", True)
         log_dir = self.config.get("log_dir", "logs/interactions")
 
-        # 检查并清理残留的 tmux 会话
-        if tmux_session:
+        # 检查并清理残留的 tmux 会话（仅在 clean=True 时）
+        if self.clean and tmux_session:
             proc = await asyncio.create_subprocess_exec(
                 "tmux", "has-session", "-t", tmux_session,
                 stdout=asyncio.subprocess.PIPE,
@@ -165,6 +236,9 @@ class IFlowInteractiveTool:
         self.module.set_message_bus(self.mock_bus)
         self.mock_bus.set_iflow_module(self.module)
         
+        # 设置消息回调（用于接收来自 iflow 的消息）
+        self.mock_bus.set_message_callback(self._on_iflow_message)
+        
         # 设置钩子（拦截返回的消息）
         self.module.set_message_sent_hook(self._on_iflow_message)
         
@@ -178,6 +252,19 @@ class IFlowInteractiveTool:
             print(f"\n✅ 模块已启动")
             print(f"   module_id: {self.module.module_id}")
             print(f"   tmux_session: {self.module.tmux_session}")
+            
+            # 等待 iflow 完全就绪
+            print("正在等待 iflow 完全就绪...")
+            ready = await self.module.wait_for_ready(timeout=60)
+            if not ready:
+                print("⚠️ 警告：iflow 未在预期时间内完全就绪")
+            else:
+                print("✅ iflow 已完全就绪，可以发送消息")
+            
+            # 等待监控器稳定（监控器启动后需要时间稳定状态）
+            print("正在等待监控器稳定...")
+            await asyncio.sleep(3.0)
+            print("✅ 监控器已稳定")
         except Exception as e:
             print(f"\n❌ 启动失败: {e}")
             raise
@@ -193,6 +280,8 @@ class IFlowInteractiveTool:
     
     async def _on_iflow_message(self, message: Message):
         """接收 IFlowModule 返回的消息（通过钩子）"""
+        print(f"  _on_iflow_message 被调用")
+        
         reply_type = message.metadata.get('reply_type', 'unknown')
         
         # 记录历史
@@ -203,11 +292,21 @@ class IFlowInteractiveTool:
             "metadata": message.metadata
         })
         
-        # 显示消息
+        print(f"  消息已记录: {reply_type}")
+        
+        # 显示消息（优化界面格式）
         if reply_type == 'complete':
-            print(f"\n✅ [完成] {message.content.text}")
+            print("\n" + "=" * 60)
+            print("✅ 交互完成")
+            print("=" * 60)
+            print(f"{message.content.text}")
+            print("=" * 60)
         elif reply_type == 'reply':
-            print(f"\n📤 [✦ 回复] {message.content.text}")
+            print("\n" + "─" * 60)
+            print("📤 iflow 回复:")
+            print("─" * 60)
+            print(f"{message.content.text}")
+            print("─" * 60)
         else:
             # 思考消息，根据 scope 决定是否显示
             if self.current_scope == "all":
@@ -219,7 +318,31 @@ class IFlowInteractiveTool:
             print("❌ 模块未启动")
             return
         
+        # 检查 iflow 是否就绪（带重试机制，解决竞态条件问题）
+        max_retries = 3
+        retry_delay = 1.0
+        
+        for attempt in range(max_retries):
+            is_ready = await self.module.controller.check_iflow_ready()
+            if is_ready:
+                break
+            
+            if attempt < max_retries - 1:
+                print(f"  iflow 未就绪，等待 {retry_delay} 秒后重试... ({attempt + 1}/{max_retries})")
+                await asyncio.sleep(retry_delay)
+            else:
+                print("❌ iflow 未就绪，无法发送消息")
+                print("   提示：可能是监控器启动导致的短暂状态变化，请稍后再试")
+                return
+        
         print(f"发送消息: {content}")
+        
+        # 优化用户消息显示
+        print("\n" + "─" * 60)
+        print("📤 用户消息:")
+        print("─" * 60)
+        print(f"{content}")
+        print("─" * 60)
         
         # 创建 Message（模拟消息总线）
         msg = Message(
@@ -230,50 +353,74 @@ class IFlowInteractiveTool:
             metadata={"scope": self.current_scope}
         )
         
+        print(f"  调用 mock_bus.route()...")
         await self.mock_bus.route(msg)
+        print(f"  mock_bus.route() 完成")
         
         # 等待一下，让消息处理完成
         await asyncio.sleep(1)
     
     async def wait_for_complete(self, timeout: float = 120.0) -> bool:
-        """等待回复完成"""
+        """等待回复完成（可中断）
+        
+        Returns:
+            是否正常完成（True: 完成，False: 被中断或超时）
+        """
         if not self.module:
             return False
         
-        print(f"等待回复完成（超时: {timeout}秒）...")
+        # 清空中断标志
+        self._interrupt_event.clear()
+        
+        print(f"等待回复完成（超时: {timeout}秒，按 Ctrl+C 中断）...")
         
         # 轮询状态
         elapsed = 0.0
-        last_state = self.module.state
-        last_message_count = len(self.message_history)
         check_interval = 1.0
         
+        # 等待至少收到一条消息
+        while elapsed < timeout and len(self.message_history) == 0:
+            # 检查是否被中断
+            if self._interrupt_event.is_set():
+                print(f"\n   ⚠️ 等待已被中断")
+                return False
+            
+            await asyncio.sleep(check_interval)
+            elapsed += check_interval
+            
+            if int(elapsed) % 5 == 0 and elapsed > 0:
+                print(f"   等待回复... {int(elapsed)}秒", end='\r', flush=True)
+        
+        # 如果没有收到消息，返回 False
+        if len(self.message_history) == 0:
+            print(f"\n   ⚠️ 未收到任何消息")
+            return False
+        
+        print(f"\n   ✅ 收到 {len(self.message_history)} 条消息")
+        
+        # 等待状态变为 IDLE
+        start_time = elapsed
         while elapsed < timeout:
+            # 检查是否被中断
+            if self._interrupt_event.is_set():
+                print(f"\n   ⚠️ 等待已被中断")
+                return False
+            
             await asyncio.sleep(check_interval)
             elapsed += check_interval
             
             current_state = self.module.state
-            message_count = len(self.message_history)
             
-            # 每10秒显示一次进度
-            if int(elapsed) % 10 == 0 and elapsed > 0:
-                print(f"   等待中... {int(elapsed)}秒", end='\r', flush=True)
+            if int(elapsed) % 5 == 0:
+                print(f"   等待生成完成... {int(elapsed)}秒 (状态: {current_state.value})", end='\r', flush=True)
             
-            # 检查是否完成（没有新消息且不在生成中）
-            if current_state == IFlowState.IDLE and message_count > last_message_count:
-                # 额外等待2秒，确保状态稳定
+            # 检查状态是否为 IDLE
+            if current_state == IFlowState.IDLE:
+                # 额外等待 2 秒，确保状态稳定
                 await asyncio.sleep(2)
-                # 再次检查状态
                 if self.module.state == IFlowState.IDLE:
-                    print(f"✅ 生成完成")
+                    print(f"\n✅ 生成完成 (耗时 {elapsed:.1f}秒)")
                     return True
-                else:
-                    # 状态又变回了 GENERATING，继续等待
-                    continue
-            
-            # 更新消息计数
-            if message_count > last_message_count:
-                last_message_count = message_count
         
         # 超时
         logger.warning(f"[Tool] ⚠️ 等待超时 ({timeout}秒)")
@@ -306,7 +453,7 @@ class IFlowInteractiveTool:
 
             while True:
                 try:
-                    user_input = await session.prompt_async(f"[{self.current_source}] 你: ")
+                    user_input = await session.prompt_async(f"\n💬 你: ")
 
                     if not user_input:
                         continue
@@ -321,11 +468,23 @@ class IFlowInteractiveTool:
 
                     # 发送消息
                     await self.send_message(user_input)
-                    await self.wait_for_complete()
+                    completed = await self.wait_for_complete()
+
+                    # 如果未完成（被中断），清空等待提示
+                    if not completed:
+                        print("   提示：等待已被中断，可以继续输入新消息")
 
                 except KeyboardInterrupt:
-                    print("\n退出...")
-                    break
+                    # 检查是否在等待过程中
+                    if self.module and self.module.state == IFlowState.GENERATING:
+                        # 在等待过程中中断，设置中断标志并继续循环
+                        self._interrupt_event.set()
+                        print("\n⚠️ 等待已中断，可以继续输入新消息")
+                        # 继续循环，等待用户输入
+                    else:
+                        # 不在等待过程中，退出
+                        print("\n退出...")
+                        break
                 except EOFError:
                     break
 
@@ -336,7 +495,7 @@ class IFlowInteractiveTool:
 
             while True:
                 try:
-                    prompt_text = f"\n[{self.current_source}] 你: "
+                    prompt_text = f"\n💬 你: "
                     user_input = input(prompt_text).strip()
 
                     if not user_input:
@@ -352,11 +511,23 @@ class IFlowInteractiveTool:
 
                     # 发送消息
                     await self.send_message(user_input)
-                    await self.wait_for_complete()
+                    completed = await self.wait_for_complete()
+
+                    # 如果未完成（被中断），清空等待提示
+                    if not completed:
+                        print("   提示：等待已被中断，可以继续输入新消息")
 
                 except KeyboardInterrupt:
-                    print("\n退出...")
-                    break
+                    # 检查是否在等待过程中
+                    if self.module and self.module.state == IFlowState.GENERATING:
+                        # 在等待过程中中断，设置中断标志并继续循环
+                        self._interrupt_event.set()
+                        print("\n⚠️ 等待已中断，可以继续输入新消息")
+                        # 继续循环，等待用户输入
+                    else:
+                        # 不在等待过程中，退出
+                        print("\n退出...")
+                        break
                 except EOFError:
                     break
     
@@ -512,6 +683,7 @@ async def main():
     config_path = "config.json"
     command_line_message = None
     scope = "reply_only"
+    clean = False
 
     # 解析命令行参数
     args = sys.argv[1:]
@@ -530,9 +702,11 @@ async def main():
         elif arg == '--scope' and i + 1 < len(args):
             scope = args[i + 1]
             i += 1
+        elif arg == '--clean':
+            clean = True
         i += 1
 
-    tool = IFlowInteractiveTool(config_path)
+    tool = IFlowInteractiveTool(config_path, clean=clean)
 
     try:
         await tool.start()

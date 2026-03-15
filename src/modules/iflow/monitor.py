@@ -7,6 +7,7 @@ IFlow Monitor
 import asyncio
 import hashlib
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Dict, Optional, Callable, Any
@@ -55,6 +56,10 @@ class IFlowMonitor:
     
     持续监听 iflow 的 tmux 输出，提取新消息，检测状态变化。
     """
+    
+    # 扫描行数配置
+    LINES_LIGHTWEIGHT = 20  # 轻量级模式（IDLE 状态）
+    LINES_FULL = 1000       # 完整模式（GENERATING 状态）
     
     def __init__(self, controller, check_interval: float = 0.5):
         """初始化监控器
@@ -184,12 +189,23 @@ class IFlowMonitor:
                 await asyncio.sleep(1)
     
     async def _check(self) -> None:
-        """检查新消息和状态（优化后的策略）"""
+        """检查新消息和状态（优化后的策略）
+        
+        根据当前状态选择不同的检查模式：
+        - IDLE 状态：轻量级检查，只扫描 20 行，只检查"生成中"
+        - GENERATING 状态：完整检查，扫描 1000 行，提取所有消息
+        """
+        # 如果是 IDLE 状态，使用轻量级检查
+        if self._state == IFlowState.IDLE:
+            await self._check_lightweight()
+            return
+        
+        # GENERATING 状态：执行完整检查
         self.stats["check_count"] += 1
 
         try:
-            # 捕获 tmux 输出
-            output = await self.controller.capture_output(lines=1000)
+            # 捕获 tmux 输出（完整模式：1000 行）
+            output = await self.controller.capture_output(lines=self.LINES_FULL)
 
             if not output:
                 return
@@ -268,7 +284,7 @@ class IFlowMonitor:
                             await self._send_message(message_to_send)
                             logger.info(f"[IFlowMonitor] 发送消息: {marker_symbol} - {message_to_send['content'][:50]}...")
                         else:
-                            logger.warning(f"[IFlowMonitor] 消息已发送，跳过: {marker_symbol} - {message_to_send['content'][:50]}...")
+                            logger.debug(f"[IFlowMonitor] 消息已发送，跳过: {marker_symbol} - {message_to_send['content'][:50]}...")
                 
                 # 更新缓存
                 self._last_candidate_messages = self._candidate_messages  # 保存上次
@@ -360,6 +376,17 @@ class IFlowMonitor:
                             # 状态变更和回调将在 _check_state() 中触发
                         else:
                             logger.debug(f"[IFlowMonitor] 等待稳定... ({stable_time:.1f}秒 / {self._stable_duration}秒)")
+                            
+                            # 超时保护：如果稳定检测超过 10 秒，强制结束
+                            if stable_time > 10.0:
+                                logger.warning(f"[IFlowMonitor] 稳定检测超时（{stable_time:.1f}s），强制结束")
+                                # 清空候选缓存
+                                self._candidate_messages = []
+                                self._last_candidate_messages = []
+                                self._stable_start_time = None
+                                self._generating_state_started = False
+                                self._interaction_complete = True
+                                logger.debug(f"[IFlowMonitor] 强制设置交互完成标志")
                 else:
                     # 没有候选消息，直接变回 idle
                     logger.debug(f"[IFlowMonitor] 生成中消失且无候选消息，直接变回 idle")
@@ -390,6 +417,58 @@ class IFlowMonitor:
             
         except Exception as e:
             logger.error(f"[IFlowMonitor] Error checking messages: {e}", exc_info=True)
+    
+    async def _check_lightweight(self) -> None:
+        """轻量级检查（IDLE 状态）
+        
+        只检查是否出现"生成中"关键词，不进行消息提取。
+        用于 IDLE 状态下的高效监控。
+        """
+        self.stats["check_count"] += 1
+
+        try:
+            # 只扫描最近的 20 行（轻量级模式）
+            output = await self.controller.capture_output(lines=self.LINES_LIGHTWEIGHT)
+
+            if not output:
+                return
+
+            # 检查是否出现"生成中"
+            is_generating = self._detect_generating(output)
+
+            if is_generating:
+                # 检测到"生成中"，需要执行一次完整的检查来初始化状态
+                # 先更新状态
+                self._state = IFlowState.GENERATING
+                self._generating_start_time = datetime.now()
+                self.stats["state_changes"] += 1
+                logger.info(f"[IFlowMonitor] State changed: IDLE -> GENERATING (lightweight detected)")
+                
+                # 获取完整输出进行消息提取
+                full_output = await self.controller.capture_output(lines=self.LINES_FULL)
+                
+                # 状态变更和消息处理（直接调用，避免递归）
+                await self._check_state(full_output)
+                
+                # 等待稳定后提取消息
+                await asyncio.sleep(0.5)  # 等待输出稳定
+                full_output = await self.controller.capture_output(lines=self.LINES_FULL)
+                
+                # 提取消息（直接调用完整检查的消息处理部分）
+                current_messages = self._extract_messages(full_output)
+                if len(current_messages) > 0:
+                    self._last_candidate_messages = []
+                    self._candidate_messages = current_messages
+                    logger.info(f"[IFlowMonitor] Lightweight init: extracted {len(current_messages)} messages")
+                
+                logger.debug(f"[IFlowMonitor] Check #{self.stats['check_count']}: lightweight -> full")
+            else:
+                # 仍然在 IDLE 状态，继续轻量级监控
+                if self.stats["check_count"] % 60 == 0:  # 每30秒输出一次（0.5s间隔）
+                    logger.debug(f"[IFlowMonitor] Check #{self.stats['check_count']}: lightweight mode (idle)")
+
+        except Exception as e:
+            logger.error(f"[IFlowMonitor] Error in lightweight check: {e}", exc_info=True)
     
     async def _check_state(self, output: str) -> None:
         """检测 iflow 状态
@@ -447,17 +526,17 @@ class IFlowMonitor:
 
         状态检测原则：
         - 只检测"生成中"关键词是否存在
-        - 不依赖前面的符号（如 ⠦）
-        - 不检测"✻ 思考中..."等消息标记
-
+        - 必须是 iflow 的状态指示器，不是用户消息
+        - 状态指示器特征：包含"生成中"和"按esc取消"或时间（如"6m 37s"）
+        
         状态指示器示例：
         - "⠦ 生成中 6m 37s ... (按esc取消)" - 正在生成回复
         - "生成中 6m 37s ... (按esc取消)" - 正在生成回复（无符号）
 
         检测方式：
         - 查找包含"生成中"的行
+        - 必须包含状态指示器特征（"按esc取消"或时间）
         - 排除"上下文剩余"等无关行
-        - 不依赖前面的符号
 
         Args:
             output: tmux 输出
@@ -471,11 +550,19 @@ class IFlowMonitor:
         for line in lines:
             line_stripped = line.strip()
 
-            # 检测"生成中"关键词（不依赖前面的符号）
-            # 格式：⠦ 生成中 6m 37s ... (按esc取消) 或 生成中 6m 37s ... (按esc取消)
+            # 检测"生成中"关键词
             if '生成中' in line_stripped:
                 # 排除"上下文剩余"等无关行
-                if '上下文剩余' not in line_stripped:
+                if '上下文剩余' in line_stripped:
+                    continue
+                
+                # 必须是状态指示器，包含以下特征之一：
+                # 1. "按esc取消"
+                # 2. 时间（如 "6m 37s"）
+                # 3. 生成进度（如 "6m 37s"）
+                if ('按esc取消' in line_stripped or 
+                    re.search(r'\d+[ms]\s*\d+s', line_stripped) or  # 时间模式
+                    re.search(r'生成中\s+\d+[ms]', line_stripped)):  # 生成中 + 时间
                     return True
 
         return False

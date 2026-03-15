@@ -95,6 +95,9 @@ class IFlowModule(BaseModule):
         # 消息发送钩子（用于测试）
         self._message_sent_hook: Optional[Callable] = None
         
+        # iflow 就绪状态
+        self._is_ready: bool = False
+        
         # 设置监控器回调
         self.monitor.subscribe(self._on_monitor_message)
         self.monitor.set_state_change_callback(self._on_state_change)
@@ -198,6 +201,34 @@ class IFlowModule(BaseModule):
             logger.warning(f"[{self.module_id}] 消息发送失败: {response.message}")
     
     # ==================== 公共接口 ====================
+    
+    @property
+    def is_ready(self) -> bool:
+        """检查 iflow 是否就绪（同步版本，用于快速检查）"""
+        return self._is_ready
+    
+    async def wait_for_ready(self, timeout: float = 60.0) -> bool:
+        """等待 iflow 完全就绪
+        
+        Args:
+            timeout: 超时时间（秒）
+        
+        Returns:
+            是否就绪
+        """
+        logger.info(f"[{self.module_id}] 等待 iflow 就绪...")
+        
+        import time
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            if await self.controller.check_iflow_ready():
+                self._is_ready = True
+                logger.info(f"[{self.module_id}] iflow 已就绪")
+                return True
+            await asyncio.sleep(1)
+        
+        logger.warning(f"[{self.module_id}] 等待 iflow 就绪超时 ({timeout}秒)")
+        return False
     
     async def send(
         self,
@@ -389,8 +420,9 @@ class IFlowModule(BaseModule):
             }
         )
         
-        # 调用钩子（用于测试）
-        if self._message_sent_hook:
+        # 调用钩子（用于测试）- 只在钩子存在且没有消息总线时调用
+        # 如果有消息总线，由消息总线负责分发（避免重复）
+        if self._message_sent_hook and not self.message_bus:
             try:
                 await self._message_sent_hook(msg)
             except Exception as e:
@@ -455,8 +487,9 @@ class IFlowModule(BaseModule):
                     }
                 )
 
-                # 调用钩子（用于测试）
-                if self._message_sent_hook:
+                # 调用钩子（用于测试）- 只在钩子存在且没有消息总线时调用
+                # 如果有消息总线，由消息总线负责分发（避免重复）
+                if self._message_sent_hook and not self.message_bus:
                     try:
                         await self._message_sent_hook(msg)
                     except Exception as e:

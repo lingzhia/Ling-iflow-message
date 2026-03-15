@@ -167,6 +167,57 @@ class IFlowController:
             logger.warning(f"[IFlowController] Error checking iflow status: {e}")
             return False
     
+    async def check_iflow_ready(self) -> bool:
+        """检查 iflow 是否真正准备好接受消息
+        
+        检查条件：
+        1. tmux 会话存在
+        2. UI 已就绪（检测到输入框、欢迎消息、版本号）
+        3. 不在"生成中"状态（没有进度条）
+        4. 输入框可用
+        
+        Returns:
+            iflow 是否就绪
+        """
+        # 1. 检查 tmux 会话
+        if not await self.check_tmux_session():
+            logger.debug("[check_iflow_ready] tmux session not found")
+            return False
+        
+        # 2. 捕获输出
+        output = await self.capture_output(lines=100)
+        if not output:
+            logger.debug("[check_iflow_ready] no output captured")
+            return False
+        
+        # 3. 检查 UI 是否就绪
+        iflow_indicators = [
+            "输入消息或@文件路径",
+            "Hi～今天想做点什么",
+            "版本号:",
+        ]
+        
+        ui_ready = any(indicator in output for indicator in iflow_indicators)
+        logger.debug(f"[check_iflow_ready] UI ready: {ui_ready}")
+        if not ui_ready:
+            return False
+        
+        # 4. 检查是否在"生成中"（关键检查）
+        has_generating = "生成中" in output
+        logger.debug(f"[check_iflow_ready] Has '生成中': {has_generating}")
+        if has_generating:
+            return False  # ❌ 还在生成中
+        
+        # 5. 检查输入框是否可用
+        has_input = ">   输入消息或@文件路径" in output
+        logger.debug(f"[check_iflow_ready] Has input box: {has_input}")
+        if not has_input:
+            return False  # ❌ 输入框未就绪
+        
+        # 6. 所有条件满足，认为就绪
+        logger.debug("[check_iflow_ready] All checks passed, iflow is ready")
+        return True
+    
     async def send_message(self, message: str) -> bool:
         """发送消息到 iflow CLI
         
@@ -186,8 +237,8 @@ class IFlowController:
         
         try:
             # 0. 先检查 iflow 是否真的准备好了
-            if not await self.check_iflow_running():
-                logger.warning(f"[IFlowController] iflow not running, cannot send message")
+            if not await self.check_iflow_ready():
+                logger.warning(f"[IFlowController] iflow not ready, cannot send message")
                 return False
             
             # 1. 清除输入框（使用 C-c）
@@ -262,25 +313,12 @@ class IFlowController:
                 logger.info("[IFlowController] iflow already running")
                 return True
             else:
-                # tmux 会话存在但 iflow 未运行，重新启动 iflow
-                logger.info("[IFlowController] tmux session exists, starting iflow...")
-                result = await asyncio.create_subprocess_exec(
-                    "tmux", "send-keys", "-t", self.tmux_session,
-                    f"iflow --model {model}", "C-m",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                await asyncio.wait_for(result.communicate(), timeout=10)
-                
-                # 等待 iflow 完全启动（最多 35 秒）
-                for i in range(35):
-                    await asyncio.sleep(1)
-                    if await self.check_iflow_running():
-                        logger.info(f"[IFlowController] iflow started in existing tmux session '{self.tmux_session}' after {i+1}s")
-                        return True
-                
-                logger.warning("[IFlowController] iflow may not have started properly")
-                return False
+                # tmux 会话存在但 iflow 未运行，销毁现有会话，创建新会话
+                logger.info(f"[IFlowController] tmux session exists but iflow not running, destroying session '{self.tmux_session}'...")
+                await self.destroy_session()
+                await asyncio.sleep(0.5)
+                logger.info(f"[IFlowController] Session destroyed, creating new session...")
+                # 继续执行下面的创建新会话的逻辑
         
         try:
             # 参考旧版本：直接在创建 tmux 会话时启动 iflow
@@ -298,11 +336,11 @@ class IFlowController:
             
             logger.info(f"[IFlowController] iflow starting in tmux session '{self.tmux_session}'")
             
-            # 等待 iflow 完全启动（最多 35 秒）
-            for i in range(35):
+            # 等待 iflow 完全启动（最多 60 秒）
+            for i in range(60):
                 await asyncio.sleep(1)
-                if await self.check_iflow_running():
-                    logger.info(f"[IFlowController] iflow fully started after {i+1}s")
+                if await self.check_iflow_ready():  # 修改：使用 check_iflow_ready
+                    logger.info(f"[IFlowController] iflow ready after {i+1}s")
                     return True
             
             logger.warning("[IFlowController] iflow may not have started properly (timeout)")
