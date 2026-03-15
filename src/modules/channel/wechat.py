@@ -11,8 +11,8 @@ import json
 import logging
 import time
 import xml.etree.ElementTree as ET
-from typing import Optional, Dict, Any, Callable
-from urllib.parse import quote
+from datetime import datetime
+from typing import Optional, Dict, Any
 
 try:
     import httpx
@@ -26,6 +26,10 @@ try:
     AIOHTTP_AVAILABLE = True
 except ImportError:
     AIOHTTP_AVAILABLE = False
+
+from ...core.base import BaseModule
+from ...core.message import Message, MessageType, MessageContent
+from ..command import CommandHandler
 
 
 logger = logging.getLogger(__name__)
@@ -76,18 +80,21 @@ class WeChatCrypto:
         return hashlib.sha1(joined.encode('utf-8')).hexdigest()
 
 
-class WeChatChannel:
+class WeChatChannel(BaseModule):
     """企业微信消息通道
     
-    纯粹的企业微信 API 封装，不处理业务逻辑。
+    继承 BaseModule，包含完整的企业微信功能。
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, module_id: str, config: Dict[str, Any]):
         """初始化企业微信通道
         
         Args:
+            module_id: 模块唯一标识符
             config: 企业微信配置
         """
+        super().__init__(module_id)
+        
         self.config = config
         self._http: Optional[httpx.AsyncClient] = None
         self._crypto: Optional[WeChatCrypto] = None
@@ -97,18 +104,40 @@ class WeChatChannel:
         # 消息去重缓存
         self._processed_msg_ids: Dict[str, float] = {}
         
-        # 消息处理器
-        self._message_handler: Optional[Callable] = None
+        # 命令处理器
+        self.command_handler = CommandHandler()
         
         # 回调服务
         self._callback_runner = None
         self._running = False
+        
+        # 导入通用组件
+        from ..common.converter import MessageConverter
+        from ..common.notifications import NotificationManager
+        self.converter = MessageConverter()
+        self.notification_manager = NotificationManager()
+        
+        # 注册通知处理器
+        self.notification_manager.register_notification_handler("startup", self._handle_startup_notification)
+        self.notification_manager.register_notification_handler("shutdown", self._handle_shutdown_notification)
     
-    async def start(self) -> bool:
-        """启动通道"""
+    def set_message_bus(self, bus) -> None:
+        """设置消息总线
+        
+        Args:
+            bus: 消息总线实例
+        """
+        super().set_message_bus(bus)
+        # 同时设置给 CommandHandler
+        self.command_handler.set_message_bus(bus)
+    
+    async def _on_start(self) -> None:
+        """启动时的钩子方法"""
+        logger.info(f"[{self.module_id}] 启动企业微信通道")
+        
         if not HTTPX_AVAILABLE:
-            logger.error("[WeChatChannel] httpx not installed")
-            return False
+            logger.error(f"[{self.module_id}] httpx not installed")
+            raise RuntimeError(f"[{self.module_id}] httpx 未安装")
         
         self._http = httpx.AsyncClient(timeout=30.0)
         
@@ -119,9 +148,9 @@ class WeChatChannel:
                     self.config["encoding_aes_key"],
                     self.config["corp_id"]
                 )
-                logger.info("[WeChatChannel] Crypto initialized")
+                logger.info(f"[{self.module_id}] Crypto initialized")
             except Exception as e:
-                logger.warning(f"[WeChatChannel] Failed to init crypto: {e}")
+                logger.warning(f"[{self.module_id}] Failed to init crypto: {e}")
         
         # 获取 access_token
         await self._refresh_access_token()
@@ -133,11 +162,18 @@ class WeChatChannel:
             await self._start_callback_server(host, port)
         
         self._running = True
-        logger.info("[WeChatChannel] Started")
-        return True
+        logger.info(f"[{self.module_id}] 企业微信通道启动完成")
+        
+        # 发送启动通知
+        await self._send_startup_notification()
     
-    async def stop(self) -> None:
-        """停止通道"""
+    async def _on_stop(self) -> None:
+        """停止时的钩子方法"""
+        logger.info(f"[{self.module_id}] 停止企业微信通道")
+        
+        # 发送停止通知
+        await self._send_shutdown_notification()
+        
         self._running = False
         
         if self._callback_runner:
@@ -146,7 +182,183 @@ class WeChatChannel:
         if self._http:
             await self._http.aclose()
         
-        logger.info("[WeChatChannel] Stopped")
+        logger.info(f"[{self.module_id}] 企业微信通道已停止")
+    
+    async def _on_receive(self, message: Message) -> None:
+        """接收消息时的钩子方法
+        
+        Args:
+            message: 接收到的消息
+        """
+        try:
+            # 使用消息转换器转换为平台消息
+            platform_msg = self.converter.create_wechat_outbound_message(message)
+            
+            # 提取消息内容
+            content = platform_msg.get("content", "")
+            
+            if not content:
+                logger.warning(f"[{self.module_id}] 收到空消息")
+                return
+            
+            # 获取聊天ID
+            chat_id = platform_msg.get("chat_id") or self.config.get("user_id", "")
+            is_group = platform_msg.get("is_group", False)
+            
+            # 发送到企业微信
+            success = await self.send_message(content, chat_id, is_group)
+            
+            if success:
+                logger.info(f"[{self.module_id}] 消息已发送到企业微信")
+            else:
+                logger.error(f"[{self.module_id}] 消息发送失败")
+                
+        except Exception as e:
+            logger.error(f"[{self.module_id}] 处理消息失败: {e}", exc_info=True)
+    
+    async def _send_startup_notification(self) -> None:
+        """发送启动通知到企业微信"""
+        try:
+            user_id = self.config.get("user_id", "")
+            if not user_id:
+                logger.warning(f"[{self.module_id}] 未配置 user_id，跳过启动通知")
+                return
+            
+            callback_port = self.config.get("callback_port", 8788)
+            tmux_session = self.config.get("tmux_session", "iflow")
+            workspace = self.config.get("workspace", "~/.iflow")
+            
+            # 获取 iflow 运行状态
+            iflow_running = self._check_iflow_status()
+            
+            if iflow_running:
+                service_info = f"""📁 工作目录: {workspace}
+💻 tmux 会话: {tmux_session} ✓
+🌐 回调端口: {callback_port}"""
+                quick_start = """• 直接发送消息：执行 iFlow 命令
+• `/lscmd`：查看所有可用命令"""
+                tips = "输入 `/lscmd` 查看完整的命令列表和功能说明。"
+                
+                await self.notification_manager.send_startup_notification(
+                    module_name="iFlow 企业微信机器人",
+                    service_info=service_info,
+                    quick_start=quick_start,
+                    tips=tips
+                )
+            else:
+                service_info = f"""💻 tmux 会话: 无连接
+📁 工作目录: {workspace}
+🌐 回调端口: {callback_port}"""
+                available_commands = """• `/lscmd`：查看所有可用命令"""
+                tips = "检查 iflow 是否正常启动。"
+                
+                await self.notification_manager.send_startup_notification(
+                    module_name="iFlow 企业微信机器人",
+                    service_info=service_info,
+                    tips=tips,
+                    error_message="iflow 未运行，无法处理消息",
+                    available_commands=available_commands
+                )
+                
+        except Exception as e:
+            logger.error(f"[{self.module_id}] 发送启动通知失败: {e}", exc_info=True)
+    
+    async def _send_shutdown_notification(self) -> None:
+        """发送停止通知到企业微信"""
+        try:
+            user_id = self.config.get("user_id", "")
+            if not user_id:
+                logger.warning(f"[{self.module_id}] 未配置 user_id，跳过停止通知")
+                return
+            
+            tmux_session = self.config.get("tmux_session", "iflow")
+            workspace = self.config.get("workspace", "~/.iflow")
+            
+            # 检查 iflow 运行状态
+            iflow_running = self._check_iflow_status()
+            
+            if iflow_running:
+                service_info = f"""📁 工作目录: {workspace}
+💻 tmux 会话: {tmux_session}"""
+            else:
+                service_info = f"""💻 tmux 会话: 无连接
+📁 工作目录: {workspace}"""
+            
+            restart_command = "python3 -m src.bot config.json"
+            
+            await self.notification_manager.send_shutdown_notification(
+                module_name="iFlow 企业微信机器人",
+                service_info=service_info,
+                restart_command=restart_command
+            )
+                
+        except Exception as e:
+            logger.error(f"[{self.module_id}] 发送停止通知失败: {e}", exc_info=True)
+    
+    def _handle_startup_notification(self, data: Dict[str, Any]) -> bool:
+        """处理启动通知
+        
+        Args:
+            data: 通知数据
+            
+        Returns:
+            是否发送成功
+        """
+        try:
+            content = data.get("content", "")
+            user_id = self.config.get("user_id", "")
+            
+            if not content or not user_id:
+                return False
+            
+            # 在后台执行
+            asyncio.create_task(self.send_message(content, user_id, False))
+            
+            logger.info(f"[{self.module_id}] 启动通知已发送到 {user_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"[{self.module_id}] 启动通知处理失败: {e}", exc_info=True)
+            return False
+    
+    async def _handle_shutdown_notification(self, data: Dict[str, Any]) -> bool:
+        """处理停止通知
+        
+        Args:
+            data: 通知数据
+            
+        Returns:
+            是否发送成功
+        """
+        try:
+            content = data.get("content", "")
+            user_id = self.config.get("user_id", "")
+            
+            if not content or not user_id:
+                return False
+            
+            # 确保在停止前完成发送
+            await self.send_message(content, user_id, False)
+            
+            logger.info(f"[{self.module_id}] 停止通知已发送到 {user_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"[{self.module_id}] 停止通知处理失败: {e}", exc_info=True)
+            return False
+    
+    def _check_iflow_status(self) -> bool:
+        """检查 iflow 运行状态
+        
+        Returns:
+            iflow 是否运行中
+        """
+        try:
+            # 这里简化处理，通过检查绑定关系来判断
+            # 实际应该检查 iflow 模块的运行状态
+            return True
+        except Exception:
+            return False
     
     async def send_message(self, content: str, chat_id: str, is_group: bool = False) -> bool:
         """发送消息到企业微信
@@ -160,7 +372,7 @@ class WeChatChannel:
             是否发送成功
         """
         if not self._http:
-            logger.error("[WeChatChannel] HTTP client not initialized")
+            logger.error(f"[{self.module_id}] HTTP client not initialized")
             return False
         
         # 刷新 access_token
@@ -181,7 +393,7 @@ class WeChatChannel:
             
             # 详细日志：发送消息
             logger.info(
-                f"[WeChatChannel] 发送消息到企业微信\n"
+                f"[{self.module_id}] 发送消息到企业微信\n"
                 f"  接收者: {chat_id}\n"
                 f"  类型: {'群聊' if is_group else '私聊'}\n"
                 f"  消息内容: {content[:200] if content else ''}"
@@ -193,23 +405,15 @@ class WeChatChannel:
             result = response.json()
             
             if result.get("errcode") == 0:
-                logger.info(f"[WeChatChannel] 消息发送成功: {chat_id}")
+                logger.info(f"[{self.module_id}] 消息发送成功: {chat_id}")
                 return True
             else:
-                logger.error(f"[WeChatChannel] 消息发送失败: {result.get('errmsg', result)}")
+                logger.error(f"[{self.module_id}] 消息发送失败: {result.get('errmsg', result)}")
                 return False
                 
         except Exception as e:
-            logger.error(f"[WeChatChannel] Error sending message: {e}", exc_info=True)
+            logger.error(f"[{self.module_id}] Error sending message: {e}", exc_info=True)
             return False
-    
-    def set_message_handler(self, handler: Callable) -> None:
-        """设置消息处理器
-        
-        Args:
-            handler: 消息处理函数
-        """
-        self._message_handler = handler
     
     async def _start_callback_server(self, host: str = "0.0.0.0", port: int = 8788) -> None:
         """启动回调服务器"""
@@ -243,7 +447,7 @@ class WeChatChannel:
                 
                 return web.Response(text="success")
             except Exception as e:
-                logger.error(f"[WeChatChannel] Error handling message: {e}")
+                logger.error(f"[{self.module_id}] Error handling message: {e}")
                 return web.Response(text="success")  # 总是返回success避免重试
         
         app = web.Application()
@@ -256,7 +460,7 @@ class WeChatChannel:
         await site.start()
         
         self._callback_runner = runner
-        logger.info(f"[WeChatChannel] Callback server started on {host}:{port}")
+        logger.info(f"[{self.module_id}] Callback server started on {host}:{port}")
     
     async def _process_callback_async(self, body: str) -> None:
         """异步处理回调消息"""
@@ -299,12 +503,12 @@ class WeChatChannel:
             
             # 消息去重
             if msg_id and await self._is_duplicate_message(msg_id):
-                logger.info(f"[WeChatChannel] 忽略重复消息: MsgId={msg_id}")
+                logger.info(f"[{self.module_id}] 忽略重复消息: MsgId={msg_id}")
                 return
             
             # 详细日志：收到消息
             logger.info(
-                f"[WeChatChannel] 收到企业微信消息\n"
+                f"[{self.module_id}] 收到企业微信消息\n"
                 f"  来源: {from_user_name}\n"
                 f"  类型: {'群聊' if is_group else '私聊'}\n"
                 f"  消息类型: {msg_type}\n"
@@ -315,20 +519,36 @@ class WeChatChannel:
             if content:
                 confirmation = f"✅ 收到消息\n\n正在处理中...\n\n消息内容: {content[:100]}{'...' if len(content) > 100 else ''}"
                 await self.send_message(confirmation, chat_id, is_group)
-                logger.info(f"[WeChatChannel] 已发送消息确认到 {chat_id}")
+                logger.info(f"[{self.module_id}] 已发送消息确认到 {chat_id}")
             
-            # 调用消息处理器
-            if self._message_handler:
-                await self._message_handler({
-                    "content": content,
-                    "sender_id": from_user_name,
-                    "chat_id": chat_id,
-                    "is_group": is_group,
-                    "msg_type": msg_type
-                })
+            # 解析命令
+            parsed = self.command_handler.parse_command(content)
+            
+            # 如果是命令，执行命令并回复
+            if parsed.get("is_command"):
+                result = await self.command_handler.execute(parsed, chat_id)
+                if result:
+                    await self.send_message(result, chat_id, is_group)
+                return
+            
+            # 使用消息转换器创建标准消息对象
+            message = self.converter.create_wechat_inbound_message({
+                "content": content,
+                "sender_id": from_user_name,
+                "chat_id": chat_id,
+                "is_group": is_group,
+                "msg_type": msg_type
+            }, self.module_id)
+            
+            # 发送到消息总线
+            if self.message_bus:
+                await self.send_to_bus(message)
+                logger.info(f"[{self.module_id}] 企业微信消息已发送到消息总线")
+            else:
+                logger.warning(f"[{self.module_id}] 消息总线未设置")
             
         except Exception as e:
-            logger.error(f"[WeChatChannel] Error processing callback: {e}", exc_info=True)
+            logger.error(f"[{self.module_id}] Error processing callback: {e}", exc_info=True)
     
     async def _refresh_access_token(self) -> bool:
         """刷新 access_token"""
@@ -342,7 +562,7 @@ class WeChatChannel:
             self._token_expiry = time.time() + result["expires_in"] - 60
             return True
         
-        logger.error(f"[WeChatChannel] Failed to refresh token: {result}")
+        logger.error(f"[{self.module_id}] Failed to refresh token: {result}")
         return False
     
     async def _is_access_token_expired(self) -> bool:
@@ -364,3 +584,18 @@ class WeChatChannel:
         
         self._processed_msg_ids[msg_id] = current_time
         return False
+    
+    async def get_status(self) -> Dict[str, Any]:
+        """获取状态
+        
+        Returns:
+            状态信息字典
+        """
+        return {
+            "module_id": self.module_id,
+            "running": self._running,
+            "corp_id": self.config.get("corp_id", ""),
+            "agent_id": self.config.get("agent_id", ""),
+            "user_id": self.config.get("user_id", ""),
+            "callback_port": self.config.get("callback_port", 8788)
+        }

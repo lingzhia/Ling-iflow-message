@@ -146,6 +146,8 @@ class NotificationManager:
         Returns:
             是否发送成功
         """
+        import asyncio
+        
         handler = self._notification_handlers.get(event_type)
         
         if not handler:
@@ -153,7 +155,10 @@ class NotificationManager:
             return False
         
         try:
-            return await handler(data) if hasattr(handler, '__await__') else handler(data)
+            if asyncio.iscoroutinefunction(handler):
+                return await handler(data)
+            else:
+                return handler(data)
         except Exception as e:
             logger.error(f"发送通知失败 ({event_type}): {e}", exc_info=True)
             return False

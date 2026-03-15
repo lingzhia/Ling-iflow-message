@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .core import MessageBus, Message, ModuleManager
-from .modules import WeChatModule, IFlowModule
+from .modules import WeChatChannel, SimulatorChannel, IFlowModule
 
 
 logger = logging.getLogger(__name__)
@@ -26,21 +26,24 @@ class LingIflowBot:
     使用 ModuleManager 管理消息总线和所有模块的生命周期。
     """
     
-    def __init__(self, config_path: str = "config.json", active_group: str = "all"):
+    def __init__(self, config_path: str = "config.json", active_group: str = "all", active_channel: Optional[str] = None):
         """初始化机器人
         
         Args:
             config_path: 配置文件路径
-            active_group: 要启动的组 (all, bot1, bot2)
+            active_group: 要启动的组 (all, g1, g2, g_simulator)
+            active_channel: 要启动的特定渠道 (wechat_bot1, simulator1)
         """
         self.config_path = config_path
         self.config: Dict = {}
         self.active_group = active_group
+        self.active_channel = active_channel
         
         # 核心组件
         self.bus: Optional[MessageBus] = None
         self.manager: Optional[ModuleManager] = None
-        self.wechat_modules: Dict[str, WeChatModule] = {}
+        self.wechat_modules: Dict[str, WeChatChannel] = {}
+        self.simulator_modules: Dict[str, SimulatorChannel] = {}
         self.iflow_modules: Dict[str, IFlowModule] = {}
         
         self._running = False
@@ -101,13 +104,16 @@ class LingIflowBot:
             # 3. 创建并注册 IFlowModule
             await self._setup_iflow_modules()
             
-            # 4. 创建并注册 WeChatModule
+            # 4. 创建并注册 WeChatChannel
             await self._setup_wechat_modules()
             
-            # 5. 设置绑定关系
+            # 5. 创建并注册 SimulatorChannel
+            await self._setup_simulator_channels()
+            
+            # 6. 设置绑定关系
             self._setup_bindings()
             
-            # 6. 定义模块组
+            # 7. 定义模块组
             await self._setup_groups()
             
             logger.info("所有组件初始化完成")
@@ -195,7 +201,7 @@ class LingIflowBot:
             logger.info(f"IFlowModule {module_id} 创建和注册成功")
     
     async def _setup_wechat_modules(self) -> None:
-        """创建并注册 WeChatModule（使用 ModuleManager）"""
+        """创建并注册 WeChatChannel（使用 ModuleManager）"""
         # 组名映射：g1 -> bot1, g2 -> bot2
         group_mapping = {
             "g1": "bot1",
@@ -221,7 +227,7 @@ class LingIflowBot:
             
             module_id = f"wechat_{bot_name}"
             
-            logger.info(f"创建 WeChatModule: {module_id}")
+            logger.info(f"创建 WeChatChannel: {module_id}")
             
             # 使用 ModuleManager 创建模块
             wechat = await self.manager.create_module(
@@ -239,10 +245,57 @@ class LingIflowBot:
             # 存储引用
             self.wechat_modules[bot_name] = wechat
             
-            logger.info(f"WeChatModule {module_id} 创建和注册成功")
+            logger.info(f"WeChatChannel {module_id} 创建和注册成功")
+    
+    async def _setup_simulator_channels(self) -> None:
+        """创建并注册 SimulatorChannel（使用 ModuleManager）"""
+        # 收集需要启动的 tmux_session（从 iflow 模块中获取）
+        active_sessions = set(self.iflow_modules.keys())
+        
+        # 如果没有找到任何 session，使用默认的
+        if not active_sessions:
+            active_sessions.add(self.config.get("tmux_session", "iflow"))
+        
+        simulator_channels = self.config.get("simulator_channels", [])
+        
+        for simulator_config in simulator_channels:
+            if not simulator_config.get("enabled", False):
+                logger.info(f"模拟器渠道 {simulator_config.get('name')} 未启用，跳过")
+                continue
+            
+            simulator_name = simulator_config.get("name", "default")
+            tmux_session = simulator_config.get("tmux_session", "iflow")
+            
+            # 会话过滤
+            if tmux_session not in active_sessions:
+                logger.info(f"模拟器渠道 {simulator_name} 的会话 {tmux_session} 未启动，跳过")
+                continue
+            
+            module_id = f"simulator_{simulator_name}"
+            
+            logger.info(f"创建 SimulatorChannel: {module_id}")
+            
+            # 使用 ModuleManager 创建模块
+            simulator = await self.manager.create_module(
+                module_type="simulator",
+                module_id=module_id,
+                config=simulator_config
+            )
+            
+            # 注册到消息总线
+            await self.manager.register_module(module_id)
+            
+            # 设置消息总线引用
+            self.manager.set_message_bus_for_module(module_id)
+            
+            # 存储引用
+            self.simulator_modules[simulator_name] = simulator
+            
+            logger.info(f"SimulatorChannel {module_id} 创建和注册成功")
     
     def _setup_bindings(self) -> None:
         """设置模块绑定关系（双向绑定）"""
+        # 企业微信渠道绑定
         bots = self.config.get("bots", [])
         
         for bot_config in bots:
@@ -259,16 +312,51 @@ class LingIflowBot:
             self.bus.bind(wechat_id, iflow_id)
             self.bus.bind(iflow_id, wechat_id)
             logger.info(f"双向绑定: {wechat_id} <-> {iflow_id}")
+        
+        # 模拟器渠道绑定
+        simulator_channels = self.config.get("simulator_channels", [])
+        
+        for simulator_config in simulator_channels:
+            if not simulator_config.get("enabled", False):
+                continue
+            
+            simulator_name = simulator_config.get("name", "default")
+            tmux_session = simulator_config.get("tmux_session", "iflow")
+            
+            simulator_id = f"simulator_{simulator_name}"
+            iflow_id = f"iflow_{tmux_session}"
+            
+            # 双向绑定：Simulator -> IFlow, IFlow -> Simulator
+            self.bus.bind(simulator_id, iflow_id)
+            self.bus.bind(iflow_id, simulator_id)
+            logger.info(f"双向绑定: {simulator_id} <-> {iflow_id}")
     
     async def _setup_groups(self) -> None:
         """定义模块组"""
-        # 根据 active_group 定义组
+        # 优先级：active_channel > active_group > all
+        if self.active_channel:
+            # 如果指定了渠道，不定义组
+            logger.info(f"使用指定渠道: {self.active_channel}")
+            return
+        
+        # 检查配置中是否定义了 groups
+        groups_config = self.config.get("groups", {})
+        
+        if groups_config and self.active_group in groups_config:
+            # 使用配置中的组定义
+            group_modules = groups_config[self.active_group]
+            self.manager.define_group(self.active_group, group_modules)
+            logger.info(f"定义组 '{self.active_group}' (从配置): {group_modules}")
+            return
+        
+        # 根据 active_group 定义组（向后兼容）
         if self.active_group == "all":
             # 创建包含所有模块的组
-            all_modules = list(self.iflow_modules.keys()) + list(self.wechat_modules.keys())
+            all_modules = list(self.iflow_modules.keys()) + list(self.wechat_modules.keys()) + list(self.simulator_modules.keys())
             # 转换为 module_id
             all_module_ids = [f"iflow_{name}" for name in self.iflow_modules.keys()] + \
-                              [f"wechat_{name}" for name in self.wechat_modules.keys()]
+                              [f"wechat_{name}" for name in self.wechat_modules.keys()] + \
+                              [f"simulator_{name}" for name in self.simulator_modules.keys()]
             self.manager.define_group("all", all_module_ids)
             logger.info(f"定义组 'all': {len(all_module_ids)} 个模块")
         else:
@@ -299,8 +387,16 @@ class LingIflowBot:
         """启动所有模块（使用 ModuleManager）"""
         logger.info("启动所有模块...")
         
-        # 使用 ModuleManager 启动模块
-        if self.active_group == "all":
+        # 优先级：active_channel > active_group > all
+        if self.active_channel:
+            # 启动指定的渠道
+            module_id = self.active_channel
+            success = await self.manager.start_module(module_id)
+            if success:
+                logger.info(f"模块 {module_id} 启动成功")
+            else:
+                logger.warning(f"模块 {module_id} 启动失败")
+        elif self.active_group == "all":
             # 启动所有模块
             for module_id in self.manager.modules.keys():
                 success = await self.manager.start_module(module_id)
@@ -381,6 +477,7 @@ async def main():
     # 支持命令行参数指定配置文件
     config_path = "config.json"
     active_group = "all"
+    active_channel = None
     
     if len(sys.argv) > 1:
         # 解析命令行参数
@@ -392,13 +489,19 @@ async def main():
                     i += 2
                 else:
                     i += 1
+            elif sys.argv[i] == "--channel":
+                if i + 1 < len(sys.argv):
+                    active_channel = sys.argv[i + 1]
+                    i += 2
+                else:
+                    i += 1
             else:
                 # 第一个非参数的参数是配置文件
                 if not sys.argv[i].startswith("-"):
                     config_path = sys.argv[i]
                 i += 1
     
-    bot = LingIflowBot(config_path, active_group)
+    bot = LingIflowBot(config_path, active_group, active_channel)
     await bot.run()
 
 

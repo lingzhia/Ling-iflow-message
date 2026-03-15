@@ -89,7 +89,7 @@ class ModuleManager:
         """创建模块实例
         
         Args:
-            module_type: 模块类型（iflow, wechat, command）
+            module_type: 模块类型（iflow, wechat, simulator, command）
             module_id: 模块 ID
             config: 模块配置
             
@@ -103,8 +103,11 @@ class ModuleManager:
             from ..modules.iflow import IFlowModule
             module = IFlowModule(module_id=module_id, **config)
         elif module_type == "wechat":
-            from ..modules.wechat import WeChatModule
-            module = WeChatModule(module_id=module_id, config=config)
+            from ..modules.channel import WeChatChannel
+            module = WeChatChannel(module_id=module_id, config=config)
+        elif module_type == "simulator":
+            from ..modules.channel import SimulatorChannel
+            module = SimulatorChannel(module_id=module_id, config=config)
         elif module_type == "command":
             from ..modules.command import CommandHandler
             module = CommandHandler(message_bus=self.message_bus)

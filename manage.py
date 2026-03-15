@@ -57,17 +57,21 @@ def print_info(message: str):
 def start(
     config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径"),
     daemon: bool = typer.Option(False, "--daemon", "-d", help="后台运行"),
-    group: str = typer.Option("all", "--group", "-g", help="启动的机器人组 (all, g1, g2, ls)")
+    group: str = typer.Option("all", "--group", "-g", help="启动的机器人组 (all, g1, g2, g_simulator, ls)"),
+    channel: Optional[str] = typer.Option(None, "--channel", help="启动的特定渠道 (wechat_bot1, simulator1)")
 ):
     """启动服务
 
     示例:
-        ./manage.py start                    # 启动所有组
-        ./manage.py start -g g1             # 只启动 g1 组
-        ./manage.py start -g g2             # 只启动 g2 组
-        ./manage.py start -g ls             # 列出所有组
-        ./manage.py start -d                 # 后台运行
-        ./manage.py start -c config-dev.json # 使用指定配置
+        ./manage.py start                              # 默认启动企业微信渠道
+        ./manage.py start -g g1                       # 启动 g1 组
+        ./manage.py start -g g2                       # 启动 g2 组
+        ./manage.py start -g g_simulator              # 启动模拟器组
+        ./manage.py start -g ls                       # 列出所有组
+        ./manage.py start --channel wechat_bot1       # 启动指定企业微信渠道
+        ./manage.py start --channel simulator1        # 启动指定模拟器渠道
+        ./manage.py start -d                          # 后台运行
+        ./manage.py start -c config-dev.json          # 使用指定配置
     """
     print_header("启动服务")
 
@@ -75,11 +79,19 @@ def start(
     if group == "ls":
         print_info("可用组:")
         print()
-        print("  g1  - bot1 + iflow")
-        print("  g2  - bot2 + iflow2")
-        print("  all - 所有组")
+        print("  g1           - wechat_bot1 + iflow_iflow1")
+        print("  g2           - wechat_bot2 + iflow_iflow2")
+        print("  g_simulator  - simulator1 + iflow_iflow1")
+        print("  all          - 所有组")
+        print()
+        print_info("可用渠道:")
+        print()
+        print("  wechat_bot1  - 企业微信渠道 bot1")
+        print("  wechat_bot2  - 企业微信渠道 bot2")
+        print("  simulator1   - 模拟器渠道")
         print()
         print_info("使用示例: ./manage.py start --group g1")
+        print_info("         ./manage.py start --channel simulator1")
         return
 
     # 检查配置文件
@@ -89,19 +101,30 @@ def start(
         print_info("使用示例: ./manage.py start -c config.json")
         raise typer.Exit(1)
 
-    # 验证组名
-    if group not in ["all", "g1", "g2"]:
-        print_error(f"无效的组名: {group}")
-        print_info("可用组: all, g1, g2")
-        print_info("使用 --group ls 查看详细信息")
-        raise typer.Exit(1)
+    # 优先级：channel > group > 默认
+    if channel:
+        # 使用指定渠道
+        print_info(f"配置文件: {config}")
+        print_info(f"运行模式: {'后台' if daemon else '前台'}")
+        print_info(f"启动渠道: {channel}")
 
-    print_info(f"配置文件: {config}")
-    print_info(f"运行模式: {'后台' if daemon else '前台'}")
-    print_info(f"启动组: {group}")
+        cmd_args = [config, "--channel", channel]
+    else:
+        # 验证组名
+        if group not in ["all", "g1", "g2", "g_simulator"]:
+            print_error(f"无效的组名: {group}")
+            print_info("可用组: all, g1, g2, g_simulator")
+            print_info("使用 --group ls 查看详细信息")
+            raise typer.Exit(1)
+
+        print_info(f"配置文件: {config}")
+        print_info(f"运行模式: {'后台' if daemon else '前台'}")
+        print_info(f"启动组: {group}")
+
+        cmd_args = [config, "--group", group]
 
     # 构建启动命令
-    cmd = ["python3", "-m", "src.bot", config, "--group", group]
+    cmd = ["python3", "-m", "src.bot"] + cmd_args
 
     if daemon:
         # 后台运行
@@ -110,7 +133,7 @@ def start(
 
         print_info("后台运行，日志输出到: logs/bot.log")
 
-        full_cmd = f"nohup python3 -m src.bot {config} --group {group} > logs/bot.log 2>&1 &"
+        full_cmd = f"nohup python3 -m src.bot {' '.join(cmd_args)} > logs/bot.log 2>&1 &"
         subprocess.run(full_cmd, shell=True)
 
         print_success("服务已在后台启动")
@@ -120,7 +143,7 @@ def start(
         # 前台运行
         print_info("前台运行，按 Ctrl+C 停止")
         print()
-        subprocess.run(["python3", "-m", "src.bot", config, "--group", group])
+        subprocess.run(["python3", "-m", "src.bot"] + cmd_args)
 
 
 @app.command()

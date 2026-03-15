@@ -1,9 +1,10 @@
 """
-Channel Modules
+Channel - 渠道模块
 
-消息渠道模块，包含各种不同的平台渠道实现。
+所有渠道的实现。
 """
 
 from .wechat import WeChatChannel
+from .simulator import SimulatorChannel
 
-__all__ = ["WeChatChannel"]
+__all__ = ["WeChatChannel", "SimulatorChannel"]

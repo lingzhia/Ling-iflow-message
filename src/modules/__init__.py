@@ -4,13 +4,12 @@ Modules
 所有业务模块的导入入口。
 """
 
-from .wechat import WeChatModule
-from .channel import WeChatChannel
+from .channel import WeChatChannel, SimulatorChannel
 from .iflow import IFlowModule, IFlowController, IFlowMonitor
 
 __all__ = [
-    "WeChatModule",
     "WeChatChannel",
+    "SimulatorChannel",
     "IFlowModule",
     "IFlowController",
     "IFlowMonitor"

@@ -5,7 +5,7 @@ New architecture based on message bus pattern.
 """
 
 from src.core import MessageBus, Message, MessageType, BaseModule
-from src.modules import IFlowModule, WeChatModule
+from src.modules import IFlowModule, WeChatChannel
 
 __all__ = [
     "MessageBus",
@@ -13,5 +13,5 @@ __all__ = [
     "MessageType",
     "BaseModule",
     "IFlowModule",
-    "WeChatModule",
+    "WeChatChannel",
 ]

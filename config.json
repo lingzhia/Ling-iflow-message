@@ -52,6 +52,20 @@
       "tmux_session": "iflow2"
     }
   ],
+  "simulator_channels": [
+    {
+      "name": "simulator1",
+      "enabled": false,
+      "host": "localhost",
+      "port": 19999,
+      "tmux_session": "iflow1"
+    }
+  ],
+  "groups": {
+    "g1": ["wechat_bot1", "iflow_iflow1"],
+    "g2": ["wechat_bot2", "iflow_iflow2"],
+    "g_simulator": ["simulator1", "iflow_iflow1"]
+  },
   "wechat_work": {
     "enabled": false,
     "corp_id": "",
