@@ -203,7 +203,11 @@ class IFlowController:
             return False
         
         # 4. 检查是否在"生成中"（关键检查）
-        has_generating = "生成中" in output
+        # 使用 Monitor 的检测逻辑，确保一致性
+        # 创建临时 Monitor 实例来复用检测逻辑
+        from .monitor import IFlowMonitor
+        temp_monitor = IFlowMonitor.__new__(IFlowMonitor)
+        has_generating = temp_monitor._detect_generating(output)
         logger.debug(f"[check_iflow_ready] Has '生成中': {has_generating}")
         if has_generating:
             return False  # ❌ 还在生成中
