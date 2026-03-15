@@ -36,6 +36,16 @@ class WeChatModule(BaseModule):
         self.channel = WeChatChannel(config)
         self.command_handler = CommandHandler()
         
+        # 导入通用组件
+        from ..common.converter import MessageConverter
+        from ..common.notifications import NotificationManager
+        self.converter = MessageConverter()
+        self.notification_manager = NotificationManager()
+        
+        # 注册通知处理器
+        self.notification_manager.register_notification_handler("startup", self._handle_startup_notification)
+        self.notification_manager.register_notification_handler("shutdown", self._handle_shutdown_notification)
+        
         # 设置消息处理器
         self.channel.set_message_handler(self._on_wechat_message)
     
@@ -72,50 +82,41 @@ class WeChatModule(BaseModule):
                 logger.warning(f"[{self.module_id}] 未配置 user_id，跳过启动通知")
                 return
             
-            startup_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             callback_port = self.config.get("callback_port", 8788)
+            tmux_session = self.config.get("tmux_session", "iflow")
+            workspace = self.config.get("workspace", "~/.iflow")
             
             # 获取 iflow 运行状态
             iflow_running = self._check_iflow_status()
             
             if iflow_running:
-                notification = f"""**🤖 iFlow 企业微信机器人已启动**
-
-📅 启动时间: {startup_time}
-📁 工作目录: {self.config.get("workspace", "~/.iflow")}
-💻 tmux 会话: {self.config.get("tmux_session", "iflow")} ✓
-🌐 回调端口: {callback_port}
-
-✅ 服务运行正常，可以开始使用！
-
----
-📋 快速开始：
-• 直接发送消息：执行 iFlow 命令
-• `/lscmd`：查看所有可用命令
-
-💡 提示：输入 `/lscmd` 查看完整的命令列表和功能说明。"""
+                service_info = f"""📁 工作目录: {workspace}
+💻 tmux 会话: {tmux_session} ✓
+🌐 回调端口: {callback_port}"""
+                quick_start = """• 直接发送消息：执行 iFlow 命令
+• `/lscmd`：查看所有可用命令"""
+                tips = "输入 `/lscmd` 查看完整的命令列表和功能说明。"
+                
+                await self.notification_manager.send_startup_notification(
+                    module_name="iFlow 企业微信机器人",
+                    service_info=service_info,
+                    quick_start=quick_start,
+                    tips=tips
+                )
             else:
-                notification = f"""**🤖 iFlow 企业微信机器人已启动**
-
-📅 启动时间: {startup_time}
-💻 tmux 会话: 无连接
-📁 工作目录: {self.config.get("workspace", "~/.iflow")}
-🌐 回调端口: {callback_port}
-
-⚠️ iflow 未运行，无法处理消息
-
----
-📋 可用命令：
-• `/lscmd`：查看所有可用命令
-
-💡 提示：检查 iflow 是否正常启动。"""
-            
-            success = await self.channel.send_message(notification, user_id, False)
-            
-            if success:
-                logger.info(f"[{self.module_id}] 启动通知已发送到 {user_id}")
-            else:
-                logger.error(f"[{self.module_id}] 启动通知发送失败")
+                service_info = f"""💻 tmux 会话: 无连接
+📁 工作目录: {workspace}
+🌐 回调端口: {callback_port}"""
+                available_commands = """• `/lscmd`：查看所有可用命令"""
+                tips = "检查 iflow 是否正常启动。"
+                
+                await self.notification_manager.send_startup_notification(
+                    module_name="iFlow 企业微信机器人",
+                    service_info=service_info,
+                    tips=tips,
+                    error_message="iflow 未运行，无法处理消息",
+                    available_commands=available_commands
+                )
                 
         except Exception as e:
             logger.error(f"[{self.module_id}] 发送启动通知失败: {e}", exc_info=True)
@@ -128,45 +129,83 @@ class WeChatModule(BaseModule):
                 logger.warning(f"[{self.module_id}] 未配置 user_id，跳过停止通知")
                 return
             
-            shutdown_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            tmux_session = self.config.get("tmux_session", "iflow")
+            workspace = self.config.get("workspace", "~/.iflow")
             
             # 检查 iflow 运行状态
             iflow_running = self._check_iflow_status()
             
             if iflow_running:
-                notification = f"""**🛑 iFlow 企业微信机器人已停止**
-
-📅 关闭时间: {shutdown_time}
-📁 工作目录: {self.config.get("workspace", "~/.iflow")}
-💻 tmux 会话: {self.config.get("tmux_session", "iflow")}
-
----
-如需重新启动，请执行:
-```bash
-python3 -m src.bot config.json
-```"""
+                service_info = f"""📁 工作目录: {workspace}
+💻 tmux 会话: {tmux_session}"""
             else:
-                notification = f"""**🛑 iFlow 企业微信机器人已停止**
-
-📅 关闭时间: {shutdown_time}
-💻 tmux 会话: 无连接
-📁 工作目录: {self.config.get("workspace", "~/.iflow")}
-
----
-如需重新启动，请执行:
-```bash
-python3 -m src.bot config.json
-```"""
+                service_info = f"""💻 tmux 会话: 无连接
+📁 工作目录: {workspace}"""
             
-            success = await self.channel.send_message(notification, user_id, False)
+            restart_command = "python3 -m src.bot config.json"
             
-            if success:
-                logger.info(f"[{self.module_id}] 停止通知已发送到 {user_id}")
-            else:
-                logger.error(f"[{self.module_id}] 停止通知发送失败")
+            await self.notification_manager.send_shutdown_notification(
+                module_name="iFlow 企业微信机器人",
+                service_info=service_info,
+                restart_command=restart_command
+            )
                 
         except Exception as e:
             logger.error(f"[{self.module_id}] 发送停止通知失败: {e}", exc_info=True)
+    
+    def _handle_startup_notification(self, data: Dict[str, Any]) -> bool:
+        """处理启动通知
+        
+        Args:
+            data: 通知数据
+            
+        Returns:
+            是否发送成功
+        """
+        try:
+            content = data.get("content", "")
+            user_id = self.config.get("user_id", "")
+            
+            if not content or not user_id:
+                return False
+            
+            # 使用 run_shell_command 在后台执行
+            import asyncio
+            asyncio.create_task(self.channel.send_message(content, user_id, False))
+            
+            logger.info(f"[{self.module_id}] 启动通知已发送到 {user_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"[{self.module_id}] 启动通知处理失败: {e}", exc_info=True)
+            return False
+    
+    def _handle_shutdown_notification(self, data: Dict[str, Any]) -> bool:
+        """处理停止通知
+        
+        Args:
+            data: 通知数据
+            
+        Returns:
+            是否发送成功
+        """
+        try:
+            content = data.get("content", "")
+            user_id = self.config.get("user_id", "")
+            
+            if not content or not user_id:
+                return False
+            
+            # 使用 run_shell_command 在后台执行
+            import asyncio
+            asyncio.create_task(self.channel.send_message(content, user_id, False))
+            
+            logger.info(f"[{self.module_id}] 停止通知已发送到 {user_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"[{self.module_id}] 停止通知处理失败: {e}", exc_info=True)
+            return False
     
     def _check_iflow_status(self) -> bool:
         """检查 iflow 运行状态
@@ -200,16 +239,19 @@ python3 -m src.bot config.json
             message: 接收到的消息
         """
         try:
+            # 使用消息转换器转换为平台消息
+            platform_msg = self.converter.create_wechat_outbound_message(message)
+            
             # 提取消息内容
-            content = message.content.text if message.content else ""
+            content = platform_msg.get("content", "")
             
             if not content:
                 logger.warning(f"[{self.module_id}] 收到空消息")
                 return
             
             # 获取聊天ID
-            chat_id = message.metadata.get("chat_id") or message.chat_id or self.config.get("user_id", "")
-            is_group = message.is_group
+            chat_id = platform_msg.get("chat_id") or self.config.get("user_id", "")
+            is_group = platform_msg.get("is_group", False)
             
             # 发送到企业微信
             success = await self.channel.send_message(content, chat_id, is_group)
@@ -244,19 +286,8 @@ python3 -m src.bot config.json
                     await self.channel.send_message(result, chat_id, is_group)
                 return
             
-            # 普通消息：创建消息对象并发送到消息总线
-            message = Message(
-                id=Message.generate_id(),
-                type=MessageType.TEXT,
-                content=MessageContent(type=MessageType.TEXT, text=content),
-                from_module=self.module_id,
-                chat_id=chat_id,
-                user_id=sender_id,
-                is_group=is_group,
-                metadata={
-                    "msg_type": wechat_msg.get("msg_type", "text")
-                }
-            )
+            # 使用消息转换器创建标准消息对象
+            message = self.converter.create_wechat_inbound_message(wechat_msg, self.module_id)
             
             # 发送到消息总线
             if self.message_bus:
