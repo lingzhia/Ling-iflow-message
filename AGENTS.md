@@ -10,9 +10,14 @@ Ling-iflow 是一个 iflow CLI 交互模式管理工具，通过 tmux 管理和�
 基于**发布-订阅模式**和**消息总线**设计，实现模块解耦：
 
 ### 三大核心模块
-1. **企业微信模块 (WeChatModule)** - 纯粹的企业微信 API 封装，处理消息接收和发送
+1. **企业微信渠道 (WeChatChannel)** - 纯粹的企业微信 API 封装，处理消息接收和发送
 2. **消息总线 (MessageBus)** - 模块间消息路由和分发的核心组件
 3. **iflow 模块 (IFlowModule)** - iflow CLI 的完整管理，包括启动、停止、消息注入和输出监控
+
+### 核心组件
+- **模块管理器 (ModuleManager)** - 统一管理模块生命周期和状态监控
+- **消息转换器 (MessageConverter)** - 统一的消息格式转换
+- **通知管理器 (NotificationManager)** - 模块事件通知管理
 
 ### 架构优势
 - ✅ **解耦清晰** - 模块间通过消息总线通信
@@ -28,11 +33,15 @@ Ling-iflow/
 │   ├── core/                     # 核心基础类
 │   │   ├── base.py              # 模块基类 (BaseModule)
 │   │   ├── bus.py               # 消息总线 (MessageBus)
+│   │   ├── manager.py           # 模块管理器 (ModuleManager)
 │   │   └── message.py           # 消息定义 (Message, MessageContent)
 │   ├── modules/                  # 模块实现
-│   │   ├── wechat/              # 企业微信模块
-│   │   │   ├── channel.py       # 企业微信通道
-│   │   │   └── module.py        # WeChatModule
+│   │   ├── channel/             # 消息渠道
+│   │   │   ├── wechat.py        # 企业微信渠道 (WeChatChannel)
+│   │   │   └── simulator.py     # 模拟器渠道 (SimulatorChannel)
+│   │   ├── common/              # 通用组件
+│   │   │   ├── converter.py     # 消息转换器 (MessageConverter)
+│   │   │   └── notifications.py # 通知管理器 (NotificationManager)
 │   │   ├── iflow/               # iflow 模块
 │   │   │   ├── controller.py    # IFlowController (tmux 控制)
 │   │   │   ├── monitor.py       # IFlowMonitor (会话监控)
@@ -63,7 +72,11 @@ Ling-iflow/
 │   ├── 05-消息总线设计方案.md
 │   ├── 06-启动方案设计.md
 │   ├── 07-消息提取优化方案.md
-│   └── 08-IFlowModule测试工具方案.md
+│   ├── 08-IFlowModule测试工具方案.md
+│   ├── 11-模块管理器设计方案.md
+│   ├── 12-消息模拟器和测试工具方案.md
+│   ├── 13-渠道架构重构方案.md
+│   └── 14-多渠道支持方案.md
 ├── tests/                        # 测试文件
 │   ├── test_message_bus.py
 │   ├── test_base_module.py
@@ -79,6 +92,7 @@ Ling-iflow/
 ├── tools/                        # 测试工具
 │   ├── iflow_interactive_tool.py  # IFlow 交互测试工具
 │   ├── wechat_test_tool.py        # 企业微信测试工具
+│   ├── test_client.py             # 模拟器测试客户端
 │   └── tmux_viewer.py             # Tmux 查看工具
 ├── logs/                         # 日志目录
 │   └── interactions/             # 交互日志
@@ -232,7 +246,7 @@ python3 -m src.bot config.json --group g1
         ↓
 [WeChatChannel] 接收回调
         ↓
-[WeChatModule] 处理消息
+[WeChatChannel] 处理消息
         ↓
 [MessageBus] 路由到 iflow 模块
         ↓
@@ -285,9 +299,9 @@ iflow CLI 处理并返回
 - `subscribe(topic, callback)`: 订阅主题
 - `unsubscribe(topic, callback)`: 取消订阅
 
-### WeChatModule（企业微信模块）
+### WeChatChannel（企业微信渠道）
 
-企业微信消息模块，纯粹的企业微信 API 封装。
+企业微信消息渠道，纯粹的企业微信 API 封装。
 
 **主要功能：**
 - 接收企业微信回调
@@ -295,6 +309,7 @@ iflow CLI 处理并返回
 - 处理命令（/help, /status, /new, /sessions）
 - 发送消息到企业微信
 - 与 IFlowModule 集成
+- 启动/停止通知
 
 ### IFlowModule（iflow 模块）
 
@@ -374,6 +389,8 @@ python3 tools/wechat_test_tool.py test
 - ✅ 命令处理（/help, /status, /new, /sessions）
 - ✅ 多 iflow 实例支持
 - ✅ 多企业微信机器人支持
+- ✅ 多渠道支持（企业微信、模拟器）
+- ✅ 渠道最小化架构
 - ✅ 消息状态检测（idle/generating）
 - ✅ 消息分类（reply/other/complete）
 - ✅ 拒绝机制（生成中拒绝新消息）
@@ -385,6 +402,9 @@ python3 tools/wechat_test_tool.py test
 - ✅ Message 对象规范化
 - ✅ 消息提取优化（倒数第二原则）
 - ✅ 状态检测顺序优化
+- ✅ 模块管理器统一管理模块生命周期
+- ✅ 模块健康监控和自动恢复
+- ✅ 通用组件复用（消息转换器、通知管理器）
 
 ## 待实现功能
 

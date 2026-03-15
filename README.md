@@ -38,7 +38,12 @@ Ling-iflow/
 │   │   ├── manager.py  # 模块管理器
 │   │   └── message.py  # 消息定义
 │   ├── modules/        # 模块实现
-│   │   ├── wechat/     # 企业微信模块
+│   │   ├── channel/    # 消息渠道
+│   │   │   ├── wechat.py    # 企业微信渠道
+│   │   │   └── simulator.py # 模拟器渠道
+│   │   ├── common/     # 通用组件
+│   │   │   ├── converter.py     # 消息转换器
+│   │   │   └── notifications.py # 通知管理器
 │   │   ├── iflow/      # iflow 模块
 │   │   └── command/    # 命令处理器
 │   └── bot.py          # 主程序入口
@@ -91,6 +96,9 @@ Ling-iflow/
 - [design-v2/04-IFlow模块设计方案.md](design-v2/04-IFlow模块设计方案.md) - IFlow模块设计
 - [design-v2/05-消息总线设计方案.md](design-v2/05-消息总线设计方案.md) - 消息总线设计
 - [design-v2/06-启动方案设计.md](design-v2/06-启动方案设计.md) - 启动方案和管理脚本设计
+- [design-v2/11-模块管理器设计方案.md](design-v2/11-模块管理器设计方案.md) - 模块管理器设计
+- [design-v2/13-渠道架构重构方案.md](design-v2/13-渠道架构重构方案.md) - 渠道架构重构方案
+- [design-v2/14-多渠道支持方案.md](design-v2/14-多渠道支持方案.md) - 多渠道支持方案
 
 ### 旧版本文档（参考）
 - [src_old/README-old.md](src_old/README-old.md) - 旧版本 README
@@ -131,11 +139,20 @@ vim config.json
 #### 方式1: 使用管理脚本（推荐）
 
 ```bash
-# 启动服务
+# 启动服务（默认启动企业微信渠道）
 ./manage.py start
 
 # 后台启动
 ./manage.py start -d
+
+# 通过组启动
+./manage.py start -g g1              # 启动企业微信渠道 g1
+./manage.py start -g g2              # 启动企业微信渠道 g2
+./manage.py start -g g_simulator     # 启动模拟器渠道
+
+# 通过渠道启动
+./manage.py start --channel wechat_bot1  # 指定企业微信渠道
+./manage.py start --channel simulator1   # 指定模拟器渠道
 
 # 使用指定配置
 ./manage.py start -c config-dev.json
@@ -230,6 +247,8 @@ python3 tools/wechat_test_tool.py listen
 - ✅ 命令处理（/help, /status, /new, /sessions）
 - ✅ 多 iflow 实例支持
 - ✅ 多企业微信机器人支持
+- ✅ 多渠道支持（企业微信、模拟器）
+- ✅ 渠道最小化架构
 - ✅ 消息状态检测（idle/generating）
 - ✅ 消息分类（reply/other/complete）
 - ✅ 拒绝机制（生成中拒绝新消息）
@@ -243,6 +262,8 @@ python3 tools/wechat_test_tool.py listen
 - ✅ 模块健康监控和自动恢复
 - ✅ 消息应答检查机制
 - ✅ 模块依赖管理和启动顺序控制
+- ✅ 通用组件复用（消息转换器、通知管理器）
+- ✅ 模拟器渠道和测试工具
 
 ### 待实现 🚧
 
