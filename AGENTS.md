@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-Ling-iflow 是一个 iflow CLI 交互模式管理工具，通过 tmux 管理和监控 iflow CLI 会话，实现与企业微信的双向消息同步。项目已完成从紧耦合架构到基于消息总线的松耦合架构的重构。
+Ling-iflow 是一个 iflow CLI 交互模式管理工具，通过 tmux 管理和监控 iflow CLI 会话，实现与企业微信的双向消息同步。项目已完成从紧耦合架构到基于消息总线的松耦合架构的重构，并实现了多渠道支持架构。
 
 ## 核心架构
 
@@ -160,7 +160,7 @@ vim config.json
 {
   "tmux_sessions": [
     {
-      "name": "iflow",
+      "name": "iflow1",
       "workspace": "~/.iflow",
       "model": "kimi-k2.5"
     }
@@ -169,7 +169,6 @@ vim config.json
     {
       "name": "bot1",
       "enabled": true,
-      "tmux_session": "iflow",
       "corp_id": "企业ID",
       "agent_id": "应用AgentId",
       "secret": "应用Secret",
@@ -180,26 +179,54 @@ vim config.json
       "callback_port": 8788,
       "allow_from": [],
       "group_policy": "mention",
-      "group_allow_from": []
+      "group_allow_from": [],
+      "tmux_session": "iflow1"
     }
   ],
+  "simulator_channels": [
+    {
+      "name": "simulator1",
+      "enabled": false,
+      "host": "localhost",
+      "port": 19999,
+      "tmux_session": "iflow1"
+    }
+  ],
+  "groups": {
+    "g1": ["wechat_bot1", "iflow_iflow1"],
+    "g2": ["wechat_bot2", "iflow_iflow2"],
+    "g_simulator": ["simulator1", "iflow_iflow1"]
+  },
   "log_level": "INFO"
 }
 ```
+
+**配置项说明**：
+- `tmux_sessions`: iflow 会话配置（支持多实例）
+- `bots`: 企业微信机器人配置（支持多机器人）
+- `simulator_channels`: 模拟器渠道配置（可选）
+- `groups`: 渠道组配置（支持自定义组合）
+- `log_level`: 日志级别
 
 ## 启动和管理
 
 ### 方式1: 使用管理脚本（推荐）
 
 ```bash
-# 启动服务
+# 启动服务（默认启动企业微信渠道）
 ./manage.py start
 
 # 后台启动
 ./manage.py start -d
 
-# 启动指定组（g1: bot1+iflow, g2: bot2+iflow2）
-./manage.py start -g g1
+# 通过组启动
+./manage.py start -g g1              # 启动企业微信渠道 g1
+./manage.py start -g g2              # 启动企业微信渠道 g2
+./manage.py start -g g_simulator     # 启动模拟器渠道
+
+# 通过渠道启动
+./manage.py start --channel wechat_bot1  # 指定企业微信渠道
+./manage.py start --channel simulator1   # 指定模拟器渠道
 
 # 使用指定配置
 ./manage.py start -c config-dev.json
@@ -342,6 +369,80 @@ iflow CLI 的完整管理模块。
 - `/new`: 创建新会话
 - `/sessions`: 查看历史会话
 
+### SimulatorChannel（模拟器渠道）
+
+消息模拟器渠道，用于测试和开发。
+
+**主要功能：**
+- 通过 Socket 接收测试工具的消息
+- 发送消息到 MessageBus
+- 支持 JSON 格式消息
+- 支持多客户端连接
+
+**配置项：**
+- `name`: 渠道标识符
+- `enabled`: 是否启用
+- `host`: 监听地址（默认：localhost）
+- `port`: 监听端口（默认：19999）
+- `tmux_session`: 绑定的 iflow 会话
+
+**使用方式：**
+```bash
+# 启动模拟器渠道
+./manage.py start -g g_simulator
+
+# 使用测试客户端连接
+python3 tools/test_client.py
+
+# 发送消息
+send "测试消息"
+```
+
+### MessageConverter（消息转换器）
+
+通用消息转换器，负责将平台特定消息转换为标准 Message 格式。
+
+**主要功能：**
+- 将平台原始消息转换为标准 Message 格式
+- 将标准 Message 格式转换为平台消息格式
+- 支持企业微信消息格式
+- 提供统一的消息转换接口
+
+**使用方式：**
+```python
+from src.modules.common.converter import MessageConverter
+
+converter = MessageConverter()
+
+# 转换为企业微信消息
+wechat_msg = converter.create_wechat_outbound_message(message)
+```
+
+### NotificationManager（通知管理器）
+
+通知管理器，负责模块启动、停止等事件的通知管理。
+
+**主要功能：**
+- 管理模块启动/停止通知
+- 支持通知模板
+- 支持自定义通知处理器
+- 支持异步通知发送
+
+**使用方式：**
+```python
+from src.modules.common.notifications import NotificationManager
+
+notification_manager = NotificationManager()
+
+# 发送启动通知
+await notification_manager.send_startup_notification(
+    module_name="iFlow 企业微信机器人",
+    service_info="服务信息",
+    quick_start="快速开始说明",
+    tips="提示信息"
+)
+```
+
 ## 测试
 
 ### 运行测试
@@ -378,6 +479,18 @@ python3 tools/iflow_interactive_tool.py
 python3 tools/wechat_test_tool.py listen
 python3 tools/wechat_test_tool.py send "测试消息"
 python3 tools/wechat_test_tool.py test
+
+# 模拟器测试客户端
+python3 tools/test_client.py
+
+# 支持的命令：
+#   connect - 连接到模拟器服务器
+#   send <message> - 发送消息
+#   disconnect - 断开连接
+#   quit - 退出
+
+# Tmux 查看工具
+python3 tools/tmux_viewer.py
 ```
 
 ## 已实现功能
@@ -429,6 +542,10 @@ python3 tools/wechat_test_tool.py test
 - [design-v2/06-启动方案设计.md](design-v2/06-启动方案设计.md) - 启动方案和管理脚本设计
 - [design-v2/07-消息提取优化方案.md](design-v2/07-消息提取优化方案.md) - 消息提取优化
 - [design-v2/08-IFlowModule测试工具方案.md](design-v2/08-IFlowModule测试工具方案.md) - 测试工具方案
+- [design-v2/11-模块管理器设计方案.md](design-v2/11-模块管理器设计方案.md) - 模块管理器设计
+- [design-v2/12-消息模拟器和测试工具方案.md](design-v2/12-消息模拟器和测试工具方案.md) - 消息模拟器设计
+- [design-v2/13-渠道架构重构方案.md](design-v2/13-渠道架构重构方案.md) - 渠道架构重构方案
+- [design-v2/14-多渠道支持方案.md](design-v2/14-多渠道支持方案.md) - 多渠道支持方案
 
 ### 旧版本文档（参考）
 - [src_old/README-old.md](src_old/README-old.md) - 旧版本 README
@@ -454,7 +571,7 @@ python3 tools/wechat_test_tool.py test
 
 ## 重要记忆
 
-- 项目状态：重构完成，基于消息总线的松耦合架构
+- 项目状态：重构完成，基于消息总线的松耦合架构，已实现多渠道支持
 - 核心技术：Python 3.10+, pydantic, loguru, typer, asyncio, tmux
 - 配置文件位置：`config.json`
 - 日志位置：`logs/interactions/`
@@ -465,9 +582,12 @@ python3 tools/wechat_test_tool.py test
 - 使用 tmux 管理 iflow CLI 会话
 - 通过监控会话文件（session-*.jsonl）捕获 AI 回复
 - 支持企业微信消息与 iflow CLI 的双向同步
+- 支持多渠道架构（企业微信、模拟器）
 - 支持命令系统：`/run`, `/new`, `/sessions`, `/status`, `/help`
 - 支持连续对话，自动保持上下文
 - 提供多个测试工具，支持不同测试场景
+- 渠道最小化架构，通用组件复用（MessageConverter, NotificationManager）
+- 模块管理器统一管理模块生命周期和状态监控
 
 ## 已知问题和修复历史
 
@@ -479,11 +599,16 @@ python3 tools/wechat_test_tool.py test
 3. **IFlowMonitor 消息提取逻辑**：修复了消息提取逻辑，实现完整的倒数第二原则
 4. **IFlowMonitor 状态检测顺序**：修复状态检测顺序，确保状态正确更新
 5. **IFlowMonitor 标记更新处理**：避免重复发送中间版本
+6. **停止通知发送失败**：修复停止通知发送失败问题，将通知处理改为同步等待，确保在资源关闭前完成发送
+7. **NotificationManager 异步处理器判断**：修复异步处理器判断逻辑，使用 `asyncio.iscoroutinefunction` 而不是 `hasattr(handler, '__await__')`
 
 ## 常见问题
 
 ### Q: 如何启动服务？
 A: 推荐使用管理脚本：`./manage.py start -d`
+
+### Q: 如何启动模拟器渠道？
+A: 使用管理脚本：`./manage.py start -g g_simulator` 或 `./manage.py start --channel simulator1`
 
 ### Q: 如何查看日志？
 A: 使用管理脚本：`./manage.py logs -f`
@@ -500,9 +625,15 @@ A: 参考 `src_old/WECHAT_SETUP.md` 文档
 ### Q: 如何添加新的 iflow 实例？
 A: 在 `config.json` 的 `tmux_sessions` 中添加新配置，并在 `bots` 中配置对应的机器人
 
+### Q: 如何添加新的渠道？
+A: 在 `src/modules/channel/` 中创建新的渠道文件，继承 `BaseModule`，并在 `config.json` 中添加对应配置
+
+### Q: 如何使用测试客户端？
+A: 运行 `python3 tools/test_client.py`，然后可以使用 `send` 命令发送消息到模拟器渠道
+
 ## 下一步工作
 
-1. **P1 增强**：多机器人支持、错误处理、日志优化
+1. **P1 增强**：错误处理、日志优化
 2. **可选**：消息去重机制测试（需快速重发消息）
 3. **P2 扩展**：Web 控制台、配置热更新、监控告警
 
