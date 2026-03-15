@@ -7,6 +7,6 @@
 from .message import Message, MessageType, MessageContent
 from .base import BaseModule
 from .bus import MessageBus
-from .manager import ModuleManager
+from .manager import ModuleManager, ModuleStatus, IFlowStatus
 
-__all__ = ["Message", "MessageType", "MessageContent", "BaseModule", "MessageBus", "ModuleManager"]
+__all__ = ["Message", "MessageType", "MessageContent", "BaseModule", "MessageBus", "ModuleManager", "ModuleStatus", "IFlowStatus"]

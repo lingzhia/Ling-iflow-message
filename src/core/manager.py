@@ -608,6 +608,11 @@ class ModuleManager:
                 old_healthy = self.module_states[module_id].healthy
                 if old_healthy != healthy:
                     await self._notify_state_change(module_id, "healthy" if healthy else "unhealthy")
+                    
+                    # 如果模块变为不健康，尝试自动恢复
+                    if not healthy and self.is_module_running(module_id):
+                        logger.info(f"[ModuleManager] 模块状态异常，尝试自动恢复: {module_id}")
+                        await self._auto_recovery(module_id)
                 
             else:
                 # 如果没有健康检查方法，默认认为健康
@@ -618,6 +623,39 @@ class ModuleManager:
             logger.error(f"[ModuleManager] 健康检查失败: {module_id}, {e}")
             self.module_states[module_id].healthy = False
             self.module_states[module_id].error = str(e)
+    
+    async def _auto_recovery(self, module_id: str) -> bool:
+        """自动恢复故障模块
+        
+        Args:
+            module_id: 模块 ID
+            
+        Returns:
+            是否恢复成功
+        """
+        logger.info(f"[ModuleManager] 尝试自动恢复模块: {module_id}")
+        
+        # 记录异常状态
+        if module_id in self.module_states:
+            self.module_states[module_id].error = "Auto recovery triggered"
+        
+        try:
+            # 尝试重启模块
+            success = await self.restart_module(module_id)
+            
+            if success:
+                logger.info(f"[ModuleManager] 模块恢复成功: {module_id}")
+                # 更新状态
+                self.module_states[module_id].healthy = True
+                self.module_states[module_id].error = None
+                return True
+            else:
+                logger.error(f"[ModuleManager] 模块恢复失败: {module_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"[ModuleManager] 自动恢复失败: {module_id}, {e}")
+            return False
     
     async def _notify_state_change(self, module_id: str, new_state: str) -> None:
         """通知状态变更
@@ -643,3 +681,281 @@ class ModuleManager:
         """
         self.state_callbacks.append(callback)
         logger.info(f"[ModuleManager] 状态变更回调已注册，总数: {len(self.state_callbacks)}")
+    
+    # ==================== 消息应答检查 ====================
+    
+    def check_receiver(self, module_id: str) -> Dict[str, Any]:
+        """检查接收方状态
+        
+        Args:
+            module_id: 接收方模块 ID
+            
+        Returns:
+            检查结果字典
+        """
+        # 检查模块是否存在
+        if module_id not in self.modules:
+            return {
+                "exists": False,
+                "available": False,
+                "reason": "receiver_not_found",
+                "message": f"接收方模块不存在: {module_id}"
+            }
+        
+        # 检查模块是否运行
+        if not self.is_module_running(module_id):
+            return {
+                "exists": True,
+                "available": False,
+                "reason": "receiver_not_running",
+                "message": f"接收方模块未运行: {module_id}"
+            }
+        
+        # 检查模块是否健康
+        if not self.is_module_healthy(module_id):
+            return {
+                "exists": True,
+                "available": False,
+                "reason": "receiver_unhealthy",
+                "message": f"接收方模块状态异常: {module_id}"
+            }
+        
+        # 特殊检查：IFlow 生成中状态
+        if module_id.startswith("iflow_"):
+            if module_id in self.iflow_status:
+                if not self.is_iflow_available(module_id):
+                    iflow_status = self.get_iflow_status(module_id)
+                    duration = iflow_status.get("generating_duration", 0)
+                    return {
+                        "exists": True,
+                        "available": False,
+                        "reason": "iflow_generating",
+                        "message": f"iflow 正在生成中，已持续 {duration} 秒",
+                        "duration": duration
+                    }
+        
+        # 接收方可用
+        return {
+            "exists": True,
+            "available": True,
+            "reason": "ok",
+            "message": "接收方可用"
+        }
+    
+    def generate_error_response(self, error_type: str, **kwargs) -> Dict[str, Any]:
+        """生成错误响应
+        
+        Args:
+            error_type: 错误类型
+            **kwargs: 额外参数
+            
+        Returns:
+            错误响应字典
+        """
+        error_messages = {
+            "sender_not_found": "发送方模块不存在",
+            "receiver_not_found": "接收方模块不存在",
+            "receiver_not_running": "接收方模块未运行",
+            "receiver_unhealthy": "接收方模块状态异常",
+            "iflow_generating": "iflow 正在生成中，请稍后再试"
+        }
+        
+        base_response = {
+            "success": False,
+            "error": error_type,
+            "message": error_messages.get(error_type, "未知错误")
+        }
+        
+        # 添加额外参数
+        base_response.update(kwargs)
+        
+        return base_response
+    
+    async def send_with_check(self, message: Message) -> Dict[str, Any]:
+        """发送消息并检查接收方状态
+        
+        Args:
+            message: 消息对象
+            
+        Returns:
+            发送结果
+        """
+        # 检查发送方
+        sender_id = message.from_module
+        if sender_id:
+            sender_check = self.check_receiver(sender_id)
+            if not sender_check["exists"]:
+                return {
+                    "success": False,
+                    "error": "sender_not_found",
+                    "message": sender_check["message"],
+                    "route_info": {
+                        "from": sender_id,
+                        "to": None,
+                        "action": "sender_not_found"
+                    }
+                }
+        
+        # 确定接收方
+        target_module_id = message.to_module
+        
+        # 如果没有指定接收方，使用绑定关系
+        if not target_module_id and sender_id:
+            target_module_id = self.message_bus.bindings.get(sender_id)
+        
+        # 检查接收方
+        if target_module_id:
+            receiver_check = self.check_receiver(target_module_id)
+            
+            if not receiver_check["available"]:
+                # 接收方不可用
+                return {
+                    "success": False,
+                    "error": receiver_check["reason"],
+                    "message": receiver_check["message"],
+                    "route_info": {
+                        "from": sender_id,
+                        "to": target_module_id,
+                        "action": receiver_check["reason"]
+                    },
+                    "duration": receiver_check.get("duration", 0)
+                }
+        
+        # 正常路由到消息总线
+        try:
+            if target_module_id:
+                # 直接发送到目标模块
+                if target_module_id in self.modules:
+                    target_module = self.modules[target_module_id]
+                    await target_module.receive(message)
+                    return {
+                        "success": True,
+                        "message": "消息已发送",
+                        "route_info": {
+                            "from": sender_id,
+                            "to": target_module_id,
+                            "action": "routed"
+                        }
+                    }
+                else:
+                    # 模块不存在
+                    return {
+                        "success": False,
+                        "error": "target_not_found",
+                        "message": f"目标模块不存在: {target_module_id}",
+                        "route_info": {
+                            "from": sender_id,
+                            "to": target_module_id,
+                            "action": "target_not_found"
+                        }
+                    }
+            else:
+                # 使用消息总线路由
+                if self.message_bus:
+                    await self.message_bus.route(message)
+                    return {
+                        "success": True,
+                        "message": "消息已发送",
+                        "route_info": {
+                            "from": sender_id,
+                            "to": None,
+                            "action": "routed_via_bus"
+                        }
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": "no_message_bus",
+                        "message": "消息总线未设置"
+                    }
+                    
+        except Exception as e:
+            logger.error(f"[ModuleManager] 发送消息失败: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": "send_error",
+                "message": f"发送失败: {str(e)}",
+                "route_info": {
+                    "from": sender_id,
+                    "to": target_module_id,
+                    "action": "send_error"
+                }
+            }
+    
+    # ==================== 启动顺序控制 ====================
+    
+    async def start_with_order(self, module_ids: List[str]) -> Dict[str, bool]:
+        """按启动顺序启动模块
+        
+        Args:
+            module_ids: 模块 ID 列表（按启动顺序）
+            
+        Returns:
+            每个模块的启动结果
+        """
+        logger.info(f"[ModuleManager] 按顺序启动模块: {module_ids}")
+        
+        results = {}
+        
+        for module_id in module_ids:
+            # 检查依赖是否满足
+            if not self.check_dependencies(module_id):
+                logger.warning(f"[ModuleManager] 依赖未满足，跳过: {module_id}")
+                results[module_id] = False
+                continue
+            
+            # 启动模块
+            success = await self.start_module(module_id)
+            results[module_id] = success
+            
+            if not success:
+                logger.warning(f"[ModuleManager] 模块启动失败，停止后续启动: {module_id}")
+                break
+        
+        return results
+    
+    async def stop_with_order(self, module_ids: List[str]) -> Dict[str, bool]:
+        """按停止顺序停止模块（启动顺序的逆序）
+        
+        Args:
+            module_ids: 模块 ID 列表（按启动顺序）
+            
+        Returns:
+            每个模块的停止结果
+        """
+        logger.info(f"[ModuleManager] 按逆序停止模块: {module_ids[::-1]}")
+        
+        results = {}
+        
+        # 按逆序停止
+        for module_id in reversed(module_ids):
+            success = await self.stop_module(module_id)
+            results[module_id] = success
+        
+        return results
+    
+    async def start_with_dependencies(self, module_id: str) -> bool:
+        """根据依赖关系启动模块
+        
+        Args:
+            module_id: 模块 ID
+            
+        Returns:
+            是否成功
+        """
+        logger.info(f"[ModuleManager] 根据依赖启动模块: {module_id}")
+        
+        # 获取依赖
+        dependencies = self.get_dependencies(module_id)
+        
+        # 先启动依赖
+        for dep_id in dependencies:
+            if not self.is_module_running(dep_id):
+                logger.info(f"[ModuleManager] 启动依赖: {dep_id}")
+                dep_success = await self.start_with_dependencies(dep_id)
+                if not dep_success:
+                    logger.error(f"[ModuleManager] 依赖启动失败: {dep_id}")
+                    return False
+        
+        # 启动当前模块
+        return await self.start_module(module_id)
