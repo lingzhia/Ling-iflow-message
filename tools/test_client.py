@@ -57,8 +57,13 @@ class TestClient:
             self._connected = True
             logger.info(f"已连接到服务器 {self.host}:{self.port}")
             return True
+        except ConnectionRefusedError:
+            error_msg = f"连接被拒绝: {self.host}:{self.port}"
+            logger.error(error_msg)
+            return False
         except Exception as e:
-            logger.error(f"连接失败: {e}")
+            error_msg = f"连接失败: {e}"
+            logger.error(error_msg)
             return False
     
     async def disconnect(self) -> None:
@@ -192,7 +197,17 @@ class InteractiveMode:
         
         # 连接到服务器
         if not await self.client.connect():
-            print("❌ 连接失败")
+            print("\n❌ 连接失败")
+            print(f"\n⚠️  无法连接到模拟器服务器 {self.client.host}:{self.client.port}")
+            print("\n可能的原因：")
+            print("  1. 模拟器服务未启动")
+            print("  2. 端口配置错误")
+            print("  3. 防火墙阻止连接")
+            print("\n解决方案：")
+            print("  1. 启动模拟器服务:")
+            print("     ./manage.py start -g g_simulator -d")
+            print("  2. 检查配置文件 config.json 中的 simulator_channels 配置")
+            print("  3. 检查端口是否被占用")
             return
         
         print("\n" + "=" * 50)
@@ -307,6 +322,16 @@ async def main() -> None:
             await client.disconnect()
         else:
             print("❌ 连接失败")
+            print(f"\n⚠️  无法连接到模拟器服务器 {host}:{port}")
+            print("\n可能的原因：")
+            print("  1. 模拟器服务未启动")
+            print("  2. 端口配置错误")
+            print("  3. 防火墙阻止连接")
+            print("\n解决方案：")
+            print("  1. 启动模拟器服务:")
+            print("     ./manage.py start -g g_simulator -d")
+            print("  2. 检查配置文件 config.json 中的 simulator_channels 配置")
+            print("  3. 检查端口是否被占用")
             
     elif len(args) > 0 and args[0] == "--mode":
         # 指定模式
