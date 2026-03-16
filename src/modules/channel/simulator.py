@@ -49,9 +49,33 @@ class SimulatorChannel(BaseModule):
         # 客户端连接管理
         self._connections: Dict[str, Dict] = {}
         
+        # 命令处理器
+        from ..command import CommandHandler
+        self.command_handler = CommandHandler()
+        
         # 导入通用组件
         from ..common.converter import MessageConverter
         self.converter = MessageConverter()
+    
+    def set_message_bus(self, bus) -> None:
+        """设置消息总线
+        
+        Args:
+            bus: 消息总线实例
+        """
+        super().set_message_bus(bus)
+        # 同时设置给 CommandHandler
+        self.command_handler.set_message_bus(bus)
+    
+    def set_manager(self, manager) -> None:
+        """设置模块管理器
+        
+        Args:
+            manager: 模块管理器实例
+        """
+        self._manager = manager
+        # 设置给 CommandHandler
+        self.command_handler.set_manager(manager)
     
     async def _on_start(self) -> None:
         """启动时的钩子方法"""
@@ -102,7 +126,7 @@ class SimulatorChannel(BaseModule):
             # 将消息发送给所有连接的客户端
             for conn_id, conn in self._connections.items():
                 try:
-                    await self._send_to_client(conn, message)
+                    await self._send_message_to_client(conn, message)
                 except Exception as e:
                     logger.error(f"[{self.module_id}] 发送消息到客户端 {conn_id} 失败: {e}")
                     
@@ -193,9 +217,29 @@ class SimulatorChannel(BaseModule):
             message_type = message_json.get("type", "")
             
             if message_type == "user_message":
-                # 用户消息：转换为标准 Message 发送到 MessageBus
+                # 用户消息
                 content = message_json.get("content", "")
                 metadata = message_json.get("metadata", {})
+                chat_id = metadata.get("chat_id", conn_id)
+                
+                # 解析命令
+                parsed = self.command_handler.parse_command(content)
+                
+                # 如果是命令，执行命令并回复
+                if parsed.get("is_command"):
+                    result = await self.command_handler.execute(parsed, chat_id)
+                    if result:
+                        # 发送命令回复到客户端
+                        await self._send_to_client(conn_id, {
+                            "type": "bot_message",
+                            "id": Message.generate_id(),
+                            "content": result,
+                            "metadata": {
+                                "msg_type": "command_reply",
+                                "chat_id": chat_id
+                            }
+                        })
+                    return
                 
                 # 创建标准消息
                 message = Message(
@@ -235,7 +279,7 @@ class SimulatorChannel(BaseModule):
         except Exception as e:
             logger.error(f"[{self.module_id}] 处理客户端 {conn_id} 消息失败: {e}", exc_info=True)
     
-    async def _send_to_client(self, conn: Dict, message: Message) -> None:
+    async def _send_message_to_client(self, conn: Dict, message: Message) -> None:
         """发送消息到客户端
         
         Args:
@@ -256,19 +300,38 @@ class SimulatorChannel(BaseModule):
                 }
             }
             
-            # 序列化为 JSON
-            message_data = json.dumps(message_json, ensure_ascii=False).encode('utf-8')
-            
-            # 写入长度（4字节）和内容
-            writer = conn["writer"]
-            writer.write(struct.pack('>I', len(message_data)))
-            writer.write(message_data)
-            await writer.drain()
-            
-            logger.debug(f"[{self.module_id}] 消息已发送到客户端")
-            
+            writer = conn.get("writer")
+            if writer:
+                message_data = json.dumps(message_json, ensure_ascii=False).encode('utf-8')
+                writer.write(struct.pack('>I', len(message_data)))
+                writer.write(message_data)
+                await writer.drain()
+                
         except Exception as e:
-            logger.error(f"[{self.module_id}] 发送消息到客户端失败: {e}", exc_info=True)
+            logger.error(f"[{self.module_id}] 发送消息到客户端失败: {e}")
+    
+    async def _send_to_client(self, conn_id: str, message_json: Dict) -> None:
+        """发送消息到客户端（直接发送JSON）
+        
+        Args:
+            conn_id: 连接 ID
+            message_json: 消息 JSON 对象
+        """
+        try:
+            conn = self._connections.get(conn_id)
+            if not conn:
+                logger.warning(f"[{self.module_id}] 连接不存在: {conn_id}")
+                return
+            
+            writer = conn.get("writer")
+            if writer:
+                message_data = json.dumps(message_json, ensure_ascii=False).encode('utf-8')
+                writer.write(struct.pack('>I', len(message_data)))
+                writer.write(message_data)
+                await writer.drain()
+                
+        except Exception as e:
+            logger.error(f"[{self.module_id}] 发送消息到客户端失败: {e}")
     
     async def get_status(self) -> Dict[str, Any]:
         """获取状态

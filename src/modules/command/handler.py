@@ -252,14 +252,10 @@ class CommandHandler:
         
         else:
             # 如果没有 manager，使用旧的方式查询 IFlow 模块状态
+            status_lines.append("⚠️ 模块管理器未初始化")
             for module_id, module in self.bus.modules.items():
                 if module_id.startswith("iflow_") and hasattr(module, 'get_status_message'):
-                    status_parts.append(module.get_status_message())
-            
-            if not status_parts:
-                status_lines.append("❌ 没有可用的 iflow 模块")
-            else:
-                status_lines.append("\n\n".join(status_parts))
+                    status_lines.append(module.get_status_message())
         
         return "\n".join(status_lines)
     
