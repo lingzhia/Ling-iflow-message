@@ -55,7 +55,7 @@
   "simulator_channels": [
     {
       "name": "simulator1",
-      "enabled": true,
+      "enabled": false,
       "host": "localhost",
       "port": 19999,
       "tmux_session": "iflow1"

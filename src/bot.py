@@ -302,16 +302,13 @@ class LingIflowBot:
             logger.info(f"SimulatorChannel {module_id} 创建和注册成功")
     
     def _setup_bindings(self) -> None:
-        """设置模块绑定关系（双向绑定）"""
-        # 企业微信渠道绑定
-        bots = self.config.get("bots", [])
+        """设置模块绑定关系（双向绑定）
         
-        for bot_config in bots:
-            if not bot_config.get("enabled", False):
-                continue
-            
-            bot_name = bot_config.get("name", "default")
-            tmux_session = bot_config.get("tmux_session", "iflow")
+        只为实际创建的模块设置绑定关系
+        """
+        # 企业微信渠道绑定
+        for bot_name, wechat in self.wechat_modules.items():
+            tmux_session = wechat.config.get("tmux_session", "iflow")
             
             wechat_id = f"wechat_{bot_name}"
             iflow_id = f"iflow_{tmux_session}"
@@ -322,14 +319,8 @@ class LingIflowBot:
             logger.info(f"双向绑定: {wechat_id} <-> {iflow_id}")
         
         # 模拟器渠道绑定
-        simulator_channels = self.config.get("simulator_channels", [])
-        
-        for simulator_config in simulator_channels:
-            if not simulator_config.get("enabled", False):
-                continue
-            
-            simulator_name = simulator_config.get("name", "default")
-            tmux_session = simulator_config.get("tmux_session", "iflow")
+        for simulator_name, simulator in self.simulator_modules.items():
+            tmux_session = simulator.config.get("tmux_session", "iflow")
             
             simulator_id = f"simulator_{simulator_name}"
             iflow_id = f"iflow_{tmux_session}"
