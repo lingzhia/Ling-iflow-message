@@ -24,6 +24,7 @@ class LingIflowBot:
     """Ling-iflow 机器人主类
     
     使用 ModuleManager 管理消息总线和所有模块的生命周期。
+    支持单进程多组管理，默认只启动组1，其他组按需实例化。
     """
     
     def __init__(self, config_path: str = "config.json", active_group: str = "all", active_channel: Optional[str] = None):
@@ -45,6 +46,10 @@ class LingIflowBot:
         self.wechat_modules: Dict[str, WeChatChannel] = {}
         self.simulator_modules: Dict[str, SimulatorChannel] = {}
         self.iflow_modules: Dict[str, IFlowModule] = {}
+        
+        # 组定义缓存
+        self.group_definitions: Dict[str, Dict] = {}
+        self.default_group = "g1"  # 默认组
         
         self._running = False
         self._shutdown_event = asyncio.Event()
@@ -101,20 +106,17 @@ class LingIflowBot:
             logger.info("创建模块管理器...")
             self.manager = ModuleManager(self.bus)
             
-            # 3. 创建并注册 IFlowModule
-            await self._setup_iflow_modules()
+            # 3. 加载组定义
+            self._load_group_definitions()
             
-            # 4. 创建并注册 WeChatChannel
-            await self._setup_wechat_modules()
+            # 4. 创建组1的模块（但不启动）
+            await self._setup_default_group()
             
-            # 5. 创建并注册 SimulatorChannel
-            await self._setup_simulator_channels()
+            # 5. 设置组1的绑定关系
+            self._setup_bindings_for_group(self.default_group)
             
-            # 6. 设置绑定关系
-            self._setup_bindings()
-            
-            # 7. 定义模块组
-            await self._setup_groups()
+            # 6. 定义组1
+            await self._setup_group_definition(self.default_group)
             
             logger.info("所有组件初始化完成")
             return True
@@ -123,6 +125,220 @@ class LingIflowBot:
             logger.error(f"初始化失败: {e}", exc_info=True)
             return False
     
+    def _load_group_definitions(self) -> None:
+        """加载组定义"""
+        groups_config = self.config.get("groups", {})
+        self.group_definitions = groups_config.copy()
+        logger.info(f"加载了 {len(groups_config)} 个组定义: {list(groups_config.keys())}")
+    
+    async def _setup_default_group(self) -> None:
+        """创建默认组（组1）的模块（不启动）"""
+        # 从配置中获取默认组
+        groups_config = self.config.get("groups", {})
+        
+        # 找到标记为 default 的组
+        for group_name, group_config in groups_config.items():
+            if group_config.get("default", False):
+                self.default_group = group_name
+                logger.info(f"发现默认组: {group_name}")
+                break
+        
+        # 如果没有找到默认组，使用 g1
+        if self.default_group not in groups_config:
+            self.default_group = "g1"
+            logger.warning(f"未找到默认组，使用 g1")
+        
+        # 创建默认组的模块
+        await self._setup_group_modules(self.default_group)
+    
+    async def _setup_group_modules(self, group_name: str) -> None:
+        """创建指定组的模块（不启动）
+        
+        Args:
+            group_name: 组名
+        """
+        group_config = self.group_definitions.get(group_name, {})
+        module_ids = group_config.get("modules", [])
+        
+        logger.info(f"创建组 {group_name} 的模块: {module_ids}")
+        
+        # 按照类型创建模块
+        for module_id in module_ids:
+            if module_id.startswith("iflow_"):
+                await self._create_iflow_module(module_id)
+            elif module_id.startswith("wechat_"):
+                await self._create_wechat_module(module_id)
+            elif module_id.startswith("simulator_"):
+                await self._create_simulator_module(module_id)
+            else:
+                logger.warning(f"未知的模块类型: {module_id}")
+    
+    async def _create_iflow_module(self, module_id: str) -> None:
+        """创建 IFlow 模块
+        
+        Args:
+            module_id: 模块 ID
+        """
+        # 从 tmux_sessions 配置中查找对应的配置
+        tmux_sessions = self.config.get("tmux_sessions", [])
+        session_name = module_id.replace("iflow_", "")
+        
+        session_config = None
+        for session in tmux_sessions:
+            if session.get("name") == session_name:
+                session_config = session
+                break
+        
+        if not session_config:
+            logger.warning(f"未找到 {module_id} 的配置，使用默认配置")
+            session_config = {
+                "name": session_name,
+                "workspace": self.config.get("workspace", "~/.iflow"),
+                "model": self.config.get("model", "kimi-k2.5")
+            }
+        
+        # 使用 ModuleManager 创建模块
+        iflow = await self.manager.create_module(
+            module_type="iflow",
+            module_id=module_id,
+            config={
+                "tmux_session": session_name,
+                "model": session_config.get("model", "kimi-k2.5"),
+                "workspace": session_config.get("workspace", "~/.iflow")
+            }
+        )
+        
+        # 注册到消息总线
+        await self.manager.register_module(module_id)
+        
+        # 设置消息总线引用
+        self.manager.set_message_bus_for_module(module_id)
+        
+        # 存储引用
+        self.iflow_modules[session_name] = iflow
+        
+        logger.info(f"IFlowModule {module_id} 创建和注册成功")
+    
+    async def _create_wechat_module(self, module_id: str) -> None:
+        """创建 WeChat 模块
+        
+        Args:
+            module_id: 模块 ID
+        """
+        bot_name = module_id.replace("wechat_", "")
+        
+        # 从 bots 配置中查找对应的配置
+        bots = self.config.get("bots", [])
+        bot_config = None
+        for bot in bots:
+            if bot.get("name") == bot_name:
+                bot_config = bot
+                break
+        
+        if not bot_config:
+            logger.warning(f"未找到 {module_id} 的配置")
+            return
+        
+        # 使用 ModuleManager 创建模块
+        wechat = await self.manager.create_module(
+            module_type="wechat",
+            module_id=module_id,
+            config=bot_config
+        )
+        
+        # 注册到消息总线
+        await self.manager.register_module(module_id)
+        
+        # 设置消息总线引用
+        self.manager.set_message_bus_for_module(module_id)
+        
+        # 设置模块管理器引用
+        if hasattr(wechat, 'set_manager'):
+            wechat.set_manager(self.manager)
+        
+        # 存储引用
+        self.wechat_modules[bot_name] = wechat
+        
+        logger.info(f"WeChatChannel {module_id} 创建和注册成功")
+    
+    async def _create_simulator_module(self, module_id: str) -> None:
+        """创建 Simulator 模块
+        
+        Args:
+            module_id: 模块 ID
+        """
+        simulator_name = module_id.replace("simulator_", "")
+        
+        # 从 simulator_channels 配置中查找对应的配置
+        simulators = self.config.get("simulator_channels", [])
+        sim_config = None
+        for sim in simulators:
+            if sim.get("name") == simulator_name:
+                sim_config = sim
+                break
+        
+        if not sim_config:
+            logger.warning(f"未找到 {module_id} 的配置")
+            return
+        
+        # 使用 ModuleManager 创建模块
+        simulator = await self.manager.create_module(
+            module_type="simulator",
+            module_id=module_id,
+            config=sim_config
+        )
+        
+        # 注册到消息总线
+        await self.manager.register_module(module_id)
+        
+        # 设置消息总线引用
+        self.manager.set_message_bus_for_module(module_id)
+        
+        # 设置模块管理器引用
+        if hasattr(simulator, 'set_manager'):
+            simulator.set_manager(self.manager)
+        
+        # 存储引用
+        self.simulator_modules[simulator_name] = simulator
+        
+        logger.info(f"SimulatorChannel {module_id} 创建和注册成功")
+    
+    def _setup_bindings_for_group(self, group_name: str) -> None:
+        """设置指定组的绑定关系
+        
+        Args:
+            group_name: 组名
+        """
+        group_config = self.group_definitions.get(group_name, {})
+        module_ids = group_config.get("modules", [])
+        
+        logger.info(f"设置组 {group_name} 的绑定关系")
+        
+        # 简单的绑定策略：渠道 -> IFlow
+        for i in range(len(module_ids)):
+            for j in range(i + 1, len(module_ids)):
+                module_id1 = module_ids[i]
+                module_id2 = module_ids[j]
+                
+                # 判断是否需要绑定（渠道 -> IFlow）
+                if (module_id1.startswith("wechat_") or module_id1.startswith("simulator_")) and module_id2.startswith("iflow_"):
+                    self.bus.bind(module_id1, module_id2)
+                    self.bus.bind(module_id2, module_id1)
+                    logger.info(f"绑定: {module_id1} <-> {module_id2}")
+    
+    async def _setup_group_definition(self, group_name: str) -> None:
+        """定义指定的组
+        
+        Args:
+            group_name: 组名
+        """
+        group_config = self.group_definitions.get(group_name, {})
+        module_ids = group_config.get("modules", [])
+        
+        self.manager.define_group(group_name, module_ids)
+        logger.info(f"定义组 {group_name}: {module_ids}")
+
+
     async def _setup_iflow_modules(self) -> None:
         """创建并注册 IFlowModule（使用 ModuleManager）"""
         # 组名映射：g1 -> bot1, g2 -> bot2
@@ -382,42 +598,27 @@ class LingIflowBot:
             else:
                 logger.warning(f"无法找到组 '{self.active_group}' 对应的配置")
     
-    async def start(self) -> None:
+        async def start(self) -> None:
         """启动所有模块（使用 ModuleManager）"""
         logger.info("启动所有模块...")
         
-        # 优先级：active_channel > active_group > all
-        if self.active_channel:
-            # 启动指定的渠道
-            module_id = self.active_channel
-            success = await self.manager.start_module(module_id)
+        # 默认只启动组1
+        # 如果 active_group 为 all，仍然只启动默认组
+        # 这样可以保持向后兼容，同时实现新的启动策略
+        logger.info(f"启动默认组: {self.default_group}")
+        results = await self.manager.start_group(self.default_group)
+        
+        for module_id, success in results.items():
             if success:
                 logger.info(f"模块 {module_id} 启动成功")
             else:
                 logger.warning(f"模块 {module_id} 启动失败")
-        elif self.active_group == "all":
-            # 启动所有模块
-            for module_id in self.manager.modules.keys():
-                success = await self.manager.start_module(module_id)
-                if success:
-                    logger.info(f"模块 {module_id} 启动成功")
-                else:
-                    logger.warning(f"模块 {module_id} 启动失败")
-        else:
-            # 启动指定组的模块
-            results = await self.manager.start_group(self.active_group)
-            for module_id, success in results.items():
-                if success:
-                    logger.info(f"模块 {module_id} 启动成功")
-                else:
-                    logger.warning(f"模块 {module_id} 启动失败")
         
         # 启动健康监控
         await self.manager.start_health_monitor()
         
         self._running = True
         logger.info("所有模块启动完成")
-    
     async def stop(self) -> None:
         """停止所有模块（使用 ModuleManager）"""
         if not self._running:
@@ -469,6 +670,127 @@ class LingIflowBot:
         """处理退出信号"""
         logger.info("收到退出信号")
         self._shutdown_event.set()
+
+    
+    # ==================== 组控制功能 ====================
+    
+    async def start_group(self, group_name: str) -> Dict[str, bool]:
+        """启动指定的组
+        
+        Args:
+            group_name: 组名
+            
+        Returns:
+            每个模块的启动结果
+        """
+        logger.info(f"启动组: {group_name}")
+        
+        # 检查组是否存在
+        if group_name not in self.group_definitions:
+            logger.error(f"组不存在: {group_name}")
+            return {}
+        
+        # 检查组的模块是否已创建
+        group_config = self.group_definitions[group_name]
+        module_ids = group_config.get("modules", [])
+        
+        # 检查是否需要创建模块
+        for module_id in module_ids:
+            if module_id not in self.manager.modules:
+                logger.info(f"按需创建模块: {module_id}")
+                await self._setup_group_modules(group_name)
+                self._setup_bindings_for_group(group_name)
+                await self._setup_group_definition(group_name)
+                break
+        
+        # 启动组
+        results = await self.manager.start_group(group_name)
+        
+        return results
+    
+    async def stop_group(self, group_name: str) -> Dict[str, bool]:
+        """停止指定的组
+        
+        Args:
+            group_name: 组名
+            
+        Returns:
+            每个模块的停止结果
+        """
+        logger.info(f"停止组: {group_name}")
+        return await self.manager.stop_group(group_name)
+    
+    async def restart_group(self, group_name: str) -> Dict[str, bool]:
+        """重启指定的组
+        
+        Args:
+            group_name: 组名
+            
+        Returns:
+            每个模块的重启结果
+        """
+        logger.info(f"重启组: {group_name}")
+        
+        # 先停止
+        await self.stop_group(group_name)
+        
+        # 等待一下
+        await asyncio.sleep(1)
+        
+        # 再启动
+        return await self.start_group(group_name)
+    
+    def get_group_status(self, group_name: str) -> Dict[str, Any]:
+        """获取指定组的状态
+        
+        Args:
+            group_name: 组名
+            
+        Returns:
+            组状态信息
+        """
+        module_ids = self.manager.get_group_modules(group_name)
+        
+        group_status = {
+            "group_name": group_name,
+            "modules": {}
+        }
+        
+        for module_id in module_ids:
+            group_status["modules"][module_id] = self.manager.get_module_status(module_id)
+        
+        return group_status
+    
+    def get_all_groups_status(self) -> Dict[str, Dict[str, Any]]:
+        """获取所有组的状态
+        
+        Returns:
+            所有组的状态信息
+        """
+        all_status = {}
+        for group_name in self.group_definitions.keys():
+            all_status[group_name] = self.get_group_status(group_name)
+        
+        return all_status
+    
+    def list_groups(self) -> List[str]:
+        """列出所有组
+        
+        Returns:
+            组名列表
+        """
+        return list(self.group_definitions.keys())
+    
+    def get_group_info(self, group_name: str) -> Optional[Dict[str, Any]]:
+        """获取组的信息
+        
+        Args:
+            group_name: 组名
+            
+        Returns:
+            组信息
+        """
+        return self.group_definitions.get(group_name)
 
 
 async def main():

@@ -62,9 +62,24 @@
     }
   ],
   "groups": {
-    "g1": ["wechat_bot1", "iflow_iflow1"],
-    "g2": ["wechat_bot2", "iflow_iflow2"],
-    "g_simulator": ["simulator_simulator1", "iflow_iflow1"]
+    "g1": {
+      "modules": ["wechat_bot1", "iflow_iflow1"],
+      "default": true,
+      "auto_start": true,
+      "description": "默认组，提供企业微信服务"
+    },
+    "g2": {
+      "modules": ["wechat_bot2", "iflow_iflow2"],
+      "default": false,
+      "auto_start": false,
+      "description": "测试组，用于测试新功能"
+    },
+    "g_simulator": {
+      "modules": ["simulator_simulator1", "iflow_iflow1"],
+      "default": false,
+      "auto_start": false,
+      "description": "模拟器组，用于开发和测试"
+    }
   },
   "wechat_work": {
     "enabled": false,
