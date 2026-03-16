@@ -7,12 +7,25 @@
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, field
 
 from .bus import MessageBus
 from .message import Message
+from .result import Result
+from .exceptions import (
+    ModuleNotFoundError,
+    ModuleNotRunningError,
+    DependencyNotSatisfiedError,
+    CircularDependencyError,
+    IFlowNotAvailableError,
+    ModuleStartFailedError,
+    ModuleStopFailedError,
+    ReceiverNotAvailableError,
+    MessageBusNotSetError
+)
 
 
 logger = logging.getLogger(__name__)
@@ -41,6 +54,76 @@ class IFlowStatus:
     total_rejected: int = 0
 
 
+@dataclass
+class StateTransition:
+    """状态转换记录"""
+    module_id: str
+    from_state: str
+    to_state: str
+    timestamp: datetime
+    reason: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class ModuleMetadata:
+    """模块元数据"""
+    module_id: str
+    name: str
+    description: str
+    author: str
+    version: str
+    created_at: datetime
+    updated_at: datetime
+    tags: List[str] = field(default_factory=list)
+    category: str = "general"
+    dependencies: List[str] = field(default_factory=list)
+
+
+@dataclass
+class ModuleVersion:
+    """模块版本信息"""
+    version: str  # 语义化版本，如 "1.2.3"
+    compatible_versions: List[str] = field(default_factory=list)  # 兼容的版本列表
+    changelog: str = ""  # 变更日志
+    released_at: Optional[datetime] = None  # 发布时间
+
+
+@dataclass
+class ModuleMetrics:
+    """模块性能指标"""
+    module_id: str
+    start_time: Optional[datetime] = None  # 启动时间
+    startup_duration: float = 0  # 启动耗时(秒)
+    message_count: int = 0  # 处理消息数量
+    avg_processing_time: float = 0  # 平均处理时间(秒)
+    max_processing_time: float = 0  # 最大处理时间(秒)
+    error_count: int = 0  # 错误数量
+    last_message_time: Optional[datetime] = None  # 最后消息时间
+
+    def update_processing_time(self, duration: float) -> None:
+        """更新处理时间
+
+        Args:
+            duration: 处理耗时(秒)
+        """
+        self.message_count += 1
+        self.max_processing_time = max(self.max_processing_time, duration)
+        self.avg_processing_time = (
+            (self.avg_processing_time * (self.message_count - 1) + duration) / self.message_count
+        )
+
+
+@dataclass
+class HealthCheckConfig:
+    """健康检查配置"""
+    interval: int = 30  # 检查间隔(秒)
+    max_failures: int = 3  # 最大失败次数
+    recovery_delay: int = 5  # 恢复延迟(秒)
+    retry_interval: int = 10  # 重试间隔(秒)
+    timeout: int = 5  # 健康检查超时(秒)
+
+
 class ModuleManager:
     """模块管理器
     
@@ -48,11 +131,16 @@ class ModuleManager:
     与 MessageBus 配合，实现控制逻辑和业务逻辑的分离。
     """
     
-    def __init__(self, message_bus: MessageBus):
+    def __init__(
+        self,
+        message_bus: MessageBus,
+        health_check_config: HealthCheckConfig = None
+    ):
         """初始化模块管理器
         
         Args:
             message_bus: 消息总线实例
+            health_check_config: 健康检查配置
         """
         self.message_bus = message_bus
         
@@ -71,12 +159,30 @@ class ModuleManager:
         # 依赖关系
         self.dependencies: Dict[str, List[str]] = {}
         
+        # 健康监控配置
+        self.health_check_config = health_check_config or HealthCheckConfig()
+        
         # 健康监控
-        self.health_check_interval = 30  # 秒
         self.health_check_task: Optional[asyncio.Task] = None
+        
+        # 健康检查失败计数
+        self.health_check_failures: Dict[str, int] = {}
         
         # 状态变更回调
         self.state_callbacks: List[Callable] = []
+        
+        # 状态历史
+        self.state_history: Dict[str, List[StateTransition]] = {}
+        self.max_history_size = 100  # 每个模块最多保留 100 条记录
+        
+        # 模块元数据
+        self.module_metadata: Dict[str, ModuleMetadata] = {}
+        
+        # 模块版本
+        self.module_versions: Dict[str, ModuleVersion] = {}
+        
+        # 性能指标
+        self.module_metrics: Dict[str, ModuleMetrics] = {}
     
     # ==================== 模块生命周期管理 ====================
     
@@ -87,12 +193,12 @@ class ModuleManager:
         config: Dict[str, Any]
     ) -> Any:
         """创建模块实例
-        
+
         Args:
-            module_type: 模块类型（iflow, wechat, simulator, command）
+            module_type: 模块类型(iflow, wechat, simulator, command)
             module_id: 模块 ID
             config: 模块配置
-            
+
         Returns:
             模块实例
         """
@@ -160,91 +266,122 @@ class ModuleManager:
         logger.info(f"[ModuleManager] 模块已销毁: {module_id}")
         return True
     
-    async def start_module(self, module_id: str) -> bool:
+    async def start_module(self, module_id: str) -> Result:
         """启动模块
         
         Args:
             module_id: 模块 ID
             
         Returns:
-            是否成功
+            启动结果
         """
         logger.info(f"[ModuleManager] 启动模块: {module_id}")
-        
+
         # 检查模块是否存在
         if module_id not in self.modules:
-            logger.error(f"[ModuleManager] 模块不存在: {module_id}")
-            return False
-        
+            error = f"模块不存在: {module_id}"
+            logger.error(f"[ModuleManager] {error}")
+            return Result.fail(error, "MODULE_NOT_FOUND", {"module_id": module_id})
+
         module = self.modules[module_id]
-        
+
         try:
+            # 记录启动开始时间
+            start_time = time.time()
+
             # 启动模块
             await module.start()
-            
+
+            # 计算启动耗时
+            startup_duration = time.time() - start_time
+
+            # 初始化性能指标
+            self.module_metrics[module_id] = ModuleMetrics(
+                module_id=module_id,
+                start_time=datetime.now(),
+                startup_duration=startup_duration
+            )
+
             # 更新状态
+            old_running = self.module_states[module_id].running
             self.module_states[module_id].running = True
             self.module_states[module_id].started_at = datetime.now()
             self.module_states[module_id].healthy = True
-            
-            logger.info(f"[ModuleManager] 模块已启动: {module_id}")
-            return True
-            
+
+            # 记录状态转换
+            self._record_state_transition(
+                module_id, "stopped" if not old_running else "running", "running",
+                reason="module_started",
+                details={"startup_duration": startup_duration}
+            )
+
+            logger.info(f"[ModuleManager] 模块已启动: {module_id} (耗时: {startup_duration:.2f}s)")
+            return Result.ok({"startup_duration": startup_duration})
+
         except Exception as e:
             logger.error(f"[ModuleManager] 启动模块失败: {module_id}, {e}", exc_info=True)
             self.module_states[module_id].error = str(e)
-            return False
+            return Result.fail(str(e), "START_FAILED", {"module_id": module_id})
     
-    async def stop_module(self, module_id: str) -> bool:
+    async def stop_module(self, module_id: str) -> Result:
         """停止模块
         
         Args:
             module_id: 模块 ID
             
         Returns:
-            是否成功
+            停止结果
         """
         logger.info(f"[ModuleManager] 停止模块: {module_id}")
-        
+
         # 检查模块是否存在
         if module_id not in self.modules:
             logger.warning(f"[ModuleManager] 模块不存在: {module_id}")
-            return False
-        
+            return Result.fail(f"模块不存在: {module_id}", "MODULE_NOT_FOUND", {"module_id": module_id})
+
         module = self.modules[module_id]
-        
+
         try:
             # 停止模块
             await module.stop()
-            
+
             # 更新状态
+            old_running = self.module_states[module_id].running
             self.module_states[module_id].running = False
             self.module_states[module_id].stopped_at = datetime.now()
-            
+
+            # 记录状态转换
+            self._record_state_transition(
+                module_id, "running", "stopped",
+                reason="module_stopped"
+            )
+
             logger.info(f"[ModuleManager] 模块已停止: {module_id}")
-            return True
-            
+            return Result.ok()
+
         except Exception as e:
             logger.error(f"[ModuleManager] 停止模块失败: {module_id}, {e}", exc_info=True)
-            return False
+            return Result.fail(str(e), "STOP_FAILED", {"module_id": module_id})
     
-    async def restart_module(self, module_id: str) -> bool:
+    async def restart_module(self, module_id: str) -> Result:
         """重启模块
         
         Args:
             module_id: 模块 ID
             
         Returns:
-            是否成功
+            重启结果
         """
         logger.info(f"[ModuleManager] 重启模块: {module_id}")
-        
+
         # 先停止
-        await self.stop_module(module_id)
-        
+        stop_result = await self.stop_module(module_id)
+        if not stop_result.success:
+            return stop_result
+
         # 等待一下
         await asyncio.sleep(1)
-        
+
         # 再启动
         return await self.start_module(module_id)
     
@@ -376,6 +513,241 @@ class ModuleManager:
         
         return self.module_states[module_id].healthy
     
+    # ==================== 状态历史管理 ====================
+    
+    def _record_state_transition(
+        self,
+        module_id: str,
+        from_state: str,
+        to_state: str,
+        reason: str = None,
+        details: Dict = None
+    ) -> None:
+        """记录状态转换"""
+        if module_id not in self.state_history:
+            self.state_history[module_id] = []
+
+        transition = StateTransition(
+            module_id=module_id,
+            from_state=from_state,
+            to_state=to_state,
+            timestamp=datetime.now(),
+            reason=reason,
+            details=details
+        )
+
+        self.state_history[module_id].append(transition)
+
+        # 限制历史记录数量
+        if len(self.state_history[module_id]) > self.max_history_size:
+            self.state_history[module_id] = self.state_history[module_id][-self.max_history_size:]
+
+        logger.debug(f"[ModuleManager] 记录状态转换: {module_id} {from_state} -> {to_state}")
+
+    def get_state_history(self, module_id: str, limit: int = 10) -> List[StateTransition]:
+        """获取状态历史
+        
+        Args:
+            module_id: 模块 ID
+            limit: 返回的记录数量
+            
+        Returns:
+            状态转换记录列表
+        """
+        if module_id not in self.state_history:
+            return []
+        return self.state_history[module_id][-limit:]
+
+    def get_state_transitions(
+        self,
+        module_id: str,
+        from_state: str = None,
+        to_state: str = None,
+        start_time: datetime = None,
+        end_time: datetime = None
+    ) -> List[StateTransition]:
+        """查询状态转换
+        
+        Args:
+            module_id: 模块 ID
+            from_state: 源状态
+            to_state: 目标状态
+            start_time: 开始时间
+            end_time: 结束时间
+            
+        Returns:
+            状态转换记录列表
+        """
+        if module_id not in self.state_history:
+            return []
+
+        transitions = self.state_history[module_id]
+
+        if from_state:
+            transitions = [t for t in transitions if t.from_state == from_state]
+        if to_state:
+            transitions = [t for t in transitions if t.to_state == to_state]
+        if start_time:
+            transitions = [t for t in transitions if t.timestamp >= start_time]
+        if end_time:
+            transitions = [t for t in transitions if t.timestamp <= end_time]
+
+        return transitions
+
+    # ==================== 模块元数据管理 ====================
+    
+    def register_metadata(self, metadata: ModuleMetadata) -> None:
+        """注册模块元数据
+        
+        Args:
+            metadata: 模块元数据
+        """
+        self.module_metadata[metadata.module_id] = metadata
+        logger.info(f"[ModuleManager] 注册元数据: {metadata.module_id}")
+
+    def get_metadata(self, module_id: str) -> Optional[ModuleMetadata]:
+        """获取模块元数据
+        
+        Args:
+            module_id: 模块 ID
+            
+        Returns:
+            模块元数据
+        """
+        return self.module_metadata.get(module_id)
+
+    def get_metadata_by_tag(self, tag: str) -> List[ModuleMetadata]:
+        """按标签获取模块元数据
+        
+        Args:
+            tag: 标签
+            
+        Returns:
+            模块元数据列表
+        """
+        return [
+            m for m in self.module_metadata.values()
+            if tag in m.tags
+        ]
+
+    def get_metadata_by_category(self, category: str) -> List[ModuleMetadata]:
+        """按分类获取模块元数据
+        
+        Args:
+            category: 分类
+            
+        Returns:
+            模块元数据列表
+        """
+        return [
+            m for m in self.module_metadata.values()
+            if m.category == category
+        ]
+
+    def list_all_metadata(self) -> List[ModuleMetadata]:
+        """列出所有模块元数据
+        
+        Returns:
+            模块元数据列表
+        """
+        return list(self.module_metadata.values())
+
+    # ==================== 模块版本管理 ====================
+    
+    def register_version(self, module_id: str, version: ModuleVersion) -> None:
+        """注册模块版本
+        
+        Args:
+            module_id: 模块 ID
+            version: 版本信息
+        """
+        self.module_versions[module_id] = version
+        logger.info(f"[ModuleManager] 注册版本: {module_id} v{version.version}")
+
+    def get_version(self, module_id: str) -> Optional[ModuleVersion]:
+        """获取模块版本
+        
+        Args:
+            module_id: 模块 ID
+            
+        Returns:
+            版本信息
+        """
+        return self.module_versions.get(module_id)
+
+    def check_compatibility(self, module_id: str, required_version: str) -> bool:
+        """检查版本兼容性
+        
+        Args:
+            module_id: 模块 ID
+            required_version: 需要的版本
+            
+        Returns:
+            是否兼容
+        """
+        version_info = self.get_version(module_id)
+        if not version_info:
+            return False
+
+        current_version = version_info.version
+        return required_version in version_info.compatible_versions
+
+    def can_hot_reload(self, module_id: str, new_version: str) -> bool:
+        """检查是否可以热更新
+        
+        Args:
+            module_id: 模块 ID
+            new_version: 新版本号
+            
+        Returns:
+            是否可以热更新
+        """
+        version_info = self.get_version(module_id)
+        if not version_info:
+            return False
+
+        # 新版本必须在兼容列表中
+        return new_version in version_info.compatible_versions
+
+    # ==================== 性能监控 ====================
+    
+    def get_metrics(self, module_id: str) -> Optional[ModuleMetrics]:
+        """获取模块性能指标
+        
+        Args:
+            module_id: 模块 ID
+            
+        Returns:
+            性能指标
+        """
+        return self.module_metrics.get(module_id)
+
+    def get_all_metrics(self) -> Dict[str, ModuleMetrics]:
+        """获取所有模块性能指标
+        
+        Returns:
+            性能指标字典
+        """
+        return self.module_metrics.copy()
+
+    def record_message_processing(self, module_id: str, duration: float, success: bool) -> None:
+        """记录消息处理
+        
+        Args:
+            module_id: 模块 ID
+            duration: 处理耗时（秒）
+            success: 是否成功
+        """
+        if module_id not in self.module_metrics:
+            return
+
+        metrics = self.module_metrics[module_id]
+        metrics.update_processing_time(duration)
+        metrics.last_message_time = datetime.now()
+
+        if not success:
+            metrics.error_count += 1
+    
     # ==================== 组管理 ====================
     
     def define_group(self, group_name: str, module_ids: List[str]) -> None:
@@ -472,22 +844,193 @@ class ModuleManager:
     
     def check_dependencies(self, module_id: str) -> bool:
         """检查依赖是否满足
-        
+
         Args:
             module_id: 模块 ID
-            
+
         Returns:
             依赖是否满足
         """
         dependencies = self.get_dependencies(module_id)
-        
+
         for dep_id in dependencies:
             if not self.is_module_running(dep_id):
                 logger.warning(f"[ModuleManager] 依赖未满足: {module_id} 需要 {dep_id}")
                 return False
-        
+
         return True
-    
+
+    def auto_detect_dependencies(self) -> None:
+        """自动检测模块依赖"""
+        # 基于配置自动检测依赖关系
+        # 例如：渠道模块依赖于 CommandHandler
+        # IFlow 模块依赖于渠道模块
+
+        # 清空现有依赖
+        self.dependencies.clear()
+
+        # 检测 CommandHandler 依赖
+        for module_id, module in self.modules.items():
+            if hasattr(module, 'command_handler'):
+                cmd_id = module.command_handler.module_id
+                if cmd_id in self.modules:
+                    self.add_dependency(module_id, cmd_id)
+
+        # 检测 IFlow 依赖
+        for module_id, module in self.modules.items():
+            if module_id.startswith("iflow_"):
+                # IFlow 模块依赖于其绑定的渠道
+                if self.message_bus:
+                    # 找到绑定到此 IFlow 的渠道
+                    bindings = self.message_bus.list_bindings()
+                    for from_module, to_module in bindings.items():
+                        if to_module == module_id:
+                            self.add_dependency(module_id, from_module)
+
+        logger.info(f"[ModuleManager] 自动检测依赖: {self.dependencies}")
+
+    def get_startup_order(self, module_ids: List[str] = None) -> List[str]:
+        """获取模块启动顺序
+
+        Args:
+            module_ids: 要排序的模块列表，如果为 None 则使用所有模块
+
+        Returns:
+            排序后的模块列表
+
+        Raises:
+            CircularDependencyError: 检测到循环依赖
+        """
+        if module_ids is None:
+            module_ids = list(self.modules.keys())
+
+        # 构建依赖关系
+        deps = {}
+        for module_id in module_ids:
+            deps[module_id] = [
+                dep for dep in self.get_dependencies(module_id)
+                if dep in module_ids
+            ]
+
+        # 执行拓扑排序
+        return self._topological_sort(module_ids, deps)
+
+    def _topological_sort(self, nodes: List[str], dependencies: Dict[str, List[str]]) -> List[str]:
+        """拓扑排序
+
+        Args:
+            nodes: 节点列表
+            dependencies: 依赖关系 {node: [dependencies]}
+
+        Returns:
+            排序后的节点列表
+
+        Raises:
+            CircularDependencyError: 检测到循环依赖
+        """
+        # 计算入度
+        in_degree = {node: 0 for node in nodes}
+        for node in nodes:
+            for dep in dependencies.get(node, []):
+                if dep in in_degree:
+                    in_degree[node] += 1
+
+        # 找出入度为 0 的节点
+        queue = [node for node in nodes if in_degree[node] == 0]
+        result = []
+
+        while queue:
+            node = queue.pop(0)
+            result.append(node)
+
+            # 减少依赖此节点的其他节点的入度
+            for other_node in nodes:
+                if node in dependencies.get(other_node, []):
+                    in_degree[other_node] -= 1
+                    if in_degree[other_node] == 0:
+                        queue.append(other_node)
+
+        # 检查是否有循环依赖
+        if len(result) != len(nodes):
+            # 找出循环依赖
+            remaining = set(nodes) - set(result)
+            raise CircularDependencyError(list(remaining))
+
+        return result
+
+    async def start_with_dependencies(self, module_id: str) -> Result:
+        """根据依赖关系启动模块
+
+        Args:
+            module_id: 模块 ID
+
+        Returns:
+            启动结果
+        """
+        logger.info(f"[ModuleManager] 根据依赖启动模块: {module_id}")
+
+        # 检查模块是否存在
+        if module_id not in self.modules:
+            error = f"模块不存在: {module_id}"
+            logger.error(f"[ModuleManager] {error}")
+            return Result.fail(error, "MODULE_NOT_FOUND", {"module_id": module_id})
+
+        try:
+            # 获取启动顺序
+            startup_order = self.get_startup_order()
+
+            # 找到目标模块的位置
+            try:
+                target_index = startup_order.index(module_id)
+            except ValueError:
+                return Result.fail(
+                    f"模块不在启动顺序中: {module_id}",
+                    "MODULE_NOT_IN_ORDER",
+                    {"module_id": module_id}
+                )
+
+            # 启动目标模块及其依赖
+            modules_to_start = startup_order[:target_index + 1]
+
+            for m_id in modules_to_start:
+                if self.is_module_running(m_id):
+                    logger.info(f"[ModuleManager] 模块已在运行: {m_id}")
+                    continue
+
+                result = await self.start_module(m_id)
+                if not result.success:
+                    logger.error(f"[ModuleManager] 依赖启动失败: {m_id}")
+                    return result
+
+            return Result.ok({"startup_order": modules_to_start})
+
+        except CircularDependencyError as e:
+            logger.error(f"[ModuleManager] 检测到循环依赖: {e.cycle}")
+            return Result.fail(
+                str(e),
+                "CIRCULAR_DEPENDENCY",
+                {"cycle": e.cycle}
+            )
+        except Exception as e:
+            logger.error(f"[ModuleManager] 启动失败: {e}", exc_info=True)
+            return Result.fail(str(e), "START_FAILED", {"module_id": module_id})
+
+    def check_circular_dependencies(self) -> List[List[str]]:
+        """检查循环依赖
+
+        Returns:
+            循环依赖列表
+        """
+        cycles = []
+
+        try:
+            # 尝试获取启动顺序，如果失败则捕获循环依赖
+            self.get_startup_order()
+        except CircularDependencyError as e:
+            cycles.append(e.cycle)
+
+        return cycles
+
     # ==================== IFlow 状态管理 ====================
     
     def get_iflow_status(self, module_id: str) -> Optional[Dict[str, Any]]:
@@ -513,7 +1056,7 @@ class ModuleManager:
         }
     
     def is_iflow_available(self, module_id: str) -> bool:
-        """检查 IFlow 是否可用（不在生成中）
+        """检查 IFlow 是否可用(不在生成中)
         
         Args:
             module_id: 模块 ID
@@ -528,11 +1071,11 @@ class ModuleManager:
     
     def update_iflow_state(self, module_id: str, state: str, duration: int = 0) -> None:
         """更新 IFlow 状态
-        
+
         Args:
             module_id: 模块 ID
-            state: 状态（idle | generating）
-            duration: 生成持续时间（秒）
+            state: 状态(idle | generating)
+            duration: 生成持续时间(秒)
         """
         if module_id not in self.iflow_status:
             logger.warning(f"[ModuleManager] IFlow 模块不存在: {module_id}")
@@ -574,80 +1117,108 @@ class ModuleManager:
     async def _health_check_loop(self) -> None:
         """健康检查循环"""
         logger.info("[ModuleManager] 健康监控循环启动")
-        
+
         try:
             while True:
                 for module_id in self.modules.keys():
                     await self._check_module_health(module_id)
-                
-                await asyncio.sleep(self.health_check_interval)
-                
+
+                await asyncio.sleep(self.health_check_config.interval)
+
         except asyncio.CancelledError:
             logger.info("[ModuleManager] 健康监控循环已取消")
         except Exception as e:
             logger.error(f"[ModuleManager] 健康监控循环错误: {e}", exc_info=True)
-    
+
     async def _check_module_health(self, module_id: str) -> None:
         """检查单个模块健康
-        
+
         Args:
             module_id: 模块 ID
         """
         module = self.modules.get(module_id)
         if not module:
             return
-        
+
         try:
-            # 调用模块的健康检查方法
-            if hasattr(module, 'health_check'):
-                health_result = await module.health_check()
-                healthy = health_result.get('healthy', False)
-                
-                # 更新状态
-                self.module_states[module_id].healthy = healthy
-                self.module_states[module_id].last_check = datetime.now()
-                
-                # 检查状态变更
-                old_healthy = self.module_states[module_id].healthy
-                if old_healthy != healthy:
-                    await self._notify_state_change(module_id, "healthy" if healthy else "unhealthy")
-                    
-                    # 如果模块变为不健康，尝试自动恢复
-                    if not healthy and self.is_module_running(module_id):
-                        logger.info(f"[ModuleManager] 模块状态异常，尝试自动恢复: {module_id}")
+            # 使用超时
+            health_result = await asyncio.wait_for(
+                self._do_health_check(module_id),
+                timeout=self.health_check_config.timeout
+            )
+
+            healthy = health_result.get('healthy', False)
+
+            # 如果健康，重置失败计数
+            if healthy:
+                self.health_check_failures[module_id] = 0
+
+            # 更新状态
+            self.module_states[module_id].healthy = healthy
+            self.module_states[module_id].last_check = datetime.now()
+
+            # 检查状态变更
+            old_healthy = self.module_states[module_id].healthy
+            if old_healthy != healthy:
+                await self._notify_state_change(module_id, "healthy" if healthy else "unhealthy")
+
+                # 如果模块变为不健康，增加失败计数
+                if not healthy:
+                    self.health_check_failures[module_id] = self.health_check_failures.get(module_id, 0) + 1
+
+                    # 检查是否达到最大失败次数
+                    if self.health_check_failures[module_id] >= self.health_check_config.max_failures:
+                        logger.info(f"[ModuleManager] 模块达到最大失败次数，尝试自动恢复: {module_id}")
                         await self._auto_recovery(module_id)
-                
-            else:
-                # 如果没有健康检查方法，默认认为健康
-                self.module_states[module_id].healthy = True
-                self.module_states[module_id].last_check = datetime.now()
-                
+
+        except asyncio.TimeoutError:
+            logger.warning(f"[ModuleManager] 健康检查超时: {module_id}")
+            self.module_states[module_id].healthy = False
         except Exception as e:
             logger.error(f"[ModuleManager] 健康检查失败: {module_id}, {e}")
             self.module_states[module_id].healthy = False
             self.module_states[module_id].error = str(e)
-    
-    async def _auto_recovery(self, module_id: str) -> bool:
-        """自动恢复故障模块
-        
+
+    async def _do_health_check(self, module_id: str) -> Dict[str, Any]:
+        """执行健康检查
+
         Args:
             module_id: 模块 ID
-            
+
+        Returns:
+            健康检查结果
+        """
+        module = self.modules.get(module_id)
+        if not module:
+            return {'healthy': False}
+
+        if hasattr(module, 'health_check'):
+            return await module.health_check()
+        else:
+            return {'healthy': True}
+
+    async def _auto_recovery(self, module_id: str) -> bool:
+        """自动恢复故障模块
+
+        Args:
+            module_id: 模块 ID
+
         Returns:
             是否恢复成功
         """
         logger.info(f"[ModuleManager] 尝试自动恢复模块: {module_id}")
-        
-        # 记录异常状态
-        if module_id in self.module_states:
-            self.module_states[module_id].error = "Auto recovery triggered"
-        
+
+        # 等待恢复延迟
+        await asyncio.sleep(self.health_check_config.recovery_delay)
+
         try:
             # 尝试重启模块
             success = await self.restart_module(module_id)
-            
-            if success:
+
+            if success.success:
                 logger.info(f"[ModuleManager] 模块恢复成功: {module_id}")
+                # 重置失败计数
+                self.health_check_failures[module_id] = 0
                 # 更新状态
                 self.module_states[module_id].healthy = True
                 self.module_states[module_id].error = None
@@ -655,14 +1226,14 @@ class ModuleManager:
             else:
                 logger.error(f"[ModuleManager] 模块恢复失败: {module_id}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"[ModuleManager] 自动恢复失败: {module_id}, {e}")
             return False
-    
+
     async def _notify_state_change(self, module_id: str, new_state: str) -> None:
         """通知状态变更
-        
+
         Args:
             module_id: 模块 ID
             new_state: 新状态
@@ -889,76 +1460,50 @@ class ModuleManager:
     
     async def start_with_order(self, module_ids: List[str]) -> Dict[str, bool]:
         """按启动顺序启动模块
-        
+
         Args:
-            module_ids: 模块 ID 列表（按启动顺序）
-            
+            module_ids: 模块 ID 列表(按启动顺序)
+
         Returns:
             每个模块的启动结果
         """
         logger.info(f"[ModuleManager] 按顺序启动模块: {module_ids}")
-        
+
         results = {}
-        
+
         for module_id in module_ids:
             # 检查依赖是否满足
             if not self.check_dependencies(module_id):
                 logger.warning(f"[ModuleManager] 依赖未满足，跳过: {module_id}")
                 results[module_id] = False
                 continue
-            
+
             # 启动模块
-            success = await self.start_module(module_id)
-            results[module_id] = success
-            
-            if not success:
+            result = await self.start_module(module_id)
+            results[module_id] = result.success
+
+            if not result.success:
                 logger.warning(f"[ModuleManager] 模块启动失败，停止后续启动: {module_id}")
                 break
-        
+
         return results
-    
+
     async def stop_with_order(self, module_ids: List[str]) -> Dict[str, bool]:
-        """按停止顺序停止模块（启动顺序的逆序）
-        
+        """按停止顺序停止模块(启动顺序的逆序)
+
         Args:
-            module_ids: 模块 ID 列表（按启动顺序）
-            
+            module_ids: 模块 ID 列表(按启动顺序)
+
         Returns:
             每个模块的停止结果
         """
         logger.info(f"[ModuleManager] 按逆序停止模块: {module_ids[::-1]}")
-        
+
         results = {}
-        
+
         # 按逆序停止
         for module_id in reversed(module_ids):
-            success = await self.stop_module(module_id)
-            results[module_id] = success
-        
+            result = await self.stop_module(module_id)
+            results[module_id] = result.success
+
         return results
-    
-    async def start_with_dependencies(self, module_id: str) -> bool:
-        """根据依赖关系启动模块
-        
-        Args:
-            module_id: 模块 ID
-            
-        Returns:
-            是否成功
-        """
-        logger.info(f"[ModuleManager] 根据依赖启动模块: {module_id}")
-        
-        # 获取依赖
-        dependencies = self.get_dependencies(module_id)
-        
-        # 先启动依赖
-        for dep_id in dependencies:
-            if not self.is_module_running(dep_id):
-                logger.info(f"[ModuleManager] 启动依赖: {dep_id}")
-                dep_success = await self.start_with_dependencies(dep_id)
-                if not dep_success:
-                    logger.error(f"[ModuleManager] 依赖启动失败: {dep_id}")
-                    return False
-        
-        # 启动当前模块
-        return await self.start_module(module_id)
