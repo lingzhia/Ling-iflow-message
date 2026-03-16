@@ -56,6 +56,8 @@ class CommandHandler:
             "/new": self._cmd_new,
             "/sessions": self._cmd_sessions,
             "/lscmd": self._cmd_lscmd,
+            "/history": self._cmd_history,
+            "/metrics": self._cmd_metrics,
         }
     
     def parse_command(self, content: str) -> Dict[str, Any]:
@@ -138,6 +140,8 @@ class CommandHandler:
 - `/new`：开始新会话（清除上下文）
 - `/sessions`：查看历史会话
 - `/status`：查看服务状态
+- `/history [模块ID]`：查看模块状态历史（最近 10 条）
+- `/metrics [模块ID]`：查看模块性能指标
 - `/help`：显示此帮助
 - `/lscmd`：列出所有可用命令"""
     
@@ -193,6 +197,25 @@ class CommandHandler:
                     status_lines.append(f"  健康状态: {healthy_icon}{state_info}")
                     status_lines.append(f"  启动时间: {status.get('started_at', 'N/A')}")
                     
+                    # 获取性能指标
+                    metrics = self.manager.get_metrics(module_id)
+                    if metrics:
+                        if metrics.startup_duration > 0:
+                            status_lines.append(f"  启动耗时: {metrics.startup_duration:.2f}s")
+                        if metrics.message_count > 0:
+                            status_lines.append(f"  处理消息: {metrics.message_count} 条")
+                            status_lines.append(f"  平均处理时间: {metrics.avg_processing_time:.3f}s")
+                            status_lines.append(f"  最大处理时间: {metrics.max_processing_time:.3f}s")
+                        if metrics.error_count > 0:
+                            status_lines.append(f"  错误次数: {metrics.error_count}")
+                    
+                    # 获取模块元数据
+                    metadata = self.manager.get_metadata(module_id)
+                    if metadata:
+                        status_lines.append(f"  版本: {metadata.version}")
+                        if metadata.description:
+                            status_lines.append(f"  描述: {metadata.description}")
+                    
                     # 获取 IFlow 模块的会话信息
                     module = self.bus.modules.get(module_id)
                     if module and hasattr(module, 'session_manager'):
@@ -211,6 +234,19 @@ class CommandHandler:
                     
                     status_lines.append(f"- {running_icon} {module_id}")
                     status_lines.append(f"  健康状态: {healthy_icon}")
+                    
+                    # 获取性能指标
+                    metrics = self.manager.get_metrics(module_id)
+                    if metrics:
+                        if metrics.startup_duration > 0:
+                            status_lines.append(f"  启动耗时: {metrics.startup_duration:.2f}s")
+                        if metrics.message_count > 0:
+                            status_lines.append(f"  处理消息: {metrics.message_count} 条")
+                    
+                    # 获取模块元数据
+                    metadata = self.manager.get_metadata(module_id)
+                    if metadata:
+                        status_lines.append(f"  版本: {metadata.version}")
                     
                     # 获取企业微信模块的详细信息
                     module = self.bus.modules.get(module_id)
@@ -231,6 +267,14 @@ class CommandHandler:
                     status_lines.append(f"- {running_icon} {module_id}")
                     status_lines.append(f"  健康状态: {healthy_icon}")
                     
+                    # 获取性能指标
+                    metrics = self.manager.get_metrics(module_id)
+                    if metrics:
+                        if metrics.startup_duration > 0:
+                            status_lines.append(f"  启动耗时: {metrics.startup_duration:.2f}s")
+                        if metrics.message_count > 0:
+                            status_lines.append(f"  处理消息: {metrics.message_count} 条")
+                    
                     # 获取模拟器模块的详细信息
                     module = self.bus.modules.get(module_id)
                     if module and hasattr(module, 'get_status'):
@@ -248,6 +292,11 @@ class CommandHandler:
                     
                     status_lines.append(f"- {running_icon} {module_id}")
                     status_lines.append(f"  健康状态: {healthy_icon}")
+                    
+                    # 获取性能指标
+                    metrics = self.manager.get_metrics(module_id)
+                    if metrics and metrics.startup_duration > 0:
+                        status_lines.append(f"  启动耗时: {metrics.startup_duration:.2f}s")
                 status_lines.append("")
         
         else:
@@ -297,9 +346,108 @@ class CommandHandler:
 
 **状态查询：**
 - `/status` - 查看服务状态
+- `/history [模块ID]` - 查看模块状态历史（最近 10 条）
+- `/metrics [模块ID]` - 查看模块性能指标
 - `/help` - 显示帮助信息
 - `/lscmd` - 列出所有可用命令
 
 **使用提示：**
 - 直接发送消息即可与 iflow 对话
-- 命令不区分大小写"""
+- 命令不区分大小写
+- 模块 ID 可省略，将显示所有模块的信息"""
+    
+    async def _cmd_history(self, args: str, chat_id: str) -> str:
+        """查看状态历史命令"""
+        if not self.manager:
+            return "❌ 模块管理器未初始化"
+        
+        module_id = args.strip() if args.strip() else None
+        
+        if module_id:
+            # 查看指定模块的历史
+            if module_id not in self.manager.modules:
+                return f"❌ 模块不存在: {module_id}"
+            
+            history = self.manager.get_state_history(module_id, limit=10)
+            
+            if not history:
+                return f"ℹ️ 模块 {module_id} 没有状态历史记录"
+            
+            lines = [f"**{module_id} 状态历史** 📜\n"]
+            for i, transition in enumerate(history, 1):
+                timestamp = transition.timestamp.strftime("%H:%M:%S")
+                lines.append(f"{i}. {timestamp} | {transition.from_state} → {transition.to_state}")
+                if transition.reason:
+                    lines.append(f"   原因: {transition.reason}")
+                if transition.details:
+                    details_str = ", ".join([f"{k}={v}" for k, v in transition.details.items()])
+                    lines.append(f"   详情: {details_str}")
+            
+            return "\n".join(lines)
+        else:
+            # 查看所有模块的历史
+            lines = ["**所有模块状态历史** 📜\n"]
+            
+            for module_id in self.manager.modules.keys():
+                history = self.manager.get_state_history(module_id, limit=5)
+                
+                if history:
+                    lines.append(f"**{module_id}**")
+                    for transition in history:
+                        timestamp = transition.timestamp.strftime("%H:%M:%S")
+                        lines.append(f"  {timestamp}: {transition.from_state} → {transition.to_state}")
+                    lines.append("")
+            
+            if len(lines) == 1:
+                return "ℹ️ 没有任何状态历史记录"
+            
+            return "\n".join(lines)
+    
+    async def _cmd_metrics(self, args: str, chat_id: str) -> str:
+        """查看性能指标命令"""
+        if not self.manager:
+            return "❌ 模块管理器未初始化"
+        
+        module_id = args.strip() if args.strip() else None
+        
+        if module_id:
+            # 查看指定模块的指标
+            if module_id not in self.manager.modules:
+                return f"❌ 模块不存在: {module_id}"
+            
+            metrics = self.manager.get_metrics(module_id)
+            
+            if not metrics:
+                return f"ℹ️ 模块 {module_id} 没有性能指标"
+            
+            lines = [f"**{module_id} 性能指标** 📊\n"]
+            lines.append(f"启动时间: {metrics.start_time.strftime('%Y-%m-%d %H:%M:%S') if metrics.start_time else 'N/A'}")
+            lines.append(f"启动耗时: {metrics.startup_duration:.2f}s")
+            lines.append(f"处理消息: {metrics.message_count} 条")
+            lines.append(f"平均处理时间: {metrics.avg_processing_time:.3f}s")
+            lines.append(f"最大处理时间: {metrics.max_processing_time:.3f}s")
+            lines.append(f"错误次数: {metrics.error_count}")
+            lines.append(f"最后消息时间: {metrics.last_message_time.strftime('%Y-%m-%d %H:%M:%S') if metrics.last_message_time else 'N/A'}")
+            
+            return "\n".join(lines)
+        else:
+            # 查看所有模块的指标
+            lines = ["**所有模块性能指标** 📊\n"]
+            
+            all_metrics = self.manager.get_all_metrics()
+            
+            if not all_metrics:
+                return "ℹ️ 没有任何性能指标"
+            
+            for module_id, metrics in all_metrics.items():
+                lines.append(f"**{module_id}**")
+                lines.append(f"  启动耗时: {metrics.startup_duration:.2f}s")
+                lines.append(f"  处理消息: {metrics.message_count} 条")
+                if metrics.message_count > 0:
+                    lines.append(f"  平均处理时间: {metrics.avg_processing_time:.3f}s")
+                    lines.append(f"  最大处理时间: {metrics.max_processing_time:.3f}s")
+                if metrics.error_count > 0:
+                    lines.append(f"  错误次数: {metrics.error_count}")
+                lines.append("")
+            
+            return "\n".join(lines)
