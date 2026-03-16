@@ -29,6 +29,8 @@ class CommandHandler:
         """
         self.bus = message_bus
         self.manager = manager
+        self.group_definitions: Dict[str, Dict] = {}
+        self.default_group = "g1"
         self._commands = {}
         self._register_builtin_commands()
     
@@ -48,6 +50,16 @@ class CommandHandler:
         """
         self.manager = manager
     
+    def set_group_config(self, group_definitions: Dict[str, Dict], default_group: str = "g1") -> None:
+        """设置组配置
+        
+        Args:
+            group_definitions: 组定义字典
+            default_group: 默认组名
+        """
+        self.group_definitions = group_definitions
+        self.default_group = default_group
+    
     def _register_builtin_commands(self) -> None:
         """注册内置命令"""
         self._commands = {
@@ -58,6 +70,8 @@ class CommandHandler:
             "/lscmd": self._cmd_lscmd,
             "/history": self._cmd_history,
             "/metrics": self._cmd_metrics,
+            "/groups": self._cmd_groups,
+            "/group": self._cmd_group,
         }
     
     def parse_command(self, content: str) -> Dict[str, Any]:
@@ -142,6 +156,8 @@ class CommandHandler:
 - `/status`：查看服务状态
 - `/history [模块ID]`：查看模块状态历史（最近 10 条）
 - `/metrics [模块ID]`：查看模块性能指标
+- `/groups`：列出所有组
+- `/group [status|start|stop|restart] [group_name]`：组管理
 - `/help`：显示此帮助
 - `/lscmd`：列出所有可用命令"""
     
@@ -351,6 +367,13 @@ class CommandHandler:
 - `/help` - 显示帮助信息
 - `/lscmd` - 列出所有可用命令
 
+**组管理：**
+- `/groups` - 列出所有组
+- `/group status [group_name]` - 查看组状态
+- `/group start <group_name>` - 启动组
+- `/group stop <group_name>` - 停止组
+- `/group restart <group_name>` - 重启组
+
 **使用提示：**
 - 直接发送消息即可与 iflow 对话
 - 命令不区分大小写
@@ -451,3 +474,146 @@ class CommandHandler:
                 lines.append("")
             
             return "\n".join(lines)
+
+    
+    async def _cmd_groups(self, args: str, chat_id: str) -> str:
+        """列出所有组命令"""
+        if not self.group_definitions:
+            return "❌ 组配置未初始化"
+        
+        lines = ["**可用组列表** 📋\n"]
+        
+        for group_name, group_config in self.group_definitions.items():
+            is_default = " [默认]" if group_name == self.default_group else ""
+            auto_start = " [自动启动]" if group_config.get("auto_start", False) else ""
+            description = group_config.get("description", "")
+            modules = group_config.get("modules", [])
+            
+            lines.append(f"**{group_name}**{is_default}{auto_start}")
+            if description:
+                lines.append(f"  描述: {description}")
+            lines.append(f"  模块: {', '.join(modules)}")
+            
+            # 获取组状态
+            if self.manager:
+                group_status = {}
+                for module_id in modules:
+                    if module_id in self.manager.modules:
+                        status = self.manager.get_status(module_id)
+                        group_status[module_id] = status.running
+                
+                running_count = sum(1 for v in group_status.values() if v)
+                total_count = len(group_status)
+                status_icon = "✅" if running_count == total_count and total_count > 0 else "⚠️" if running_count > 0 else "❌"
+                lines.append(f"  状态: {status_icon} ({running_count}/{total_count} 运行中)")
+            
+            lines.append("")
+        
+        return "\n".join(lines)
+    
+    async def _cmd_group(self, args: str, chat_id: str) -> str:
+        """组管理命令
+        
+        用法:
+        /group status [group_name] - 查看组状态
+        /group start <group_name> - 启动组
+        /group stop <group_name> - 停止组
+        /group restart <group_name> - 重启组
+        """
+        if not self.manager:
+            return "❌ 模块管理器未初始化"
+        
+        parts = args.strip().split()
+        if len(parts) < 1:
+            return """**组管理命令** 🔧
+
+用法:
+- `/group status [group_name]` - 查看组状态
+- `/group start <group_name>` - 启动组
+- `/group stop <group_name>` - 停止组
+- `/group restart <group_name>` - 重启组
+
+示例:
+- `/group status` - 查看所有组状态
+- `/group status g2` - 查看 g2 组状态
+- `/group start g2` - 启动 g2 组
+- `/group stop g2` - 停止 g2 组
+- `/group restart g2` - 重启 g2 组"""
+        
+        action = parts[0].lower()
+        group_name = parts[1] if len(parts) > 1 else None
+        
+        if action == "status":
+            if group_name:
+                # 查看指定组状态
+                if group_name not in self.group_definitions:
+                    return f"❌ 组不存在: {group_name}"
+                
+                module_ids = self.manager.get_group_modules(group_name)
+                if not module_ids:
+                    return f"❌ 组 {group_name} 没有配置模块"
+                
+                lines = [f"**{group_name} 组状态** 📊\n"]
+                
+                for module_id in module_ids:
+                    if module_id in self.manager.modules:
+                        status = self.manager.get_status(module_id)
+                        running_icon = "✅" if status.running else "❌"
+                        healthy_icon = "✅" if status.healthy else "❌"
+                        
+                        lines.append(f"- {running_icon} {module_id}")
+                        lines.append(f"  健康状态: {healthy_icon}")
+                        lines.append(f"  启动时间: {status.started_at.strftime('%Y-%m-%d %H:%M:%S') if status.started_at else 'N/A'}")
+                        lines.append("")
+                    else:
+                        lines.append(f"- ❌ {module_id} (未创建)")
+                        lines.append("")
+                
+                return "\n".join(lines)
+            else:
+                # 查看所有组状态
+                return await self._cmd_groups("", chat_id)
+        
+        elif action in ["start", "stop", "restart"]:
+            if not group_name:
+                return f"❌ 请指定组名: /group {action} <group_name>"
+            
+            if group_name not in self.group_definitions:
+                return f"❌ 组不存在: {group_name}"
+            
+            try:
+                if action == "start":
+                    results = await self.manager.start_group(group_name)
+                    action_text = "启动"
+                elif action == "stop":
+                    results = await self.manager.stop_group(group_name)
+                    action_text = "停止"
+                else:  # restart
+                    results = await self.manager.restart_group(group_name)
+                    action_text = "重启"
+                
+                # 格式化结果
+                lines = [f"**{group_name} 组{action_text}结果** 📋\n"]
+                
+                success_count = 0
+                fail_count = 0
+                
+                for module_id, success in results.items():
+                    if success:
+                        lines.append(f"✅ {module_id}: 成功")
+                        success_count += 1
+                    else:
+                        lines.append(f"❌ {module_id}: 失败")
+                        fail_count += 1
+                
+                lines.append("")
+                lines.append(f"总计: {success_count} 成功, {fail_count} 失败")
+                
+                return "\n".join(lines)
+            
+            except Exception as e:
+                logger.error(f"执行组操作失败: {e}", exc_info=True)
+                return f"❌ {action_text}组失败: {e}"
+        
+        else:
+            return f"❌ 未知操作: {action}\n\n发送 /group 查看帮助"

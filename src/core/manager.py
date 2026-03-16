@@ -348,6 +348,7 @@ class ModuleManager:
             # 更新状态
             old_running = self.module_states[module_id].running
             self.module_states[module_id].running = False
+            self.module_states[module_id].healthy = False  # 停止的模块不是健康的
             self.module_states[module_id].stopped_at = datetime.now()
 
             # 记录状态转换
@@ -473,6 +474,20 @@ class ModuleManager:
             "last_check": status.last_check.isoformat() if status.last_check else None,
             "error": status.error
         }
+    
+    def get_status(self, module_id: str) -> Optional[ModuleStatus]:
+        """获取模块状态（get_module_status 的别名）
+        
+        Args:
+            module_id: 模块 ID
+            
+        Returns:
+            模块状态对象
+        """
+        if module_id not in self.module_states:
+            return None
+        
+        return self.module_states[module_id]
     
     def get_all_status(self) -> Dict[str, Dict[str, Any]]:
         """获取所有模块状态
@@ -789,7 +804,8 @@ class ModuleManager:
         
         results = {}
         for module_id in module_ids:
-            results[module_id] = await self.start_module(module_id)
+            result = await self.start_module(module_id)
+            results[module_id] = result.success
         
         return results
     
@@ -811,7 +827,35 @@ class ModuleManager:
         
         results = {}
         for module_id in module_ids:
-            results[module_id] = await self.stop_module(module_id)
+            result = await self.stop_module(module_id)
+            results[module_id] = result.success
+        
+        return results
+    
+    async def restart_group(self, group_name: str) -> Dict[str, bool]:
+        """重启组的所有模块
+        
+        Args:
+            group_name: 组名
+            
+        Returns:
+            每个模块的重启结果
+        """
+        logger.info(f"[ModuleManager] 重启组: {group_name}")
+        
+        # 先停止
+        stop_results = await self.stop_group(group_name)
+        
+        # 等待一下
+        await asyncio.sleep(1)
+        
+        # 再启动
+        start_results = await self.start_group(group_name)
+        
+        # 合并结果
+        results = {}
+        for module_id in stop_results.keys():
+            results[module_id] = stop_results[module_id] and start_results.get(module_id, False)
         
         return results
     

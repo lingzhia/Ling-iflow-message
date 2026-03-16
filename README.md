@@ -129,52 +129,175 @@ cp config.example.json config.json
 vim config.json
 ```
 
-配置项说明：
+### 配置项说明
+
+**核心配置：**
+- `groups`: 组定义（支持多组管理）
+  - `modules`: 组包含的模块列表
+  - `default`: 是否为默认组
+  - `auto_start`: 是否自动启动
+  - `description`: 组描述
 - `tmux_sessions`: iflow 会话配置（支持多实例）
+  - `name`: 会话名称
+  - `workspace`: 工作目录
+  - `model`: 模型名称（如 glm-4.7）
 - `bots`: 企业微信机器人配置（支持多机器人）
-- `log_level`: 日志级别
+  - `name`: 机器人名称
+  - `enabled`: 是否启用
+  - `corp_id`: 企业ID
+  - `agent_id`: 应用AgentId
+  - `secret`: 应用Secret
+  - `user_id`: 用户账号
+  - `token`: 回调Token
+  - `encoding_aes_key`: EncodingAESKey
+  - `callback_port`: 回调端口
+  - `tmux_session`: 关联的tmux会话
+- `simulator_channels`: 模拟器渠道配置（支持多模拟器）
+  - `name`: 模拟器名称
+  - `enabled`: 是否启用
+  - `host`: 监听地址
+  - `port`: 监听端口
+  - `tmux_session`: 关联的tmux会话
+- `log_level`: 日志级别（INFO, DEBUG, ERROR等）
 
 ### 启动
 
 #### 方式1: 使用管理脚本（推荐）
 
+**基本命令：**
+
 ```bash
-# 启动服务（默认启动企业微信渠道）
+# 启动服务（默认后台启动组1）
 ./manage.py start
 
-# 后台启动
-./manage.py start -d
+# 启动所有组（后台）
+./manage.py start -a
 
-# 通过组启动
-./manage.py start -g g1              # 启动企业微信渠道 g1
-./manage.py start -g g2              # 启动企业微信渠道 g2
-./manage.py start -g g_simulator     # 启动模拟器渠道
+# 前台启动组1
+./manage.py start -f
 
-# 通过渠道启动
-./manage.py start --channel wechat_bot1  # 指定企业微信渠道
-./manage.py start --channel simulator1   # 指定模拟器渠道
+# 前台启动所有组
+./manage.py start -a -f
 
-# 使用指定配置
-./manage.py start -c config-dev.json
-
-# 停止服务
+# 停止服务（默认停止组1）
 ./manage.py stop
 
-# 重启服务
+# 停止所有组
+./manage.py stop -a
+
+# 重启服务（默认后台重启组1）
 ./manage.py restart
+
+# 重启所有组（后台）
+./manage.py restart -a
+
+# 前台重启组1
+./manage.py restart -f
 
 # 查看状态
 ./manage.py status
 
-# 查看日志
+# 查看日志（最近100行）
 ./manage.py logs
 
-# 持续跟踪日志
+# 实时跟踪日志
 ./manage.py logs -f
 
 # 清理日志和缓存
 ./manage.py clean
 ```
+
+**指定组操作：**
+
+```bash
+# 启动指定组
+./manage.py start -g g1              # 启动 g1 组
+./manage.py start -g g2              # 启动 g2 组
+./manage.py start -g g_simulator     # 启动模拟器组
+
+# 停止指定组
+./manage.py stop -g g1               # 停止 g1 组
+./manage.py stop -g g2               # 停止 g2 组
+
+# 重启指定组
+./manage.py restart -g g1            # 重启 g1 组
+./manage.py restart -g g2            # 重启 g2 组
+```
+
+**查看可用组：**
+
+```bash
+# 列出所有可用组
+./manage.py start -g ls
+./manage.py stop -g ls
+./manage.py restart -g ls
+```
+
+**指定渠道操作：**
+
+```bash
+# 启动指定渠道
+./manage.py start --channel wechat_bot1   # 指定企业微信渠道
+./manage.py start --channel simulator1    # 指定模拟器渠道
+
+# 后台启动指定渠道
+./manage.py start --channel wechat_bot1 -d
+```
+
+**使用自定义配置：**
+
+```bash
+# 使用指定配置文件
+./manage.py start -c config-dev.json
+./manage.py start -c config-test.json -g g1
+
+# 后台启动使用指定配置
+./manage.py start -c config.json -g g1 -d
+```
+
+**参数组合示例：**
+
+```bash
+# 启动指定组（后台）
+./manage.py start -g g2
+
+# 启动指定组（前台）
+./manage.py start -g g2 -f
+
+# 启动所有组（后台）
+./manage.py start -a
+
+# 启动所有组（前台）
+./manage.py start -a -f
+
+# 重启指定组（后台）
+./manage.py restart -g g2
+
+# 重启指定组（前台）
+./manage.py restart -g g2 -f
+
+# 使用自定义配置启动指定组（后台）
+./manage.py start -c config.json -g g1
+
+# 使用自定义配置启动指定组（前台）
+./manage.py start -c config.json -g g1 -f
+```
+
+**参数说明：**
+
+- `-a, --all`: 启动/停止/重启所有组
+- `-g, --group <组名>`: 指定要操作的组
+- `-f, --foreground`: 前台运行（默认后台运行）
+- `-c, --config <文件>`: 指定配置文件
+- `--channel <渠道名>`: 指定要启动的渠道
+
+**参数限制：**
+
+- `-a` 和 `-g` 参数互斥，不能同时使用
+- `-g` 支持特殊值 `ls`，用于列出所有可用组
+- `--channel` 和 `-g` 参数互斥，优先使用 `--channel`
+- 默认组为配置文件中标记为 `default` 的组（通常为 g1）
+- 默认为后台运行，使用 `-f` 启用前台运行
 
 #### 方式2: 直接启动
 
@@ -184,9 +307,15 @@ python3 -m src.bot
 
 # 指定配置文件启动
 python3 -m src.bot config.json
+
+# 指定组启动
+python3 -m src.bot config.json --group g1
+
+# 启动所有组
+python3 -m src.bot config.json --group all
 ```
 
-**推荐使用方式1**，提供更完整的管理功能。
+**推荐使用方式1**，提供更完整的管理功能和参数支持。
 
 ## 消息流转流程
 
@@ -241,29 +370,52 @@ python3 tools/wechat_test_tool.py listen
 
 ### 已实现 ✅
 
+**核心功能：**
 - ✅ IFlow 完整管理（启动/停止/消息注入/输出监控）
 - ✅ 企业微信回调接收和消息发送
 - ✅ 消息总线路由和绑定
-- ✅ 命令处理（/help, /status, /new, /sessions）
-- ✅ 多 iflow 实例支持
-- ✅ 多企业微信机器人支持
-- ✅ 多渠道支持（企业微信、模拟器）
-- ✅ 渠道最小化架构
+- ✅ 命令处理（/help, /status, /new, /sessions, /history, /metrics, /lscmd）
 - ✅ 消息状态检测（idle/generating）
 - ✅ 消息分类（reply/other/complete）
 - ✅ 拒绝机制（生成中拒绝新消息）
 - ✅ 多轮对话来源归属
 - ✅ 交互日志记录
-- ✅ 项目管理脚本（manage.py）
-- ✅ 服务生命周期管理（启动/停止/重启/状态/日志）
-- ✅ 启动/停止通知机制
-- ✅ Message 对象规范化
+
+**多组管理（单进程多组架构）：**
+- ✅ 单进程管理多个组
+- ✅ 组定义支持（groups 配置）
+- ✅ 默认组自动识别
+- ✅ 动态组管理（启动/停止/重启）
+- ✅ Unix Socket 控制接口
+- ✅ 组管理命令（/groups, /group status/start/stop/restart）
+- ✅ 管理脚本组管理（./manage.py group）
+- ✅ 模块预创建和按需启动
+- ✅ 组间状态独立管理
+- ✅ 健康监控和状态同步
+
+**多实例支持：**
+- ✅ 多 iflow 实例支持
+- ✅ 多企业微信机器人支持
+- ✅ 多渠道支持（企业微信、模拟器）
+- ✅ 多 tmux 会话管理
+- ✅ 渠道最小化架构
+- ✅ 模块化设计
+
+**模块管理：**
 - ✅ 模块管理器统一管理模块生命周期
 - ✅ 模块健康监控和自动恢复
 - ✅ 消息应答检查机制
 - ✅ 模块依赖管理和启动顺序控制
 - ✅ 通用组件复用（消息转换器、通知管理器）
 - ✅ 模拟器渠道和测试工具
+
+**项目管理：**
+- ✅ 项目管理脚本（manage.py）
+- ✅ 服务生命周期管理（启动/停止/重启/状态/日志）
+- ✅ 启动/停止通知机制
+- ✅ Message 对象规范化
+- ✅ 参数化配置管理
+- ✅ 日志和缓存清理
 
 ### 待实现 🚧
 
@@ -272,6 +424,7 @@ python3 tools/wechat_test_tool.py listen
 - 🚧 Web 控制台
 - 🚧 配置热更新
 - 🚧 监控告警
+- 🚧 消息去重机制测试（需企业微信快速重发）
 
 ## 贡献
 

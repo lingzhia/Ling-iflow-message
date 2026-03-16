@@ -140,6 +140,16 @@ class WeChatChannel(BaseModule):
         # 设置给 CommandHandler
         self.command_handler.set_manager(manager)
     
+    def set_group_config(self, group_definitions: Dict, default_group: str = "g1") -> None:
+        """设置组配置
+        
+        Args:
+            group_definitions: 组定义字典
+            default_group: 默认组名
+        """
+        # 设置给 CommandHandler
+        self.command_handler.set_group_config(group_definitions, default_group)
+    
     async def _on_start(self) -> None:
         """启动时的钩子方法"""
         logger.info(f"[{self.module_id}] 启动企业微信通道")
@@ -237,11 +247,15 @@ class WeChatChannel(BaseModule):
             tmux_session = self.config.get("tmux_session", "iflow")
             workspace = self.config.get("workspace", "~/.iflow")
             
+            # 扩展工作目录路径
+            from pathlib import Path
+            expanded_workspace = Path(workspace).expanduser()
+            
             # 获取 iflow 运行状态
             iflow_running = self._check_iflow_status()
             
             if iflow_running:
-                service_info = f"""📁 工作目录: {workspace}
+                service_info = f"""📁 工作目录: {expanded_workspace}
 💻 tmux 会话: {tmux_session} ✓
 🌐 回调端口: {callback_port}"""
                 quick_start = """• 直接发送消息：执行 iFlow 命令
@@ -256,7 +270,7 @@ class WeChatChannel(BaseModule):
                 )
             else:
                 service_info = f"""💻 tmux 会话: 无连接
-📁 工作目录: {workspace}
+📁 工作目录: {expanded_workspace}
 🌐 回调端口: {callback_port}"""
                 available_commands = """• `/lscmd`：查看所有可用命令"""
                 tips = "检查 iflow 是否正常启动。"
@@ -283,15 +297,19 @@ class WeChatChannel(BaseModule):
             tmux_session = self.config.get("tmux_session", "iflow")
             workspace = self.config.get("workspace", "~/.iflow")
             
+            # 扩展工作目录路径
+            from pathlib import Path
+            expanded_workspace = Path(workspace).expanduser()
+            
             # 检查 iflow 运行状态
             iflow_running = self._check_iflow_status()
             
             if iflow_running:
-                service_info = f"""📁 工作目录: {workspace}
+                service_info = f"""📁 工作目录: {expanded_workspace}
 💻 tmux 会话: {tmux_session}"""
             else:
                 service_info = f"""💻 tmux 会话: 无连接
-📁 工作目录: {workspace}"""
+📁 工作目录: {expanded_workspace}"""
             
             restart_command = "python3 -m src.bot config.json"
             
