@@ -242,6 +242,10 @@ class LingIflowBot:
             # 设置消息总线引用
             self.manager.set_message_bus_for_module(module_id)
             
+            # 设置模块管理器引用
+            if hasattr(wechat, 'set_manager'):
+                wechat.set_manager(self.manager)
+            
             # 存储引用
             self.wechat_modules[bot_name] = wechat
             

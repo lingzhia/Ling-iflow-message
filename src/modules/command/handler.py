@@ -20,13 +20,15 @@ class CommandHandler:
     解析和执行用户命令，如 /new、/status、/sessions 等。
     """
     
-    def __init__(self, message_bus: Optional["MessageBus"] = None):
+    def __init__(self, message_bus: Optional["MessageBus"] = None, manager: Optional[Any] = None):
         """初始化命令处理器
         
         Args:
             message_bus: 消息总线实例
+            manager: 模块管理器实例
         """
         self.bus = message_bus
+        self.manager = manager
         self._commands = {}
         self._register_builtin_commands()
     
@@ -37,6 +39,14 @@ class CommandHandler:
             bus: 消息总线实例
         """
         self.bus = bus
+    
+    def set_manager(self, manager: Any) -> None:
+        """设置模块管理器
+        
+        Args:
+            manager: 模块管理器实例
+        """
+        self.manager = manager
     
     def _register_builtin_commands(self) -> None:
         """注册内置命令"""
@@ -132,21 +142,126 @@ class CommandHandler:
 - `/lscmd`：列出所有可用命令"""
     
     async def _cmd_status(self, args: str, chat_id: str) -> str:
-        """状态命令"""
+        """状态命令 - 查看所有模块状态"""
         if not self.bus:
             return "❌ 消息总线未初始化"
         
-        # 查找 iflow 模块
-        status_parts = []
+        status_lines = ["**服务状态** 📊\n"]
         
-        for module_id, module in self.bus.modules.items():
-            if module_id.startswith("iflow_") and hasattr(module, 'get_status_message'):
-                status_parts.append(module.get_status_message())
+        # 获取所有模块状态
+        if self.manager:
+            all_status = self.manager.get_all_status()
+            
+            if not all_status:
+                status_lines.append("❌ 没有可用的模块")
+                return "\n".join(status_lines)
+            
+            # 按模块类型分组
+            iflow_modules = []
+            wechat_modules = []
+            simulator_modules = []
+            other_modules = []
+            
+            for module_id, status in all_status.items():
+                if module_id.startswith("iflow_"):
+                    iflow_modules.append((module_id, status))
+                elif module_id.startswith("wechat_"):
+                    wechat_modules.append((module_id, status))
+                elif module_id.startswith("simulator_"):
+                    simulator_modules.append((module_id, status))
+                else:
+                    other_modules.append((module_id, status))
+            
+            # 显示 IFlow 模块状态
+            if iflow_modules:
+                status_lines.append("**IFlow 模块** 🤖")
+                for module_id, status in iflow_modules:
+                    running_icon = "✅" if status['running'] else "❌"
+                    healthy_icon = "✅" if status['healthy'] else "❌"
+                    
+                    # 获取 IFlow 专用状态
+                    iflow_status = self.manager.get_iflow_status(module_id)
+                    state_info = ""
+                    if iflow_status:
+                        state = iflow_status.get('state', 'unknown')
+                        if state == 'generating':
+                            state_info = f" [⏳ 生成中 {iflow_status.get('generating_duration', 0)}s]"
+                        elif state == 'idle':
+                            state_info = " [💤 空闲]"
+                    
+                    status_lines.append(f"- {running_icon} {module_id}")
+                    status_lines.append(f"  健康状态: {healthy_icon}{state_info}")
+                    status_lines.append(f"  启动时间: {status.get('started_at', 'N/A')}")
+                    
+                    # 获取 IFlow 模块的会话信息
+                    module = self.bus.modules.get(module_id)
+                    if module and hasattr(module, 'session_manager'):
+                        session_info = module.session_manager.get_current_session_info()
+                        if session_info['has_session']:
+                            session_id = session_info['session_id']
+                            status_lines.append(f"  当前会话: `{session_id[:8]}...`")
+                    status_lines.append("")
+            
+            # 显示企业微信模块状态
+            if wechat_modules:
+                status_lines.append("**企业微信渠道** 💬")
+                for module_id, status in wechat_modules:
+                    running_icon = "✅" if status['running'] else "❌"
+                    healthy_icon = "✅" if status['healthy'] else "❌"
+                    
+                    status_lines.append(f"- {running_icon} {module_id}")
+                    status_lines.append(f"  健康状态: {healthy_icon}")
+                    
+                    # 获取企业微信模块的详细信息
+                    module = self.bus.modules.get(module_id)
+                    if module and hasattr(module, 'get_status'):
+                        module_status = await module.get_status()
+                        status_lines.append(f"  Corp ID: {module_status.get('corp_id', 'N/A')}")
+                        status_lines.append(f"  Agent ID: {module_status.get('agent_id', 'N/A')}")
+                        status_lines.append(f"  回调端口: {module_status.get('callback_port', 'N/A')}")
+                    status_lines.append("")
+            
+            # 显示模拟器模块状态
+            if simulator_modules:
+                status_lines.append("**模拟器渠道** 🔧")
+                for module_id, status in simulator_modules:
+                    running_icon = "✅" if status['running'] else "❌"
+                    healthy_icon = "✅" if status['healthy'] else "❌"
+                    
+                    status_lines.append(f"- {running_icon} {module_id}")
+                    status_lines.append(f"  健康状态: {healthy_icon}")
+                    
+                    # 获取模拟器模块的详细信息
+                    module = self.bus.modules.get(module_id)
+                    if module and hasattr(module, 'get_status'):
+                        module_status = await module.get_status()
+                        status_lines.append(f"  监听地址: {module_status.get('host', 'N/A')}:{module_status.get('port', 'N/A')}")
+                        status_lines.append(f"  连接数: {module_status.get('connections', 0)}")
+                    status_lines.append("")
+            
+            # 显示其他模块
+            if other_modules:
+                status_lines.append("**其他模块** 📦")
+                for module_id, status in other_modules:
+                    running_icon = "✅" if status['running'] else "❌"
+                    healthy_icon = "✅" if status['healthy'] else "❌"
+                    
+                    status_lines.append(f"- {running_icon} {module_id}")
+                    status_lines.append(f"  健康状态: {healthy_icon}")
+                status_lines.append("")
         
-        if not status_parts:
-            return "❌ 没有可用的 iflow 模块"
+        else:
+            # 如果没有 manager，使用旧的方式查询 IFlow 模块状态
+            for module_id, module in self.bus.modules.items():
+                if module_id.startswith("iflow_") and hasattr(module, 'get_status_message'):
+                    status_parts.append(module.get_status_message())
+            
+            if not status_parts:
+                status_lines.append("❌ 没有可用的 iflow 模块")
+            else:
+                status_lines.append("\n\n".join(status_parts))
         
-        return "\n\n".join(status_parts)
+        return "\n".join(status_lines)
     
     async def _cmd_new(self, args: str, chat_id: str) -> str:
         """新建会话命令"""

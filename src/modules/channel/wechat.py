@@ -131,6 +131,15 @@ class WeChatChannel(BaseModule):
         # 同时设置给 CommandHandler
         self.command_handler.set_message_bus(bus)
     
+    def set_manager(self, manager) -> None:
+        """设置模块管理器
+        
+        Args:
+            manager: 模块管理器实例
+        """
+        # 设置给 CommandHandler
+        self.command_handler.set_manager(manager)
+    
     async def _on_start(self) -> None:
         """启动时的钩子方法"""
         logger.info(f"[{self.module_id}] 启动企业微信通道")
