@@ -182,7 +182,37 @@ def stop(
     if group == "all":
         # 停止所有进程
         print_info("停止所有组...")
-        subprocess.run("pkill -9 -f 'src.bot'", shell=True)
+        # 先尝试正常停止（SIGTERM）
+        result = subprocess.run(
+            "ps aux | grep 'src.bot' | grep -v grep | awk '{print $2}'",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0 and result.stdout.strip():
+            pids = result.stdout.strip().split('\n')
+            for pid in pids:
+                subprocess.run(f"kill -TERM {pid}", shell=True)
+                print_info(f"发送停止信号到进程: {pid}")
+            
+            # 等待进程正常退出
+            import time
+            time.sleep(3)
+            
+            # 检查是否还有进程在运行，如果有则强制停止
+            result = subprocess.run(
+                "ps aux | grep 'src.bot' | grep -v grep | awk '{print $2}'",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                pids = result.stdout.strip().split('\n')
+                for pid in pids:
+                    subprocess.run(f"kill -9 {pid}", shell=True)
+                    print_warning(f"强制停止进程: {pid}")
     else:
         # 停止指定组的进程
         print_info(f"停止组: {group}...")
@@ -197,8 +227,26 @@ def stop(
         if result.returncode == 0 and result.stdout.strip():
             pids = result.stdout.strip().split('\n')
             for pid in pids:
-                subprocess.run(f"kill -9 {pid}", shell=True)
-                print_success(f"已停止进程: {pid}")
+                subprocess.run(f"kill -TERM {pid}", shell=True)
+                print_info(f"发送停止信号到进程: {pid}")
+            
+            # 等待进程正常退出
+            import time
+            time.sleep(3)
+            
+            # 检查是否还有进程在运行，如果有则强制停止
+            result = subprocess.run(
+                f"ps aux | grep 'src.bot.*--group {group}' | grep -v grep | awk '{{print $2}}'",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                pids = result.stdout.strip().split('\n')
+                for pid in pids:
+                    subprocess.run(f"kill -9 {pid}", shell=True)
+                    print_warning(f"强制停止进程: {pid}")
         else:
             print_warning(f"未找到运行中的 {group} 组进程")
 
