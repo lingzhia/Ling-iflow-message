@@ -158,6 +158,7 @@ class CommandHandler:
 - `/snapshot [channel_name]`：查看 tmux 界面快照
 - `/channel list`：列出所有渠道
 - `/channel [status|start|stop|restart] [channel_name]`：渠道管理
+- `/tmux [list|create|kill]`：tmux 会话管理
 - `/help`：显示此帮助
 - `/lscmd`：列出所有可用命令
 
@@ -167,7 +168,7 @@ class CommandHandler:
 
 **iFlow 命令支持：**
 - 未知的斜杠命令会自动透传给 iflow 处理
-- 例如：`/run`、`/config`、`/exit` 等会直接传递给 iflow"""
+- 例如：`/run`、`/config`、`/exit`、`/clear` 等会直接传递给 iflow"""
     
     async def _cmd_status(self, args: str, chat_id: str) -> str:
         """状态命令 - 查看所有已启动模块的状态"""
