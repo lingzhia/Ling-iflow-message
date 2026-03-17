@@ -156,18 +156,19 @@ def get_all_tmux_sessions(config_path: str) -> list:
 def start(
     config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径"),
     all_channels: bool = typer.Option(False, "--all", "-a", help="启动所有渠道"),
-    channel: Optional[str] = typer.Option(None, "--channel", help="启动的特定渠道"),
+    channel: Optional[str] = typer.Option(None, "--channel", help="启动的特定渠道（使用 ls 列出所有渠道）"),
     foreground: bool = typer.Option(False, "--foreground", "-f", help="前台运行（默认后台运行）")
 ):
     """启动服务
 
-    默认后台运行，使用 -f 前台运行
+    默认后台启动第一个启用的渠道，使用 -a 启动所有渠道
 
     示例：
-      ./manage.py start              后台启动默认渠道
+      ./manage.py start              后台启动默认渠道（第一个启用的渠道）
       ./manage.py start -a           后台启动所有渠道
       ./manage.py start -f           前台启动默认渠道
-      ./manage.py start -c wechat_bot1  启动指定渠道
+      ./manage.py start --channel ls 列出所有可用渠道
+      ./manage.py start --channel wechat_bot1  启动指定渠道
     """
     print_header("启动服务")
 
@@ -175,26 +176,42 @@ def start(
     if channel == "ls":
         available_channels = get_available_channels(config)
         config_data = load_config(config)
-        
-        print_info("可用渠道:")
+        channel_info = get_channel_info(config)
+
+        print_info("配置文件中的所有渠道:")
         print()
-        
+        print(f"  {'渠道名':<20} {'类型':<10} {'状态':<10} {'tmux会话':<25}")
+        print(f"  {'-'*65}")
+
+        # 显示企业微信渠道
         if config_data.get('bots'):
-            print_info("企业微信渠道:")
             for bot in config_data['bots']:
-                if bot.get('enabled', False):
-                    tmux_session = f"{bot['name']}+iflow"
-                    print(f"  {bot['name']:<20} - tmux: {tmux_session}")
+                channel_name = bot['name']
+                enabled = bot.get('enabled', False)
+                tmux_session = f"{bot['name']}+iflow"
+                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}" if enabled else f"{COLOR_RED}未启用{COLOR_RESET}"
+                type_icon = "📱企业微信"
+                print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
 
+        # 显示模拟器渠道
         if config_data.get('simulator_channels'):
-            print_info("模拟器渠道:")
             for sim in config_data['simulator_channels']:
-                if sim.get('enabled', False):
-                    tmux_session = f"{sim['name']}+iflow"
-                    print(f"  {sim['name']:<20} - tmux: {tmux_session}")
+                channel_name = sim['name']
+                enabled = sim.get('enabled', False)
+                tmux_session = f"{sim['name']}+iflow"
+                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}" if enabled else f"{COLOR_RED}未启用{COLOR_RESET}"
+                type_icon = "🔧模拟器"
+                print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
 
+        # 显示默认渠道
+        default_channel = get_default_channel(config)
         print()
-        print_info("使用示例: ./manage.py start -c wechat_bot1")
+        print_info(f"默认渠道: {default_channel}（第一个启用的渠道）")
+        print()
+        print_info("使用示例:")
+        print("  ./manage.py start                      # 启动默认渠道")
+        print(f"  ./manage.py start --channel {default_channel}  # 启动默认渠道")
+        print("  ./manage.py start -a                   # 启动所有渠道")
         return
 
     # 检查配置文件
@@ -207,8 +224,9 @@ def start(
     # 优先级：all_channels > channel > 默认渠道
     if all_channels and channel:
         print_error("--all 和 --channel 参数互斥")
+        print_info("使用 --channel ls 查看所有可用渠道")
         raise typer.Exit(1)
-    
+
     # 确定要启动的渠道
     if all_channels:
         # 启动所有渠道（不指定 channel 参数）
@@ -217,16 +235,25 @@ def start(
         print_info(f"启动: 所有渠道")
         cmd_args = [config]
     elif channel:
+        # 验证渠道名
+        available_channels = get_available_channels(config)
+        if channel not in available_channels:
+            print_error(f"渠道不存在: {channel}")
+            print_info(f"可用渠道: {', '.join(available_channels)}")
+            print_info("使用 --channel ls 查看所有可用渠道")
+            raise typer.Exit(1)
+
         # 启动指定渠道
         print_info(f"配置文件: {config}")
         print_info(f"运行模式: {'前台' if foreground else '后台'}")
         print_info(f"启动渠道: {channel}")
         cmd_args = [config, "--channel", channel]
     else:
-        # 使用默认渠道
+        # 使用默认渠道（第一个启用的渠道）
         default_channel = get_default_channel(config)
         print_info(f"配置文件: {config}")
         print_info(f"运行模式: {'前台' if foreground else '后台'}")
+        print_success(f"默认渠道: {default_channel}（第一个启用的渠道）")
         print_info(f"启动渠道: {default_channel}")
         cmd_args = [config, "--channel", default_channel]
 
@@ -257,7 +284,7 @@ def start(
 def stop(
     config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径"),
     all_channels: bool = typer.Option(False, "--all", "-a", help="停止所有渠道"),
-    channel: Optional[str] = typer.Option(None, "--channel", help="停止的特定渠道")
+    channel: Optional[str] = typer.Option(None, "--channel", help="停止的特定渠道（使用 ls 列出所有渠道）")
 ):
     """停止服务
 
@@ -266,15 +293,17 @@ def stop(
     示例：
       ./manage.py stop              停止默认渠道
       ./manage.py stop -a           停止所有渠道
-      ./manage.py stop -c wechat_bot1  停止指定渠道
+      ./manage.py stop --channel ls 列出所有可用渠道
+      ./manage.py stop --channel wechat_bot1  停止指定渠道
     """
     print_header("停止服务")
 
     # 处理渠道参数
     if all_channels and channel:
         print_error("--all 和 --channel 参数互斥")
+        print_info("使用 --channel ls 查看所有可用渠道")
         raise typer.Exit(1)
-    
+
     # 确定要停止的渠道
     if all_channels:
         target_channel = "all"
@@ -288,32 +317,44 @@ def stop(
     if target_channel == "ls":
         available_channels = get_available_channels(config)
         config_data = load_config(config)
+        channel_info = get_channel_info(config)
 
         print_info("可用渠道:")
         print()
+        print(f"  {'渠道名':<20} {'类型':<10} {'状态':<10} {'tmux会话':<25}")
+        print(f"  {'-'*65}")
 
+        # 显示企业微信渠道
         if config_data.get('bots'):
-            print_info("企业微信渠道:")
             for bot in config_data['bots']:
-                if bot.get('enabled', False):
-                    tmux_session = f"{bot['name']}+iflow"
-                    print(f"  {bot['name']:<20} - tmux: {tmux_session}")
+                channel_name = bot['name']
+                enabled = bot.get('enabled', False)
+                tmux_session = f"{bot['name']}+iflow"
+                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}" if enabled else f"{COLOR_RED}未启用{COLOR_RESET}"
+                type_icon = "📱企业微信"
+                print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
 
+        # 显示模拟器渠道
         if config_data.get('simulator_channels'):
-            print_info("模拟器渠道:")
             for sim in config_data['simulator_channels']:
-                if sim.get('enabled', False):
-                    tmux_session = f"{sim['name']}+iflow"
-                    print(f"  {sim['name']:<20} - tmux: {tmux_session}")
-        
+                channel_name = sim['name']
+                enabled = sim.get('enabled', False)
+                tmux_session = f"{sim['name']}+iflow"
+                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}" if enabled else f"{COLOR_RED}未启用{COLOR_RESET}"
+                type_icon = "🔧模拟器"
+                print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+
         print()
-        print_info("使用示例: ./manage.py stop -c wechat_bot1")
+        print_info("使用示例:")
+        print("  ./manage.py stop                      # 停止默认渠道")
+        print(f"  ./manage.py stop --channel {get_default_channel(config)}  # 停止默认渠道")
+        print("  ./manage.py stop -a                   # 停止所有渠道")
         return
 
     # 验证渠道名
     available_channels = get_available_channels(config)
     if target_channel != "all" and target_channel not in available_channels:
-        print_error(f"无效的渠道名: {target_channel}")
+        print_error(f"渠道不存在: {target_channel}")
         print_info(f"可用渠道: all, {', '.join(available_channels)}")
         print_info("使用 --channel ls 查看详细信息")
         raise typer.Exit(1)
@@ -329,17 +370,17 @@ def stop(
             capture_output=True,
             text=True
         )
-        
+
         if result.returncode == 0 and result.stdout.strip():
             pids = result.stdout.strip().split('\n')
             for pid in pids:
                 subprocess.run(f"kill -TERM {pid}", shell=True)
                 print_info(f"发送停止信号到进程: {pid}")
-            
+
             # 等待进程正常退出
             import time
             time.sleep(3)
-            
+
             # 检查是否还有进程在运行，如果有则强制停止
             result = subprocess.run(
                 "ps aux | grep 'src.bot' | grep -v grep | awk '{print $2}'",
@@ -347,12 +388,14 @@ def stop(
                 capture_output=True,
                 text=True
             )
-            
+
             if result.returncode == 0 and result.stdout.strip():
                 pids = result.stdout.strip().split('\n')
                 for pid in pids:
                     subprocess.run(f"kill -9 {pid}", shell=True)
                     print_warning(f"强制停止进程: {pid}")
+        else:
+            print_warning("没有运行中的服务进程")
     else:
         # 停止指定渠道的进程
         print_info(f"停止渠道: {target_channel}...")
@@ -363,17 +406,17 @@ def stop(
             capture_output=True,
             text=True
         )
-        
+
         if result.returncode == 0 and result.stdout.strip():
             pids = result.stdout.strip().split('\n')
             for pid in pids:
                 subprocess.run(f"kill -TERM {pid}", shell=True)
                 print_info(f"发送停止信号到进程: {pid}")
-            
+
             # 等待进程正常退出
             import time
             time.sleep(3)
-            
+
             # 检查是否还有进程在运行，如果有则强制停止
             result = subprocess.run(
                 f"ps aux | grep 'src.bot.*--channel {target_channel}' | grep -v grep | awk '{{print $2}}'",
@@ -381,7 +424,7 @@ def stop(
                 capture_output=True,
                 text=True
             )
-            
+
             if result.returncode == 0 and result.stdout.strip():
                 pids = result.stdout.strip().split('\n')
                 for pid in pids:
@@ -394,9 +437,12 @@ def stop(
     if target_channel == "all":
         # 停止所有tmux会话
         tmux_sessions = get_all_tmux_sessions(config)
-        print_info(f"停止所有 tmux 会话: {', '.join(tmux_sessions)}")
-        for session in tmux_sessions:
-            subprocess.run(f"tmux kill-session -t {session} 2>/dev/null", shell=True)
+        if tmux_sessions:
+            print_info(f"停止所有 tmux 会话: {', '.join(tmux_sessions)}")
+            for session in tmux_sessions:
+                subprocess.run(f"tmux kill-session -t {session} 2>/dev/null", shell=True)
+        else:
+            print_warning("没有配置的 tmux 会话")
     else:
         # 停止指定渠道的tmux会话
         tmux_session = get_tmux_session_by_channel(target_channel, config)
@@ -415,26 +461,28 @@ def stop(
 def restart(
     config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径"),
     all_channels: bool = typer.Option(False, "--all", "-a", help="重启所有渠道"),
-    channel: Optional[str] = typer.Option(None, "--channel", help="重启的特定渠道"),
+    channel: Optional[str] = typer.Option(None, "--channel", help="重启的特定渠道（使用 ls 列出所有渠道）"),
     foreground: bool = typer.Option(False, "--foreground", "-f", help="前台运行（默认后台运行）")
 ):
     """重启服务
 
-    默认后台运行，使用 -f 前台运行
+    默认后台重启默认渠道，使用 -f 前台运行
 
     示例：
       ./manage.py restart             后台重启默认渠道
       ./manage.py restart -a          后台重启所有渠道
       ./manage.py restart -f          前台重启默认渠道
-      ./manage.py restart -c wechat_bot1  重启指定渠道
+      ./manage.py restart --channel ls 列出所有可用渠道
+      ./manage.py restart --channel wechat_bot1  重启指定渠道
     """
     print_header("重启服务")
 
     # 处理渠道参数
     if all_channels and channel:
         print_error("--all 和 --channel 参数互斥")
+        print_info("使用 --channel ls 查看所有可用渠道")
         raise typer.Exit(1)
-    
+
     # 确定要重启的渠道
     if all_channels:
         target_channel = "all"
@@ -443,37 +491,49 @@ def restart(
     else:
         # 使用默认渠道
         target_channel = get_default_channel(config)
-    
+
     # 特殊处理：列出所有渠道
     if target_channel == "ls":
         available_channels = get_available_channels(config)
         config_data = load_config(config)
-        
+        channel_info = get_channel_info(config)
+
         print_info("可用渠道:")
         print()
+        print(f"  {'渠道名':<20} {'类型':<10} {'状态':<10} {'tmux会话':<25}")
+        print(f"  {'-'*65}")
 
+        # 显示企业微信渠道
         if config_data.get('bots'):
-            print_info("企业微信渠道:")
             for bot in config_data['bots']:
-                if bot.get('enabled', False):
-                    tmux_session = f"{bot['name']}+iflow"
-                    print(f"  {bot['name']:<20} - tmux: {tmux_session}")
+                channel_name = bot['name']
+                enabled = bot.get('enabled', False)
+                tmux_session = f"{bot['name']}+iflow"
+                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}" if enabled else f"{COLOR_RED}未启用{COLOR_RESET}"
+                type_icon = "📱企业微信"
+                print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
 
+        # 显示模拟器渠道
         if config_data.get('simulator_channels'):
-            print_info("模拟器渠道:")
             for sim in config_data['simulator_channels']:
-                if sim.get('enabled', False):
-                    tmux_session = f"{sim['name']}+iflow"
-                    print(f"  {sim['name']:<20} - tmux: {tmux_session}")
+                channel_name = sim['name']
+                enabled = sim.get('enabled', False)
+                tmux_session = f"{sim['name']}+iflow"
+                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}" if enabled else f"{COLOR_RED}未启用{COLOR_RESET}"
+                type_icon = "🔧模拟器"
+                print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
 
         print()
-        print_info("使用示例: ./manage.py restart -c wechat_bot1")
+        print_info("使用示例:")
+        print("  ./manage.py restart                      # 重启默认渠道")
+        print(f"  ./manage.py restart --channel {get_default_channel(config)}  # 重启默认渠道")
+        print("  ./manage.py restart -a                   # 重启所有渠道")
         return
 
     # 验证渠道名
     available_channels = get_available_channels(config)
     if target_channel != "all" and target_channel not in available_channels:
-        print_error(f"无效的渠道名: {target_channel}")
+        print_error(f"渠道不存在: {target_channel}")
         print_info(f"可用渠道: all, {', '.join(available_channels)}")
         print_info("使用 --channel ls 查看详细信息")
         raise typer.Exit(1)
@@ -482,16 +542,16 @@ def restart(
 
     # 停止服务
     print_info("正在停止服务...")
-    
+
     # 使用 Unix Socket 控制服务停止渠道
     if target_channel != "all":
         stop_command = f"stop {target_channel}"
         result = send_control_command(stop_command)
-        
+
         if not result.get("success"):
             # 如果控制服务失败，回退到直接停止
             print_warning(f"控制服务停止失败，使用直接停止: {result.get('error')}")
-            
+
             # 直接停止进程
             result = subprocess.run(
                 f"ps aux | grep 'src.bot.*--channel {target_channel}' | grep -v grep | awk '{{print $2}}'",
@@ -503,7 +563,7 @@ def restart(
                 pids = result.stdout.strip().split('\n')
                 for pid in pids:
                     subprocess.run(f"kill -9 {pid}", shell=True)
-            
+
             # 停止 tmux 会话
             tmux_session = get_tmux_session_by_channel(target_channel, config)
             if tmux_session:
@@ -516,19 +576,20 @@ def restart(
         for channel_name in channels:
             stop_command = f"stop {channel_name}"
             send_control_command(stop_command)
-        
+
         # 停止所有 tmux 会话
         tmux_sessions = get_all_tmux_sessions(config)
-        print_info(f"停止所有 tmux 会话: {', '.join(tmux_sessions)}")
-        for session in tmux_sessions:
-            subprocess.run(f"tmux kill-session -t {session} 2>/dev/null", shell=True)
+        if tmux_sessions:
+            print_info(f"停止所有 tmux 会话: {', '.join(tmux_sessions)}")
+            for session in tmux_sessions:
+                subprocess.run(f"tmux kill-session -t {session} 2>/dev/null", shell=True)
 
     import time
     time.sleep(2)
 
     # 启动服务
     print_info("正在启动服务...")
-    
+
     # 构建 start 命令
     if target_channel == "all":
         cmd = ["python3", "-m", "src.bot", config]
@@ -557,14 +618,18 @@ def restart(
 
 
 @app.command()
-def status():
+def status(config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径")):
     """查看服务状态
 
-    检查进程、端口和 tmux 会话状态
+    检查已启动渠道的进程、端口和 tmux 会话状态
 
     示例：./manage.py status
     """
     print_header("服务状态")
+
+    # 加载配置
+    config_data = load_config(config)
+    channel_info = get_channel_info(config)
 
     # 检查服务是否运行
     result = subprocess.run(
@@ -581,45 +646,143 @@ def status():
         for line in result.stdout.strip().split('\n'):
             print(f"  {line}")
 
-        # 检查端口占用
-        ports = [8787, 8788]
-        print()
-        print("端口监听:")
-        for port in ports:
-            result_port = subprocess.run(
-                f"netstat -tlnp 2>/dev/null | grep {port} || ss -tlnp | grep {port}",
-                shell=True,
-                capture_output=True,
-                text=True
-            )
-            if result_port.returncode == 0:
-                print(f"  {COLOR_GREEN}✓{COLOR_RESET} 端口 {port}: 监听中")
-            else:
-                print(f"  {COLOR_YELLOW}✗{COLOR_RESET} 端口 {port}: 未监听")
-
-        # 检查 tmux 会话
-        print()
-        print("Tmux 会话:")
-        # 使用 get_all_tmux_sessions() 获取所有会话名
-        sessions = get_all_tmux_sessions("config.json")
-        if not sessions:
-            print(f"  {COLOR_YELLOW}✗{COLOR_RESET} 没有配置的 tmux 会话")
+        # 尝试通过控制命令获取实际的渠道状态
+        running_channels = []
+        control_result = send_control_command('status')
+        
+        if control_result.get('success') and 'result' in control_result:
+            # 从控制命令结果中提取已启动的渠道
+            channels_status = control_result['result']
+            for channel_name, channel_data in channels_status.items():
+                if isinstance(channel_data, dict) and 'modules' in channel_data:
+                    # 检查渠道的模块是否都在运行
+                    modules = channel_data['modules']
+                    all_running = all(
+                        isinstance(m, dict) and m.get('running', False)
+                        for m in modules.values()
+                    )
+                    if all_running:
+                        running_channels.append(channel_name)
         else:
-            for session in sessions:
-                result_tmux = subprocess.run(
-                    f"tmux has-session -t {session} 2>/dev/null",
-                    shell=True,
-                    capture_output=True
-                )
-                if result_tmux.returncode == 0:
-                    print(f"  {COLOR_GREEN}✓{COLOR_RESET} 会话 {session}: 存在")
-                else:
-                    print(f"  {COLOR_YELLOW}✗{COLOR_RESET} 会话 {session}: 不存在")
+            # 回退到解析ps命令获取渠道
+            for line in result.stdout.strip().split('\n'):
+                if '--channel' in line:
+                    parts = line.split('--channel')
+                    if len(parts) > 1:
+                        channel_part = parts[1].strip().split()[0]
+                        running_channels.append(channel_part)
+
+        print()
+        print_success(f"已启动渠道: {len(running_channels)} 个")
+        if running_channels:
+            print(f"  {', '.join(running_channels)}")
+
+        # 检查已启动渠道的端口占用
+        if running_channels:
+            print()
+            print("端口监听:")
+            # 从配置中获取已启动渠道的端口
+            for channel_name in running_channels:
+                if channel_name in channel_info:
+                    channel_config = channel_info[channel_name]
+                    if channel_config['type'] == 'wechat':
+                        # 企业微信渠道查找端口
+                        if config_data.get('bots'):
+                            for bot in config_data['bots']:
+                                if bot['name'] == channel_name:
+                                    port = bot.get('callback_port', 8788)
+                                    result_port = subprocess.run(
+                                        f"netstat -tlnp 2>/dev/null | grep {port} || ss -tlnp | grep {port}",
+                                        shell=True,
+                                        capture_output=True,
+                                        text=True
+                                    )
+                                    if result_port.returncode == 0:
+                                        print(f"  {COLOR_GREEN}✓{COLOR_RESET} 端口 {port} ({channel_name}): 监听中")
+                                    else:
+                                        print(f"  {COLOR_YELLOW}✗{COLOR_RESET} 端口 {port} ({channel_name}): 未监听")
+                                    break
+
+        # 检查已启动渠道的 tmux 会话
+        if running_channels:
+            print()
+            print("Tmux 会话:")
+            for channel_name in running_channels:
+                tmux_session = get_tmux_session_by_channel(channel_name, config)
+                if tmux_session:
+                    result_tmux = subprocess.run(
+                        f"tmux has-session -t {tmux_session} 2>/dev/null",
+                        shell=True,
+                        capture_output=True
+                    )
+                    if result_tmux.returncode == 0:
+                        print(f"  {COLOR_GREEN}✓{COLOR_RESET} 会话 {tmux_session} ({channel_name}): 存在")
+                    else:
+                        print(f"  {COLOR_YELLOW}✗{COLOR_RESET} 会话 {tmux_session} ({channel_name}): 不存在")
 
     else:
         print_error("服务未运行")
         print()
         print_info("启动服务: ./manage.py start")
+        return
+
+    # 显示可用渠道信息
+    print()
+    print("=" * 70)
+    print(f"{COLOR_CYAN}可用渠道{COLOR_RESET}")
+    print("=" * 70)
+
+    all_channels = get_available_channels(config)
+    print()
+    print(f"  {'渠道名':<20} {'类型':<10} {'状态':<10} {'tmux会话':<25}")
+    print(f"  {'-'*65}")
+
+    # 显示企业微信渠道
+    if config_data.get('bots'):
+        for bot in config_data['bots']:
+            channel_name = bot['name']
+            enabled = bot.get('enabled', False)
+            tmux_session = f"{bot['name']}+iflow"
+            is_running = channel_name in running_channels
+
+            if is_running:
+                status_icon = f"{COLOR_GREEN}已启动{COLOR_RESET}"
+            elif enabled:
+                status_icon = f"{COLOR_YELLOW}未启动{COLOR_RESET}"
+            else:
+                status_icon = f"{COLOR_RED}未启用{COLOR_RESET}"
+
+            type_icon = "📱企业微信"
+            print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+
+    # 显示模拟器渠道
+    if config_data.get('simulator_channels'):
+        for sim in config_data['simulator_channels']:
+            channel_name = sim['name']
+            enabled = sim.get('enabled', False)
+            tmux_session = f"{sim['name']}+iflow"
+            is_running = channel_name in running_channels
+
+            if is_running:
+                status_icon = f"{COLOR_GREEN}已启动{COLOR_RESET}"
+            elif enabled:
+                status_icon = f"{COLOR_YELLOW}未启动{COLOR_RESET}"
+            else:
+                status_icon = f"{COLOR_RED}未启用{COLOR_RESET}"
+
+            type_icon = "🔧模拟器"
+            print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+
+    # 显示默认渠道
+    default_channel = get_default_channel(config)
+    print()
+    print_info(f"默认渠道: {default_channel}（第一个启用的渠道）")
+    print()
+    print_info("操作提示:")
+    print("  ./manage.py start                      # 启动默认渠道")
+    print("  ./manage.py start --channel ls         # 查看所有可用渠道")
+    print("  ./manage.py start --channel <渠道名>    # 启动指定渠道")
+    print("  ./manage.py start -a                   # 启动所有渠道")
 
 
 @app.command()
@@ -734,95 +897,261 @@ channel_app = typer.Typer(help="渠道管理命令")
 
 
 @channel_app.command("list")
-def list_channels():
-    """列出所有渠道
+def list_channels(config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径")):
+    """列出配置文件中的所有渠道（信息库）
 
     示例：./manage.py channel list
     """
-    print_header("渠道列表")
-    
-    result = send_control_command("list")
-    
-    if result.get("success"):
-        channels = result.get("result", {})
-        
-        if not channels:
-            print_warning("没有可用的渠道")
-            return
-        
-        for channel_name, channel_info in channels.items():
-            channel_type = channel_info.get("type", "unknown")
-            enabled = channel_info.get("enabled", False)
-            tmux_session = channel_info.get("tmux_session", "N/A")
-            
-            enabled_icon = f"{COLOR_GREEN}✓{COLOR_RESET}" if enabled else f"{COLOR_RED}✗{COLOR_RESET}"
-            
-            print(f"{COLOR_CYAN}{channel_name}{COLOR_RESET} [{channel_type}] {enabled_icon}")
-            print(f"  tmux会话: {tmux_session}")
-            print()
-    else:
-        print_error(result.get("error", "未知错误"))
+    print_header("渠道列表（配置文件中的所有渠道）")
+
+    # 加载配置
+    config_data = load_config(config)
+    channel_info = get_channel_info(config)
+
+    if not config_data:
+        print_error("无法加载配置文件")
+        return
+
+    print()
+    print(f"  {'渠道名':<20} {'类型':<10} {'状态':<10} {'tmux会话':<25}")
+    print(f"  {'-'*65}")
+
+    # 显示企业微信渠道
+    if config_data.get('bots'):
+        for bot in config_data['bots']:
+            channel_name = bot['name']
+            enabled = bot.get('enabled', False)
+            tmux_session = f"{bot['name']}+iflow"
+
+            if enabled:
+                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}"
+            else:
+                status_icon = f"{COLOR_RED}未启用{COLOR_RESET}"
+
+            type_icon = "📱企业微信"
+            print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+
+    # 显示模拟器渠道
+    if config_data.get('simulator_channels'):
+        for sim in config_data['simulator_channels']:
+            channel_name = sim['name']
+            enabled = sim.get('enabled', False)
+            tmux_session = f"{sim['name']}+iflow"
+
+            if enabled:
+                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}"
+            else:
+                status_icon = f"{COLOR_RED}未启用{COLOR_RESET}"
+
+            type_icon = "🔧模拟器"
+            print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+
+    # 显示默认渠道
+    default_channel = get_default_channel(config)
+    print()
+    print_success(f"默认渠道: {default_channel}（第一个启用的渠道）")
+    print()
+    print_info("操作提示:")
+    print("  ./manage.py start                      # 启动默认渠道")
+    print("  ./manage.py channel status             # 查看已启动渠道的状态")
+    print("  ./manage.py channel start <渠道名>      # 启动指定渠道")
+    print("  ./manage.py channel stop <渠道名>       # 停止指定渠道")
+    print("  ./manage.py channel restart <渠道名>    # 重启指定渠道")
 
 
 @channel_app.command()
-def status(channel_name: str = typer.Argument(None, help="渠道名，不指定则显示所有渠道")):
+def status(
+    channel_name: str = typer.Argument(None, help="渠道名，不指定则显示所有已启动渠道的状态"),
+    config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径")
+):
     """查看渠道状态
 
+    只显示已启动渠道的详细状态
+
     示例：
-      ./manage.py channel status          查看所有渠道状态
+      ./manage.py channel status          查看所有已启动渠道的状态
       ./manage.py channel status wechat_bot1  查看 wechat_bot1 渠道状态
     """
     print_header("渠道状态")
-    
+
+    # 加载配置
+    config_data = load_config(config)
+    channel_info = get_channel_info(config)
+
+    if not config_data:
+        print_error("无法加载配置文件")
+        return
+
+    # 检查服务是否运行
+    result = subprocess.run(
+        "ps aux | grep 'src.bot' | grep -v grep",
+        shell=True,
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        print_warning("服务未运行")
+        print()
+        print_info("启动服务: ./manage.py start")
+        print()
+        print_info("可用渠道:")
+        print(f"  {'渠道名':<20} {'类型':<10} {'状态':<10} {'tmux会话':<25}")
+        print(f"  {'-'*65}")
+
+        # 显示企业微信渠道
+        if config_data.get('bots'):
+            for bot in config_data['bots']:
+                channel_name_temp = bot['name']
+                enabled = bot.get('enabled', False)
+                tmux_session = f"{bot['name']}+iflow"
+
+                if enabled:
+                    status_icon = f"{COLOR_YELLOW}未启动{COLOR_RESET}"
+                else:
+                    status_icon = f"{COLOR_RED}未启用{COLOR_RESET}"
+
+                type_icon = "📱企业微信"
+                print(f"  {channel_name_temp:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+
+        # 显示模拟器渠道
+        if config_data.get('simulator_channels'):
+            for sim in config_data['simulator_channels']:
+                channel_name_temp = sim['name']
+                enabled = sim.get('enabled', False)
+                tmux_session = f"{sim['name']}+iflow"
+
+                if enabled:
+                    status_icon = f"{COLOR_YELLOW}未启动{COLOR_RESET}"
+                else:
+                    status_icon = f"{COLOR_RED}未启用{COLOR_RESET}"
+
+                type_icon = "🔧模拟器"
+                print(f"  {channel_name_temp:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+
+        return
+
+    # 解析进程获取已启动的渠道
+    running_channels = []
+    for line in result.stdout.strip().split('\n'):
+        # 查找 --channel 参数
+        if '--channel' in line:
+            parts = line.split('--channel')
+            if len(parts) > 1:
+                channel_part = parts[1].strip().split()[0]
+                running_channels.append(channel_part)
+
+    if not running_channels:
+        print_warning("没有已启动的渠道")
+        print()
+        print_info("使用以下命令启动渠道:")
+        print("  ./manage.py start                      # 启动默认渠道")
+        print("  ./manage.py start --channel ls         # 查看所有可用渠道")
+        print("  ./manage.py start --channel <渠道名>    # 启动指定渠道")
+        return
+
+    print_success(f"已启动渠道: {len(running_channels)} 个")
+    print()
+
     if channel_name:
-        command = f"status {channel_name}"
-    else:
-        command = "status"
-    
-    result = send_control_command(command)
-    
-    if result.get("success"):
-        if channel_name:
-            # 显示单个渠道的状态
-            channel_result = result.get("result", {})
-            print(f"{COLOR_CYAN}渠道: {channel_name}{COLOR_RESET}")
+        # 显示单个渠道的状态
+        if channel_name not in running_channels:
+            print_error(f"渠道未启动: {channel_name}")
             print()
-            
-            modules = channel_result.get("modules", {})
-            if not modules:
-                print_warning("该渠道没有模块")
-                return
-            
-            for module_id, module_status in modules.items():
-                running = module_status.get("running", False)
-                healthy = module_status.get("healthy", False)
-                
-                running_icon = f"{COLOR_GREEN}✓{COLOR_RESET}" if running else f"{COLOR_RED}✗{COLOR_RESET}"
-                healthy_icon = f"{COLOR_GREEN}✓{COLOR_RESET}" if healthy else f"{COLOR_RED}✗{COLOR_RESET}"
-                
-                print(f"  {running_icon} {module_id}")
-                print(f"    健康状态: {healthy_icon}")
-                print()
-        else:
-            # 显示所有渠道的状态
-            all_channels = result.get("result", {})
-            
-            for channel_name, channel_status in all_channels.items():
-                print(f"{COLOR_CYAN}{channel_name}{COLOR_RESET}")
-                
-                modules = channel_status.get("modules", {})
-                if not modules:
-                    print("  (无模块)")
-                    continue
-                
-                for module_id, module_status in modules.items():
-                    running = module_status.get("running", False)
-                    running_icon = f"{COLOR_GREEN}✓{COLOR_RESET}" if running else f"{COLOR_RED}✗{COLOR_RESET}"
-                    print(f"  {running_icon} {module_id}")
-                
-                print()
+            print_info(f"已启动的渠道: {', '.join(running_channels)}")
+            print_info("使用 ./manage.py channel status 查看所有已启动渠道")
+            return
+
+        print(f"{COLOR_CYAN}渠道: {channel_name}{COLOR_RESET}")
+        print()
+
+        # 获取渠道信息
+        if channel_name in channel_info:
+            channel_config = channel_info[channel_name]
+            type_icon = "📱企业微信" if channel_config['type'] == 'wechat' else "🔧模拟器"
+            print(f"  类型: {type_icon}")
+            print(f"  tmux会话: {channel_config['tmux_session']}")
+
+            # 检查 tmux 会话状态
+            tmux_session = channel_config['tmux_session']
+            result_tmux = subprocess.run(
+                f"tmux has-session -t {tmux_session} 2>/dev/null",
+                shell=True,
+                capture_output=True
+            )
+            if result_tmux.returncode == 0:
+                print(f"  tmux状态: {COLOR_GREEN}存在{COLOR_RESET}")
+            else:
+                print(f"  tmux状态: {COLOR_YELLOW}不存在{COLOR_RESET}")
+
+            # 检查端口状态（仅企业微信）
+            if channel_config['type'] == 'wechat':
+                if config_data.get('bots'):
+                    for bot in config_data['bots']:
+                        if bot['name'] == channel_name:
+                            port = bot.get('callback_port', 8788)
+                            result_port = subprocess.run(
+                                f"netstat -tlnp 2>/dev/null | grep {port} || ss -tlnp | grep {port}",
+                                shell=True,
+                                capture_output=True,
+                                text=True
+                            )
+                            if result_port.returncode == 0:
+                                print(f"  端口 {port}: {COLOR_GREEN}监听中{COLOR_RESET}")
+                            else:
+                                print(f"  端口 {port}: {COLOR_YELLOW}未监听{COLOR_RESET}")
+                            break
+
+        print()
+        print_info("使用控制服务查看详细信息:")
+        print(f"  send_control_command('status {channel_name}')")
+
     else:
-        print_error(result.get("error", "未知错误"))
+        # 显示所有已启动渠道的状态
+        print(f"  {'渠道名':<20} {'类型':<10} {'tmux状态':<10} {'端口状态':<15}")
+        print(f"  {'-'*55}")
+
+        for ch_name in running_channels:
+            if ch_name in channel_info:
+                channel_config = channel_info[ch_name]
+                type_icon = "📱企业微信" if channel_config['type'] == 'wechat' else "🔧模拟器"
+
+                # 检查 tmux 会话状态
+                tmux_session = channel_config['tmux_session']
+                result_tmux = subprocess.run(
+                    f"tmux has-session -t {tmux_session} 2>/dev/null",
+                    shell=True,
+                    capture_output=True
+                )
+                tmux_status = f"{COLOR_GREEN}存在{COLOR_RESET}" if result_tmux.returncode == 0 else f"{COLOR_YELLOW}不存在{COLOR_RESET}"
+
+                # 检查端口状态（仅企业微信）
+                port_status = "N/A"
+                if channel_config['type'] == 'wechat':
+                    if config_data.get('bots'):
+                        for bot in config_data['bots']:
+                            if bot['name'] == ch_name:
+                                port = bot.get('callback_port', 8788)
+                                result_port = subprocess.run(
+                                    f"netstat -tlnp 2>/dev/null | grep {port} || ss -tlnp | grep {port}",
+                                    shell=True,
+                                    capture_output=True,
+                                    text=True
+                                )
+                                if result_port.returncode == 0:
+                                    port_status = f"{COLOR_GREEN}{port}:监听{COLOR_RESET}"
+                                else:
+                                    port_status = f"{COLOR_YELLOW}{port}:未监听{COLOR_RESET}"
+                                break
+
+                print(f"  {ch_name:<20} {type_icon:<10} {tmux_status:<10} {port_status:<15}")
+
+        print()
+        print_info("使用以下命令管理渠道:")
+        print("  ./manage.py channel start <渠道名>      # 启动指定渠道")
+        print("  ./manage.py channel stop <渠道名>       # 停止指定渠道")
+        print("  ./manage.py channel restart <渠道名>    # 重启指定渠道")
+        print("  ./manage.py channel status <渠道名>     # 查看指定渠道的详细状态")
 
 
 @channel_app.command()
