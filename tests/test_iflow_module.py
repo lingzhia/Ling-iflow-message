@@ -18,7 +18,7 @@ async def test_iflow_module_creation():
         module_id="iflow_test",
         tmux_session="iflow_test",
         model="kimi-k2.5",
-        auto_start=False  # 测试模式不启动实际的 iflow
+        auto_restart=False  # 测试模式不启动实际的 iflow
     )
     
     assert iflow.module_id == "iflow_test"
@@ -33,7 +33,7 @@ async def test_iflow_module_attributes():
         module_id="iflow_test",
         tmux_session="iflow_test",
         model="kimi-k2.5",
-        auto_start=False
+        auto_restart=False
     )
     
     # 检查子模块

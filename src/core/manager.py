@@ -1235,12 +1235,46 @@ class ModuleManager:
         """
         module = self.modules.get(module_id)
         if not module:
-            return {'healthy': False}
-
+            return {
+                'healthy': False,
+                'reason': 'module_not_found',
+                'details': {'module_id': module_id}
+            }
+        
+        # 如果模块有 health_check 方法，调用它
         if hasattr(module, 'health_check'):
-            return await module.health_check()
+            try:
+                return await module.health_check()
+            except Exception as e:
+                logger.error(f"[ModuleManager] 健康检查异常: {module_id}, {e}", exc_info=True)
+                return {
+                    'healthy': False,
+                    'reason': 'health_check_exception',
+                    'details': {'error': str(e)}
+                }
         else:
-            return {'healthy': True}
+            # 对于没有实现 health_check 的模块，检查 _running 状态
+            if hasattr(module, 'running'):
+                if module.running:
+                    return {
+                        'healthy': True,
+                        'reason': 'no_health_check_but_running',
+                        'details': {'module_id': module_id}
+                    }
+                else:
+                    return {
+                        'healthy': False,
+                        'reason': 'module_not_running',
+                        'details': {'module_id': module_id}
+                    }
+            
+            # 默认认为不健康（保守策略）
+            logger.warning(f"[ModuleManager] 模块 {module_id} 未实现 health_check，标记为不健康")
+            return {
+                'healthy': False,
+                'reason': 'no_health_check_implementation',
+                'details': {'module_id': module_id}
+            }
 
     async def _auto_recovery(self, module_id: str) -> bool:
         """自动恢复故障模块
@@ -1252,46 +1286,98 @@ class ModuleManager:
             是否恢复成功
         """
         logger.info(f"[ModuleManager] 尝试自动恢复模块: {module_id}")
-
+        
+        # 先停止模块
+        stop_result = await self.stop_module(module_id)
+        if not stop_result.success:
+            logger.error(f"[ModuleManager] 停止模块失败: {module_id}")
+            return False
+        
         # 等待恢复延迟
         await asyncio.sleep(self.health_check_config.recovery_delay)
-
-        try:
-            # 尝试重启模块
-            success = await self.restart_module(module_id)
-
-            if success.success:
-                logger.info(f"[ModuleManager] 模块恢复成功: {module_id}")
-                # 重置失败计数
-                self.health_check_failures[module_id] = 0
-                # 更新状态
-                self.module_states[module_id].healthy = True
-                self.module_states[module_id].error = None
-                return True
-            else:
-                logger.error(f"[ModuleManager] 模块恢复失败: {module_id}")
-                return False
-
-        except Exception as e:
-            logger.error(f"[ModuleManager] 自动恢复失败: {module_id}, {e}")
+        
+        # 重启模块
+        start_result = await self.start_module(module_id)
+        
+        if start_result.success:
+            logger.info(f"[ModuleManager] 模块恢复成功: {module_id}")
+            # 重置失败计数
+            self.health_check_failures[module_id] = 0
+            # 更新状态
+            self.module_states[module_id].healthy = True
+            self.module_states[module_id].error = None
+            # 通知状态变更
+            await self._notify_state_change(module_id, "healthy")
+            return True
+        else:
+            logger.error(f"[ModuleManager] 模块恢复失败: {module_id}")
+            # 增加失败计数
+            self.health_check_failures[module_id] = \
+                self.health_check_failures.get(module_id, 0) + 1
+            
+            # 如果超过最大失败次数的 2 倍，停止监控
+            max_failures = self.health_check_config.max_failures * 2
+            if self.health_check_failures[module_id] >= max_failures:
+                logger.error(
+                    f"[ModuleManager] 模块恢复失败次数过多，停止自动恢复: {module_id} "
+                    f"(失败次数: {self.health_check_failures[module_id]}, 最大: {max_failures})"
+                )
+                self.module_states[module_id].healthy = False
+                self.module_states[module_id].error = "auto_recovery_failed_too_many_times"
+                # 通知状态变更
+                await self._notify_state_change(module_id, "unhealthy")
+            
             return False
 
-    async def _notify_state_change(self, module_id: str, new_state: str) -> None:
+    async def _notify_state_change(
+        self,
+        module_id: str,
+        new_state: str,
+        details: Optional[Dict[str, Any]] = None
+    ) -> None:
         """通知状态变更
 
         Args:
             module_id: 模块 ID
             new_state: 新状态
+            details: 详细信息
         """
-        for callback in self.state_callbacks:
-            try:
-                if asyncio.iscoroutinefunction(callback):
-                    await callback(module_id, new_state)
-                else:
-                    callback(module_id, new_state)
-            except Exception as e:
-                logger.error(f"[ModuleManager] 状态变更回调失败: {e}")
-    
+        details = details or {}
+        
+        logger.info(f"[ModuleManager] 状态变更: {module_id} -> {new_state}")
+        
+        # 记录状态转换
+        from_state = self.module_states[module_id].running
+        self._record_state_transition(
+            module_id,
+            "running" if from_state else "stopped",
+            new_state,
+            reason="health_check",
+            details=details
+        )
+        
+        # 更新状态
+        if new_state == "healthy":
+            self.module_states[module_id].healthy = True
+            self.module_states[module_id].error = None
+        elif new_state == "unhealthy":
+            self.module_states[module_id].healthy = False
+            self.module_states[module_id].error = details.get('reason', 'unknown')
+        
+        # 调用回调函数
+        if self.state_callbacks:
+            logger.debug(f"[ModuleManager] 调用 {len(self.state_callbacks)} 个状态回调")
+            for callback in self.state_callbacks:
+                try:
+                    if asyncio.iscoroutinefunction(callback):
+                        await callback(module_id, new_state, details)
+                    else:
+                        callback(module_id, new_state, details)
+                except Exception as e:
+                    logger.error(f"[ModuleManager] 状态回调失败: {e}", exc_info=True)
+        else:
+            logger.debug(f"[ModuleManager] 没有状态回调函数")
+
     def on_state_change(self, callback: Callable) -> None:
         """注册状态变更回调
         

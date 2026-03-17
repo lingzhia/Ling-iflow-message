@@ -68,6 +68,7 @@ class CommandHandler:
             "/history": self._cmd_history,
             "/metrics": self._cmd_metrics,
             "/channel": self._cmd_channel,
+            "/snapshot": self._cmd_snapshot,
         }
     
     def parse_command(self, content: str) -> Dict[str, Any]:
@@ -153,10 +154,15 @@ class CommandHandler:
 - `/status`：查看服务状态
 - `/history [模块ID]`：查看模块状态历史（最近 10 条）
 - `/metrics [模块ID]`：查看模块性能指标
+- `/snapshot [channel_name]`：查看 tmux 界面快照
 - `/channel list`：列出所有渠道
 - `/channel [status|start|stop|restart] [channel_name]`：渠道管理
 - `/help`：显示此帮助
 - `/lscmd`：列出所有可用命令
+
+**故障排查：**
+- 如果请求没有响应，使用 `/snapshot` 查看 tmux 界面
+- 判断是 iflow 异常了还是 iflow 还在生成中
 
 **iFlow 命令支持：**
 - 未知的斜杠命令会自动透传给 iflow 处理
@@ -367,6 +373,9 @@ class CommandHandler:
 - `/metrics [模块ID]` - 查看模块性能指标
 - `/help` - 显示帮助信息
 - `/lscmd` - 列出所有可用命令
+
+**故障排查：**
+- `/snapshot [channel_name]` - 查看 tmux 界面快照
 
 **渠道管理：**
 - `/channel list` - 列出所有渠道
@@ -614,6 +623,127 @@ class CommandHandler:
         
         else:
             return f"❌ 未知操作: {action}\n\n发送 /channel 查看帮助"
+    
+    async def _cmd_snapshot(self, args: str, chat_id: str) -> str:
+        """查看 tmux 界面快照
+        
+        功能：捕获并返回 tmux 会话的当前界面内容
+        用途：当请求没有响应时，用户可以查看 tmux 中的情况
+              判断是 iflow 异常了还是 iflow 还在生成中
+        
+        使用方法：
+        - /snapshot              # 查看当前渠道的 tmux 界面
+        - /snapshot bot1         # 查看指定渠道的 tmux 界面
+        """
+        if not self.bus:
+            return "❌ 消息总线未初始化"
+        
+        # 解析参数
+        target = args.strip() if args.strip() else None
+        
+        # 确定要查看的目标
+        if target:
+            # 用户指定了目标
+            if target.startswith("iflow_"):
+                # 直接指定了 iflow 模块
+                module_id = target
+            else:
+                # 指定了渠道名，转换为 iflow 模块名
+                module_id = f"iflow_{target}"
+        else:
+            # 未指定目标，尝试从消息上下文推断
+            # 暂时使用第一个 iflow 模块
+            iflow_modules = [mid for mid in self.bus.modules.keys() if mid.startswith("iflow_")]
+            if not iflow_modules:
+                return "❌ 没有可用的 iflow 模块"
+            module_id = iflow_modules[0]
+        
+        # 检查模块是否存在
+        if module_id not in self.bus.modules:
+            return f"❌ 模块不存在: {module_id}"
+        
+        module = self.bus.modules[module_id]
+        
+        # 检查模块是否有 controller
+        if not hasattr(module, 'controller'):
+            return f"❌ 模块 {module_id} 没有 controller"
+        
+        controller = module.controller
+        
+        # 检查 tmux 会话是否存在
+        tmux_session = controller.tmux_session
+        if not tmux_session:
+            return f"❌ 模块 {module_id} 没有 tmux 会话"
+        
+        try:
+            # 捕获 tmux 输出（最后 50 行）
+            output = await controller.capture_output(lines=50)
+            
+            if not output:
+                return f"❌ 无法捕获 tmux 会话 {tmux_session} 的输出"
+            
+            # 清理输出（移除控制字符）
+            cleaned_output = self._clean_tmux_output(output)
+            
+            # 截断过长的输出
+            max_lines = 100
+            lines = cleaned_output.split('\n')
+            if len(lines) > max_lines:
+                lines = lines[-max_lines:]
+                truncated = True
+            else:
+                truncated = False
+            
+            # 格式化输出
+            result_lines = [
+                f"**{module_id} 界面快照** 📸",
+                f"```\n",
+                "\n".join(lines),
+                f"```",
+            ]
+            
+            if truncated:
+                result_lines.append(f"\n*（仅显示最后 {max_lines} 行，共捕获 {len(output.split(chr(10)))} 行）*")
+            
+            return "\n".join(result_lines)
+        
+        except Exception as e:
+            logger.error(f"捕获 tmux 快照失败: {e}", exc_info=True)
+            return f"❌ 捕获 tmux 快照失败: {e}"
+    
+    def _clean_tmux_output(self, output: str) -> str:
+        """清理 tmux 输出，移除控制字符
+        
+        Args:
+            output: 原始 tmux 输出
+            
+        Returns:
+            清理后的输出
+        """
+        import re
+        
+        # 移除 ANSI 控制序列
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        cleaned = ansi_escape.sub('', output)
+        
+        # 移除其他控制字符
+        cleaned = ''.join(char for char in cleaned if char.isprintable() or char in '\n\r\t')
+        
+        # 移除连续的空行
+        lines = cleaned.split('\n')
+        cleaned_lines = []
+        prev_empty = False
+        
+        for line in lines:
+            if line.strip() == '':
+                if not prev_empty:
+                    cleaned_lines.append(line)
+                    prev_empty = True
+            else:
+                cleaned_lines.append(line)
+                prev_empty = False
+        
+        return '\n'.join(cleaned_lines)
 
     
     

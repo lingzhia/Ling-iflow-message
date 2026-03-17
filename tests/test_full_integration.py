@@ -17,7 +17,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.core import MessageBus, Message, MessageType, MessageContent
-from src.modules import WeChatModule, IFlowModule
+from src.modules import WeChatChannel, IFlowModule
 
 # 配置日志
 log_dir = Path(__file__).parent.parent / "logs"

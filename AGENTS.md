@@ -854,7 +854,25 @@ A: 使用 `./manage.py channel list/status/start/stop/restart` 或 `ling-iflow c
 ### 实施状态
 
 - ✅ 方案设计完成
-- ⏳ 待实施
+- ✅ 已实施
+
+---
+
+## 状态管理优化
+
+**问题**：IFlowModule 内部监控与 ModuleManager 健康监控不协调，导致状态不准确、恢复机制冲突。
+
+**方案**：
+- 移除 IFlowModule 内部监控任务
+- IFlowModule 和 WeChatChannel 实现 `health_check()` 方法
+- ModuleManager 统一负责健康监控和自动恢复
+- 增强自动恢复策略和状态通知
+
+**效果**：状态准确、及时恢复、避免冲突
+
+**实施状态**：✅ 已完成
+
+详细方案见：[design-v2/18-状态管理优化方案.md](design-v2/18-状态管理优化方案.md)
 
 ## 下一步工作
 

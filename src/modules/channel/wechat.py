@@ -616,6 +616,64 @@ class WeChatChannel(BaseModule):
         self._processed_msg_ids[msg_id] = current_time
         return False
     
+    async def health_check(self) -> Dict[str, Any]:
+        """健康检查
+        
+        Returns:
+            健康检查结果
+        """
+        try:
+            # 检查模块是否运行
+            if not self._running:
+                return {
+                    'healthy': False,
+                    'reason': 'module_not_running',
+                    'details': {'running': False}
+                }
+            
+            # 检查 HTTP 客户端
+            if not self._http:
+                return {
+                    'healthy': False,
+                    'reason': 'http_client_not_initialized',
+                    'details': {}
+                }
+            
+            # 检查 access_token 是否过期
+            if await self._is_access_token_expired():
+                # 尝试刷新 token
+                refreshed = await self._refresh_access_token()
+                if not refreshed:
+                    return {
+                        'healthy': False,
+                        'reason': 'token_refresh_failed',
+                        'details': {}
+                    }
+            
+            # 检查回调服务是否运行
+            if self._callback_runner:
+                # 回调服务正在运行
+                callback_port = self.config.get("callback_port", 8788)
+                callback_host = self.config.get("callback_host", "0.0.0.0")
+            
+            # 一切正常
+            return {
+                'healthy': True,
+                'reason': 'ok',
+                'details': {
+                    'callback_port': self.config.get("callback_port", 8788),
+                    'user_id': self.config.get("user_id", "")
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"[{self.module_id}] 健康检查异常: {e}", exc_info=True)
+            return {
+                'healthy': False,
+                'reason': 'check_exception',
+                'details': {'error': str(e)}
+            }
+    
     async def get_status(self) -> Dict[str, Any]:
         """获取状态
         

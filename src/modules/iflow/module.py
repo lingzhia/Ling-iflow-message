@@ -150,9 +150,6 @@ class IFlowModule(BaseModule):
         # 启动监控器
         await self.monitor.start()
         
-        # 创建监控任务
-        self.create_background_task(self._monitor_task())
-        
         logger.info(f"[{self.module_id}] iflow 模块启动完成")
     
     async def _on_stop(self) -> None:
@@ -360,6 +357,73 @@ class IFlowModule(BaseModule):
             "message_store": store_stats
         }
     
+    async def health_check(self) -> Dict[str, Any]:
+        """健康检查
+        
+        Returns:
+            健康检查结果
+        """
+        try:
+            # 检查模块是否运行
+            if not self._running:
+                return {
+                    'healthy': False,
+                    'reason': 'module_not_running',
+                    'details': {'running': False}
+                }
+            
+            # 检查 tmux 会话是否存在
+            tmux_exists = await self.controller.check_tmux_session()
+            if not tmux_exists:
+                return {
+                    'healthy': False,
+                    'reason': 'tmux_session_not_found',
+                    'details': {'tmux_session': self.tmux_session}
+                }
+            
+            # 检查 iflow 是否运行
+            iflow_running = await self.controller.check_iflow_running()
+            if not iflow_running:
+                return {
+                    'healthy': False,
+                    'reason': 'iflow_not_running',
+                    'details': {
+                        'tmux_session': self.tmux_session,
+                        'iflow_state': self.state.value
+                    }
+                }
+            
+            # 检查 iflow 是否就绪（可选，更严格的检查）
+            iflow_ready = await self.controller.check_iflow_ready()
+            if not iflow_ready:
+                return {
+                    'healthy': False,
+                    'reason': 'iflow_not_ready',
+                    'details': {
+                        'tmux_session': self.tmux_session,
+                        'iflow_state': self.state.value
+                    }
+                }
+            
+            # 一切正常
+            return {
+                'healthy': True,
+                'reason': 'ok',
+                'details': {
+                    'tmux_session': self.tmux_session,
+                    'iflow_state': self.state.value,
+                    'iflow_running': True
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"[{self.module_id}] 健康检查异常: {e}", exc_info=True)
+            return {
+                'healthy': False,
+                'reason': 'check_exception',
+                'details': {'error': str(e)}
+            }
+    
     # ==================== 内部回调 ====================
     
     async def _on_monitor_message(self, message: OutboundMessage) -> None:
@@ -527,24 +591,6 @@ class IFlowModule(BaseModule):
                     callback(message)
             except Exception as e:
                 logger.error(f"[{self.module_id}] Subscriber callback error: {e}", exc_info=True)
-    
-    async def _monitor_task(self) -> None:
-        """监控任务（后台运行）"""
-        try:
-            while self._running:
-                # 检查 iflow 状态
-                iflow_running = await self.controller.check_iflow_running()
-                
-                if not iflow_running and self.auto_restart:
-                    logger.warning(f"[{self.module_id}] iflow 未运行，尝试重启...")
-                    await self.controller.start_iflow(self.model)
-                
-                await asyncio.sleep(60)
-                
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"[{self.module_id}] 监控任务错误: {e}", exc_info=True)
     
     # ==================== 兼容接口 ====================
     
