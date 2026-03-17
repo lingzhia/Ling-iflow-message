@@ -600,17 +600,21 @@ def status():
         # 检查 tmux 会话
         print()
         print("Tmux 会话:")
-        sessions = ["iflow", "iflow2"]
-        for session in sessions:
-            result_tmux = subprocess.run(
-                f"tmux has-session -t {session} 2>/dev/null",
-                shell=True,
-                capture_output=True
-            )
-            if result_tmux.returncode == 0:
-                print(f"  {COLOR_GREEN}✓{COLOR_RESET} 会话 {session}: 存在")
-            else:
-                print(f"  {COLOR_YELLOW}✗{COLOR_RESET} 会话 {session}: 不存在")
+        # 使用 get_all_tmux_sessions() 获取所有会话名
+        sessions = get_all_tmux_sessions("config.json")
+        if not sessions:
+            print(f"  {COLOR_YELLOW}✗{COLOR_RESET} 没有配置的 tmux 会话")
+        else:
+            for session in sessions:
+                result_tmux = subprocess.run(
+                    f"tmux has-session -t {session} 2>/dev/null",
+                    shell=True,
+                    capture_output=True
+                )
+                if result_tmux.returncode == 0:
+                    print(f"  {COLOR_GREEN}✓{COLOR_RESET} 会话 {session}: 存在")
+                else:
+                    print(f"  {COLOR_YELLOW}✗{COLOR_RESET} 会话 {session}: 不存在")
 
     else:
         print_error("服务未运行")
