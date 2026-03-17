@@ -47,3 +47,6 @@ wechat_messages.log
 *.tmp
 *.bak
 .DS_Store
+
+# 临时目录
+tmp/
