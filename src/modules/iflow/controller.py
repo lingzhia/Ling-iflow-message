@@ -468,10 +468,10 @@ class IFlowController:
             捕获的输出
         """
         try:
-            # 使用 -e 参数捕获完整历史（包括滚动缓冲区）
+            # 使用 -S 参数从最后 N 行开始捕获，避免 ANSI 转义序列
             result = await asyncio.create_subprocess_exec(
                 "tmux", "capture-pane", "-t", self.tmux_session,
-                "-e", "-p",
+                "-S", f"-{lines}", "-p",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -479,10 +479,6 @@ class IFlowController:
             
             if result.returncode == 0:
                 output = stdout.decode()
-                # 只返回最后 N 行
-                all_lines = output.split('\n')
-                if len(all_lines) > lines:
-                    return '\n'.join(all_lines[-lines:])
                 return output
             else:
                 logger.error(f"[IFlowController] Failed to capture output")

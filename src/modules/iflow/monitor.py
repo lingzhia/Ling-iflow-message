@@ -682,10 +682,6 @@ class IFlowMonitor:
         Returns:
             消息列表
         """
-        # 清理 ANSI 转义序列
-        import re
-        output = re.sub(r'\x1b\[[0-9;]*m', '', output)
-        
         messages = []
         lines = output.split('\n')
         
