@@ -236,7 +236,8 @@ class CommandHandler:
                     status_lines.append(f"  健康状态: {healthy_icon}{state_info}")
                     
                     # 显示回复模式
-                    reply_mode = status.get("reply_mode", "reply_only")
+                    module_instance = self.manager.modules.get(module_id)
+                    reply_mode = module_instance.get_reply_mode() if module_instance else status.get("reply_mode", "reply_only")
                     mode_name = "仅回复模式" if reply_mode == "reply_only" else "全部消息模式"
                     status_lines.append(f"  回复模式: {mode_name}")
                     
@@ -942,7 +943,8 @@ class CommandHandler:
             lines = ["**回复模式** 🎯\n"]
             for module_id, status in all_status.items():
                 if module_id.startswith("iflow_"):
-                    reply_mode = status.get("reply_mode", "reply_only")
+                    module_instance = self.manager.modules.get(module_id)
+                    reply_mode = module_instance.get_reply_mode() if module_instance else status.get("reply_mode", "reply_only")
                     mode_name = "仅回复模式" if reply_mode == "reply_only" else "全部消息模式"
                     lines.append(f"- {module_id}: {mode_name}")
             
@@ -1004,7 +1006,7 @@ class CommandHandler:
                 continue
             
             # 获取模块实例
-            module = self.bus.get_module(module_id)
+            module = self.manager.modules.get(module_id)
             if not module:
                 fail_count += 1
                 continue

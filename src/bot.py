@@ -172,6 +172,7 @@ class LingIflowBot:
                     config=sim_config
                 )
                 self.simulator_modules[sim_name] = simulator
+                simulator.set_manager(self.manager)
                 await self.manager.register_module(module_id)
                 logger.info(f"创建模拟器模块: {module_id}")
             except Exception as e:
