@@ -1427,6 +1427,7 @@ class ModuleManager:
         
         # 特殊检查：IFlow 生成中状态
         if module_id.startswith("iflow_"):
+            # 如果模块在 iflow_status 中，检查状态
             if module_id in self.iflow_status:
                 if not self.is_iflow_available(module_id):
                     iflow_status = self.get_iflow_status(module_id)
@@ -1438,6 +1439,10 @@ class ModuleManager:
                         "message": f"iflow 正在生成中，已持续 {duration} 秒",
                         "duration": duration
                     }
+            else:
+                # 如果模块不在 iflow_status 中，初始化状态为 idle
+                self.update_iflow_state(module_id, "idle")
+                logger.debug(f"[ModuleManager] 初始化 iflow 模块状态: {module_id} -> idle")
         
         # 接收方可用
         return {
