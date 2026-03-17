@@ -565,6 +565,8 @@ class WeChatChannel(BaseModule):
                 if result:
                     # 已知命令，发送回复
                     await self.send_message(result, chat_id, is_group)
+                    # 已知命令不继续发送到 iflow
+                    return
                 else:
                     # 未知命令，透传给 iflow 处理（继续执行下面的消息发送逻辑）
                     logger.info(f"[{self.module_id}] 未知命令，透传给 iflow: {parsed.get('cmd_name')} {parsed.get('cmd_args')}")
