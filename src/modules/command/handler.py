@@ -390,6 +390,12 @@ class CommandHandler:
 **故障排查：**
 - `/snapshot [channel_name]` - 查看 tmux 界面快照
 
+**tmux 管理：**
+- `/tmux list` - 列出所有 tmux 会话
+- `/tmux create <会话名>` - 创建新的 tmux 会话
+- `/tmux kill <会话名>` - 杀死指定的 tmux 会话
+- `/tmux help` - 显示 tmux 命令帮助
+
 **渠道管理：**
 - `/channel list` - 列出所有渠道
 - `/channel status [channel_name]` - 查看渠道状态
@@ -401,7 +407,7 @@ class CommandHandler:
 - 直接发送消息即可与 iflow 对话
 - 命令不区分大小写
 - 模块 ID 可省略，将显示所有模块的信息
-- 未知的斜杠命令会自动透传给 iflow 处理（如 `/run`、`/config` 等）"""
+- 未知的斜杠命令会自动透传给 iflow 处理（如 `/run`、`/config`、`/clear` 等）"""
     
     async def _cmd_history(self, args: str, chat_id: str) -> str:
         """查看状态历史命令"""
