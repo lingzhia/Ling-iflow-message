@@ -81,9 +81,9 @@ def get_channel_info(config_path: str) -> dict:
             'type': 'wechat',
             'name': bot['name'],
             'enabled': bot.get('enabled', True),
-            'tmux_session': bot.get('tmux_session', f"{bot['name']}+iflow")
+            'tmux_session': f"{bot['name']}+iflow"
         }
-    
+
     # 从 simulator_channels 中获取模拟器渠道
     simulators = config.get('simulator_channels', [])
     for sim in simulators:
@@ -91,7 +91,7 @@ def get_channel_info(config_path: str) -> dict:
             'type': 'simulator',
             'name': sim['name'],
             'enabled': sim.get('enabled', False),
-            'tmux_session': sim.get('tmux_session', f"{sim['name']}+iflow")
+            'tmux_session': f"{sim['name']}+iflow"
         }
     
     return channels
@@ -117,43 +117,38 @@ def get_default_channel(config_path: str) -> str:
 
 
 def get_tmux_session_by_channel(channel_name: str, config_path: str) -> Optional[str]:
-    """根据渠道名获取对应的tmux会话"""
-    config = load_config(config_path)
-    
-    # 从 bots 中查找
-    bots = config.get('bots', [])
-    for bot in bots:
-        if bot.get('name') == channel_name:
-            return bot.get('tmux_session')
-    
-    # 从 simulator_channels 中查找
-    simulators = config.get('simulator_channels', [])
-    for sim in simulators:
-        if sim.get('name') == channel_name:
-            return sim.get('tmux_session')
-    
-    return None
+    """根据渠道名获取对应的tmux会话
+
+    根据 design-v2/17-渠道架构简化方案.md，tmux 会话名使用命名规则：渠道名+iflow
+    """
+    # 使用命名规则：渠道名+iflow
+    return f"{channel_name}+iflow"
 
 
 def get_all_tmux_sessions(config_path: str) -> list:
-    """获取配置文件中所有的tmux会话"""
+    """获取配置文件中所有的tmux会话
+
+    根据 design-v2/17-渠道架构简化方案.md，tmux 会话名使用命名规则：渠道名+iflow
+    """
     config = load_config(config_path)
     tmux_sessions = []
-    
+
     # 从 bots 中获取
     bots = config.get('bots', [])
     for bot in bots:
-        if 'tmux_session' in bot:
-            if bot['tmux_session'] not in tmux_sessions:
-                tmux_sessions.append(bot['tmux_session'])
-    
+        if bot.get('enabled', False):
+            tmux_session = f"{bot['name']}+iflow"
+            if tmux_session not in tmux_sessions:
+                tmux_sessions.append(tmux_session)
+
     # 从 simulator_channels 中获取
     simulators = config.get('simulator_channels', [])
     for sim in simulators:
-        if 'tmux_session' in sim:
-            if sim['tmux_session'] not in tmux_sessions:
-                tmux_sessions.append(sim['tmux_session'])
-    
+        if sim.get('enabled', False):
+            tmux_session = f"{sim['name']}+iflow"
+            if tmux_session not in tmux_sessions:
+                tmux_sessions.append(tmux_session)
+
     return tmux_sessions
 
 
@@ -188,14 +183,16 @@ def start(
             print_info("企业微信渠道:")
             for bot in config_data['bots']:
                 if bot.get('enabled', False):
-                    print(f"  {bot['name']:<20} - tmux: {bot.get('tmux_session', 'N/A')}")
-        
+                    tmux_session = f"{bot['name']}+iflow"
+                    print(f"  {bot['name']:<20} - tmux: {tmux_session}")
+
         if config_data.get('simulator_channels'):
             print_info("模拟器渠道:")
             for sim in config_data['simulator_channels']:
                 if sim.get('enabled', False):
-                    print(f"  {sim['name']:<20} - tmux: {sim.get('tmux_session', 'N/A')}")
-        
+                    tmux_session = f"{sim['name']}+iflow"
+                    print(f"  {sim['name']:<20} - tmux: {tmux_session}")
+
         print()
         print_info("使用示例: ./manage.py start -c wechat_bot1")
         return
@@ -286,26 +283,28 @@ def stop(
     else:
         # 使用默认渠道
         target_channel = get_default_channel(config)
-    
+
     # 特殊处理：列出所有渠道
     if target_channel == "ls":
         available_channels = get_available_channels(config)
         config_data = load_config(config)
-        
+
         print_info("可用渠道:")
         print()
-        
+
         if config_data.get('bots'):
             print_info("企业微信渠道:")
             for bot in config_data['bots']:
                 if bot.get('enabled', False):
-                    print(f"  {bot['name']:<20} - tmux: {bot.get('tmux_session', 'N/A')}")
-        
+                    tmux_session = f"{bot['name']}+iflow"
+                    print(f"  {bot['name']:<20} - tmux: {tmux_session}")
+
         if config_data.get('simulator_channels'):
             print_info("模拟器渠道:")
             for sim in config_data['simulator_channels']:
                 if sim.get('enabled', False):
-                    print(f"  {sim['name']:<20} - tmux: {sim.get('tmux_session', 'N/A')}")
+                    tmux_session = f"{sim['name']}+iflow"
+                    print(f"  {sim['name']:<20} - tmux: {tmux_session}")
         
         print()
         print_info("使用示例: ./manage.py stop -c wechat_bot1")
@@ -452,19 +451,21 @@ def restart(
         
         print_info("可用渠道:")
         print()
-        
+
         if config_data.get('bots'):
             print_info("企业微信渠道:")
             for bot in config_data['bots']:
                 if bot.get('enabled', False):
-                    print(f"  {bot['name']:<20} - tmux: {bot.get('tmux_session', 'N/A')}")
-        
+                    tmux_session = f"{bot['name']}+iflow"
+                    print(f"  {bot['name']:<20} - tmux: {tmux_session}")
+
         if config_data.get('simulator_channels'):
             print_info("模拟器渠道:")
             for sim in config_data['simulator_channels']:
                 if sim.get('enabled', False):
-                    print(f"  {sim['name']:<20} - tmux: {sim.get('tmux_session', 'N/A')}")
-        
+                    tmux_session = f"{sim['name']}+iflow"
+                    print(f"  {sim['name']:<20} - tmux: {tmux_session}")
+
         print()
         print_info("使用示例: ./manage.py restart -c wechat_bot1")
         return
@@ -481,36 +482,46 @@ def restart(
 
     # 停止服务
     print_info("正在停止服务...")
-    stop_channel = target_channel  # 传递给 stop 的 channel 参数
     
-    # 根据 channel 停止进程
-    if stop_channel == "all":
-        subprocess.run("pkill -9 -f 'src.bot'", shell=True)
+    # 使用 Unix Socket 控制服务停止渠道
+    if target_channel != "all":
+        stop_command = f"stop {target_channel}"
+        result = send_control_command(stop_command)
+        
+        if not result.get("success"):
+            # 如果控制服务失败，回退到直接停止
+            print_warning(f"控制服务停止失败，使用直接停止: {result.get('error')}")
+            
+            # 直接停止进程
+            result = subprocess.run(
+                f"ps aux | grep 'src.bot.*--channel {target_channel}' | grep -v grep | awk '{{print $2}}'",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                pids = result.stdout.strip().split('\n')
+                for pid in pids:
+                    subprocess.run(f"kill -9 {pid}", shell=True)
+            
+            # 停止 tmux 会话
+            tmux_session = get_tmux_session_by_channel(target_channel, config)
+            if tmux_session:
+                print_info(f"停止 tmux 会话: {tmux_session}")
+                subprocess.run(f"tmux kill-session -t {tmux_session} 2>/dev/null", shell=True)
     else:
-        result = subprocess.run(
-            f"ps aux | grep 'src.bot.*--channel {stop_channel}' | grep -v grep | awk '{{print $2}}'",
-            shell=True,
-            capture_output=True,
-            text=True
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            pids = result.stdout.strip().split('\n')
-            for pid in pids:
-                subprocess.run(f"kill -9 {pid}", shell=True)
-    
-    # 停止 tmux 会话
-    if stop_channel == "all":
-        # 停止所有tmux会话
+        # 停止所有渠道
+        print_info("停止所有渠道...")
+        channels = get_available_channels(config)
+        for channel_name in channels:
+            stop_command = f"stop {channel_name}"
+            send_control_command(stop_command)
+        
+        # 停止所有 tmux 会话
         tmux_sessions = get_all_tmux_sessions(config)
         print_info(f"停止所有 tmux 会话: {', '.join(tmux_sessions)}")
         for session in tmux_sessions:
             subprocess.run(f"tmux kill-session -t {session} 2>/dev/null", shell=True)
-    else:
-        # 停止指定渠道的tmux会话
-        tmux_session = get_tmux_session_by_channel(stop_channel, config)
-        if tmux_session:
-            print_info(f"停止 tmux 会话: {tmux_session}")
-            subprocess.run(f"tmux kill-session -t {tmux_session} 2>/dev/null", shell=True)
 
     import time
     time.sleep(2)

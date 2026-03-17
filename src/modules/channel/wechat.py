@@ -248,7 +248,9 @@ class WeChatChannel(BaseModule):
                 return
             
             callback_port = self.config.get("callback_port", 8788)
-            tmux_session = self.config.get("tmux_session", "iflow")
+            # 根据 design-v2/17-渠道架构简化方案.md，tmux 会话名使用命名规则：渠道名+iflow
+            channel_name = self.module_id.replace("wechat_", "")
+            tmux_session = self.config.get("tmux_session", f"{channel_name}+iflow")
             workspace = self.config.get("workspace", "~/.iflow")
             
             # 扩展工作目录路径
@@ -299,8 +301,10 @@ class WeChatChannel(BaseModule):
                 logger.warning(f"[{self.module_id}] 未配置 user_id，跳过停止通知")
                 return
             
-            tmux_session = self.config.get("tmux_session", "iflow")
-            
+            # 根据 design-v2/17-渠道架构简化方案.md，tmux 会话名使用命名规则：渠道名+iflow
+            channel_name = self.module_id.replace("wechat_", "")
+            tmux_session = self.config.get("tmux_session", f"{channel_name}+iflow")
+
             # 使用当前目录作为工作目录
             from pathlib import Path
             expanded_workspace = Path.cwd()

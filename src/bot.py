@@ -354,18 +354,18 @@ class LingIflowBot:
             if channel_name in self.wechat_modules:
                 wechat_module_id = f"wechat_{channel_name}"
                 result = await self.manager.start_module(wechat_module_id)
-                results[wechat_module_id] = result
+                results[wechat_module_id] = result.success
             
             # 启动模拟器模块
             elif channel_name in self.simulator_modules:
                 simulator_module_id = f"simulator_{channel_name}"
                 result = await self.manager.start_module(simulator_module_id)
-                results[simulator_module_id] = result
+                results[simulator_module_id] = result.success
             
             # 启动对应的 iflow 模块
             iflow_module_id = f"iflow_{channel_name}"
             result = await self.manager.start_module(iflow_module_id)
-            results[iflow_module_id] = result
+            results[iflow_module_id] = result.success
             
             # 启动健康监控
             await self.manager.start_health_monitor()
@@ -395,18 +395,18 @@ class LingIflowBot:
             if channel_name in self.wechat_modules:
                 wechat_module_id = f"wechat_{channel_name}"
                 result = await self.manager.stop_module(wechat_module_id)
-                results[wechat_module_id] = result
+                results[wechat_module_id] = result.success
             
             # 停止模拟器模块
             elif channel_name in self.simulator_modules:
                 simulator_module_id = f"simulator_{channel_name}"
                 result = await self.manager.stop_module(simulator_module_id)
-                results[simulator_module_id] = result
+                results[simulator_module_id] = result.success
             
             # 停止对应的 iflow 模块
             iflow_module_id = f"iflow_{channel_name}"
             result = await self.manager.stop_module(iflow_module_id)
-            results[iflow_module_id] = result
+            results[iflow_module_id] = result.success
             
         except Exception as e:
             logger.error(f"停止渠道失败 {channel_name}: {e}")

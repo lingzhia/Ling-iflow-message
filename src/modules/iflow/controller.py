@@ -448,25 +448,31 @@ class IFlowController:
             return None
     
     async def capture_output(self, lines: int = 1000) -> str:
-        """捕获 tmux 输出
+        """捕获 tmux 输出（包括滚动历史）
         
         Args:
-            lines: 捕获的行数
+            lines: 捕获的行数（从历史的最后开始）
             
         Returns:
             捕获的输出
         """
         try:
+            # 使用 -e 参数捕获完整历史（包括滚动缓冲区）
             result = await asyncio.create_subprocess_exec(
                 "tmux", "capture-pane", "-t", self.tmux_session,
-                "-S", f"-{lines}", "-p",
+                "-e", "-p",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=10)
             
             if result.returncode == 0:
-                return stdout.decode()
+                output = stdout.decode()
+                # 只返回最后 N 行
+                all_lines = output.split('\n')
+                if len(all_lines) > lines:
+                    return '\n'.join(all_lines[-lines:])
+                return output
             else:
                 logger.error(f"[IFlowController] Failed to capture output")
                 return ""
