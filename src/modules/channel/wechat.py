@@ -140,15 +140,14 @@ class WeChatChannel(BaseModule):
         # 设置给 CommandHandler
         self.command_handler.set_manager(manager)
     
-    def set_group_config(self, group_definitions: Dict, default_group: str = "g1") -> None:
-        """设置组配置
+    def set_bot(self, bot) -> None:
+        """设置 bot 实例
         
         Args:
-            group_definitions: 组定义字典
-            default_group: 默认组名
+            bot: bot 实例
         """
         # 设置给 CommandHandler
-        self.command_handler.set_group_config(group_definitions, default_group)
+        self.command_handler.set_bot(bot)
     
     async def _on_start(self) -> None:
         """启动时的钩子方法"""
@@ -249,7 +248,8 @@ class WeChatChannel(BaseModule):
             
             # 扩展工作目录路径
             from pathlib import Path
-            expanded_workspace = Path(workspace).expanduser()
+            # 使用当前目录作为工作目录
+            expanded_workspace = Path.cwd()
             
             # 获取 iflow 运行状态
             iflow_running = self._check_iflow_status()
@@ -295,11 +295,10 @@ class WeChatChannel(BaseModule):
                 return
             
             tmux_session = self.config.get("tmux_session", "iflow")
-            workspace = self.config.get("workspace", "~/.iflow")
             
-            # 扩展工作目录路径
+            # 使用当前目录作为工作目录
             from pathlib import Path
-            expanded_workspace = Path(workspace).expanduser()
+            expanded_workspace = Path.cwd()
             
             # 检查 iflow 运行状态
             iflow_running = self._check_iflow_status()

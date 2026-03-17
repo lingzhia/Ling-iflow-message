@@ -153,9 +153,6 @@ class ModuleManager:
         # IFlow 专用状态
         self.iflow_status: Dict[str, IFlowStatus] = {}
         
-        # 组定义
-        self.module_groups: Dict[str, List[str]] = {}
-        
         # 依赖关系
         self.dependencies: Dict[str, List[str]] = {}
         
@@ -763,101 +760,7 @@ class ModuleManager:
         if not success:
             metrics.error_count += 1
     
-    # ==================== 组管理 ====================
     
-    def define_group(self, group_name: str, module_ids: List[str]) -> None:
-        """定义模块组
-        
-        Args:
-            group_name: 组名
-            module_ids: 模块 ID 列表
-        """
-        logger.info(f"[ModuleManager] 定义组: {group_name}, 模块: {module_ids}")
-        self.module_groups[group_name] = module_ids
-    
-    def get_group_modules(self, group_name: str) -> List[str]:
-        """获取组的模块列表
-        
-        Args:
-            group_name: 组名
-            
-        Returns:
-            模块 ID 列表
-        """
-        return self.module_groups.get(group_name, [])
-    
-    async def start_group(self, group_name: str) -> Dict[str, bool]:
-        """启动组的所有模块
-        
-        Args:
-            group_name: 组名
-            
-        Returns:
-            每个模块的启动结果
-        """
-        logger.info(f"[ModuleManager] 启动组: {group_name}")
-        
-        module_ids = self.get_group_modules(group_name)
-        if not module_ids:
-            logger.warning(f"[ModuleManager] 组不存在或为空: {group_name}")
-            return {}
-        
-        results = {}
-        for module_id in module_ids:
-            result = await self.start_module(module_id)
-            results[module_id] = result.success
-        
-        return results
-    
-    async def stop_group(self, group_name: str) -> Dict[str, bool]:
-        """停止组的所有模块
-        
-        Args:
-            group_name: 组名
-            
-        Returns:
-            每个模块的停止结果
-        """
-        logger.info(f"[ModuleManager] 停止组: {group_name}")
-        
-        module_ids = self.get_group_modules(group_name)
-        if not module_ids:
-            logger.warning(f"[ModuleManager] 组不存在或为空: {group_name}")
-            return {}
-        
-        results = {}
-        for module_id in module_ids:
-            result = await self.stop_module(module_id)
-            results[module_id] = result.success
-        
-        return results
-    
-    async def restart_group(self, group_name: str) -> Dict[str, bool]:
-        """重启组的所有模块
-        
-        Args:
-            group_name: 组名
-            
-        Returns:
-            每个模块的重启结果
-        """
-        logger.info(f"[ModuleManager] 重启组: {group_name}")
-        
-        # 先停止
-        stop_results = await self.stop_group(group_name)
-        
-        # 等待一下
-        await asyncio.sleep(1)
-        
-        # 再启动
-        start_results = await self.start_group(group_name)
-        
-        # 合并结果
-        results = {}
-        for module_id in stop_results.keys():
-            results[module_id] = stop_results[module_id] and start_results.get(module_id, False)
-        
-        return results
     
     # ==================== 依赖管理 ====================
     

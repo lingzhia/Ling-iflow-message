@@ -77,15 +77,14 @@ class SimulatorChannel(BaseModule):
         # 设置给 CommandHandler
         self.command_handler.set_manager(manager)
     
-    def set_group_config(self, group_definitions: Dict, default_group: str = "g1") -> None:
-        """设置组配置
+    def set_bot(self, bot) -> None:
+        """设置 bot 实例
         
         Args:
-            group_definitions: 组定义字典
-            default_group: 默认组名
+            bot: bot 实例
         """
         # 设置给 CommandHandler
-        self.command_handler.set_group_config(group_definitions, default_group)
+        self.command_handler.set_bot(bot)
     
     async def _on_start(self) -> None:
         """启动时的钩子方法"""

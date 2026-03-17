@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from .core import MessageBus, Message, ModuleManager
-from .modules import WeChatChannel, SimulatorChannel, IFlowModule
 
 
 logger = logging.getLogger(__name__)
@@ -137,12 +136,13 @@ class LingIflowBot:
             
             try:
                 module_id = f"wechat_{bot_name}"
-                wechat = WeChatChannel(
+                wechat = await self.manager.create_module(
+                    module_type="wechat",
                     module_id=module_id,
-                    bot_config=bot_config
+                    config=bot_config
                 )
                 self.wechat_modules[bot_name] = wechat
-                self.manager.register_module(wechat)
+                await self.manager.register_module(module_id)
                 logger.info(f"创建企业微信模块: {module_id}")
             except Exception as e:
                 logger.error(f"创建企业微信模块失败 {bot_name}: {e}")
@@ -160,13 +160,13 @@ class LingIflowBot:
             
             try:
                 module_id = f"simulator_{sim_name}"
-                simulator = SimulatorChannel(
+                simulator = await self.manager.create_module(
+                    module_type="simulator",
                     module_id=module_id,
-                    host=sim_config.get("host", "localhost"),
-                    port=sim_config.get("port", 19999)
+                    config=sim_config
                 )
                 self.simulator_modules[sim_name] = simulator
-                self.manager.register_module(simulator)
+                await self.manager.register_module(module_id)
                 logger.info(f"创建模拟器模块: {module_id}")
             except Exception as e:
                 logger.error(f"创建模拟器模块失败 {sim_name}: {e}")
@@ -174,9 +174,9 @@ class LingIflowBot:
     async def _setup_channels(self) -> None:
         """为每个渠道创建对应的 iflow 模块和绑定关系"""
         # 设置企业微信渠道的 iflow 模块
-        for bot_name, bot_config in self.config.get("bots", {}).items():
+        for bot_config in self.config.get("bots", []):
             if isinstance(bot_config, dict) and bot_config.get("enabled", True):
-                bot_name = bot_config.get("name", bot_name)
+                bot_name = bot_config.get("name")
                 await self._setup_channel_iflow(bot_name, bot_config)
         
         # 设置模拟器渠道的 iflow 模块
@@ -197,25 +197,28 @@ class LingIflowBot:
             iflow_module_id = f"iflow_{channel_name}"
             tmux_session = channel_config.get("tmux_session", f"{channel_name}+iflow")
             
-            iflow = IFlowModule(
+            iflow = await self.manager.create_module(
+                module_type="iflow",
                 module_id=iflow_module_id,
-                tmux_session=tmux_session,
-                model="glm-4.7"  # 默认模型
+                config={
+                    "tmux_session": tmux_session,
+                    "model": "glm-4.7"  # 默认模型
+                }
             )
             self.iflow_modules[channel_name] = iflow
-            self.manager.register_module(iflow)
+            await self.manager.register_module(iflow_module_id)
             logger.info(f"创建 iflow 模块: {iflow_module_id}, tmux会话: {tmux_session}")
             
             # 设置绑定关系
-            if channel_name.startswith("wechat"):
+            if channel_name in self.wechat_modules:
                 wechat_module_id = f"wechat_{channel_name}"
-                self.manager.bind(wechat_module_id, iflow_module_id)
-                self.manager.bind(iflow_module_id, wechat_module_id)
+                self.bus.bind(wechat_module_id, iflow_module_id)
+                self.bus.bind(iflow_module_id, wechat_module_id)
                 logger.info(f"绑定: {wechat_module_id} <-> {iflow_module_id}")
-            elif channel_name.startswith("simulator"):
+            elif channel_name in self.simulator_modules:
                 simulator_module_id = f"simulator_{channel_name}"
-                self.manager.bind(simulator_module_id, iflow_module_id)
-                self.manager.bind(iflow_module_id, simulator_module_id)
+                self.bus.bind(simulator_module_id, iflow_module_id)
+                self.bus.bind(iflow_module_id, simulator_module_id)
                 logger.info(f"绑定: {simulator_module_id} <-> {iflow_module_id}")
         
         except Exception as e:
