@@ -69,6 +69,7 @@ class CommandHandler:
             "/metrics": self._cmd_metrics,
             "/channel": self._cmd_channel,
             "/snapshot": self._cmd_snapshot,
+            "/tmux": self._cmd_tmux,
         }
     
     def parse_command(self, content: str) -> Dict[str, Any]:
@@ -169,7 +170,7 @@ class CommandHandler:
 - 例如：`/run`、`/config`、`/exit` 等会直接传递给 iflow"""
     
     async def _cmd_status(self, args: str, chat_id: str) -> str:
-        """状态命令 - 查看所有模块状态"""
+        """状态命令 - 查看所有已启动模块的状态"""
         if not self.bus:
             return "❌ 消息总线未初始化"
         
@@ -183,13 +184,24 @@ class CommandHandler:
                 status_lines.append("❌ 没有可用的模块")
                 return "\n".join(status_lines)
             
-            # 按模块类型分组
+            # 只显示已启动的模块
+            started_modules = {
+                module_id: status 
+                for module_id, status in all_status.items()
+                if status['running']
+            }
+            
+            if not started_modules:
+                status_lines.append("ℹ️ 当前没有启动的模块")
+                return "\n".join(status_lines)
+            
+            # 按模块类型分组（只显示已启动的）
             iflow_modules = []
             wechat_modules = []
             simulator_modules = []
             other_modules = []
             
-            for module_id, status in all_status.items():
+            for module_id, status in started_modules.items():
                 if module_id.startswith("iflow_"):
                     iflow_modules.append((module_id, status))
                 elif module_id.startswith("wechat_"):
@@ -203,7 +215,7 @@ class CommandHandler:
             if iflow_modules:
                 status_lines.append("**IFlow 模块** 🤖")
                 for module_id, status in iflow_modules:
-                    running_icon = "✅" if status['running'] else "❌"
+                    # 只显示已启动的模块，所以running_icon总是✅
                     healthy_icon = "✅" if status['healthy'] else "❌"
                     
                     # 获取 IFlow 专用状态
@@ -216,7 +228,7 @@ class CommandHandler:
                         elif state == 'idle':
                             state_info = " [💤 空闲]"
                     
-                    status_lines.append(f"- {running_icon} {module_id}")
+                    status_lines.append(f"- ✅ {module_id}")
                     status_lines.append(f"  健康状态: {healthy_icon}{state_info}")
                     status_lines.append(f"  启动时间: {status.get('started_at', 'N/A')}")
                     
@@ -252,10 +264,10 @@ class CommandHandler:
             if wechat_modules:
                 status_lines.append("**企业微信渠道** 💬")
                 for module_id, status in wechat_modules:
-                    running_icon = "✅" if status['running'] else "❌"
+                    # 只显示已启动的模块，所以running_icon总是✅
                     healthy_icon = "✅" if status['healthy'] else "❌"
                     
-                    status_lines.append(f"- {running_icon} {module_id}")
+                    status_lines.append(f"- ✅ {module_id}")
                     status_lines.append(f"  健康状态: {healthy_icon}")
                     
                     # 获取性能指标
@@ -284,10 +296,10 @@ class CommandHandler:
             if simulator_modules:
                 status_lines.append("**模拟器渠道** 🔧")
                 for module_id, status in simulator_modules:
-                    running_icon = "✅" if status['running'] else "❌"
+                    # 只显示已启动的模块，所以running_icon总是✅
                     healthy_icon = "✅" if status['healthy'] else "❌"
                     
-                    status_lines.append(f"- {running_icon} {module_id}")
+                    status_lines.append(f"- ✅ {module_id}")
                     status_lines.append(f"  健康状态: {healthy_icon}")
                     
                     # 获取性能指标
@@ -310,10 +322,10 @@ class CommandHandler:
             if other_modules:
                 status_lines.append("**其他模块** 📦")
                 for module_id, status in other_modules:
-                    running_icon = "✅" if status['running'] else "❌"
+                    # 只显示已启动的模块，所以running_icon总是✅
                     healthy_icon = "✅" if status['healthy'] else "❌"
                     
-                    status_lines.append(f"- {running_icon} {module_id}")
+                    status_lines.append(f"- ✅ {module_id}")
                     status_lines.append(f"  健康状态: {healthy_icon}")
                     
                     # 获取性能指标
@@ -744,6 +756,131 @@ class CommandHandler:
                 prev_empty = False
         
         return '\n'.join(cleaned_lines)
+    
+    async def _cmd_tmux(self, args: str, chat_id: str) -> str:
+        """tmux 管理命令
+        
+        用法:
+        /tmux list - 列出所有 tmux 会话
+        /tmux create <name> - 创建新的 tmux 会话
+        /tmux kill <name> - 杀死指定的 tmux 会话
+        /tmux - 列出所有 tmux 会话（简写）
+        """
+        parts = args.strip().split()
+        
+        if not parts:
+            action = "list"
+        else:
+            action = parts[0].lower()
+            args_str = ' '.join(parts[1:]) if len(parts) > 1 else ""
+        
+        if action == "list":
+            # 列出所有 tmux 会话
+            import subprocess
+            
+            try:
+                result = subprocess.run(
+                    ["tmux", "list-sessions"],
+                    capture_output=True,
+                    text=True
+                )
+                
+                if result.returncode == 0:
+                    sessions = result.stdout.strip()
+                    if not sessions:
+                        return "✅ 当前没有运行的 tmux 会话"
+                    
+                    lines = ["**tmux 会话列表** 📋\n"]
+                    lines.append(sessions)
+                    return "\n".join(lines)
+                else:
+                    return f"❌ 获取 tmux 会话列表失败: {result.stderr}"
+            except Exception as e:
+                return f"❌ 执行 tmux 命令失败: {e}"
+        
+        elif action == "create":
+            # 创建新的 tmux 会话
+            session_name = args_str.strip()
+            if not session_name:
+                return "❌ 请指定会话名称\n用法: /tmux create <会话名>"
+            
+            import subprocess
+            
+            try:
+                # 检查会话是否已存在
+                check_result = subprocess.run(
+                    ["tmux", "has-session", "-t", session_name],
+                    capture_output=True
+                )
+                
+                if check_result.returncode == 0:
+                    return f"❌ 会话 '{session_name}' 已存在"
+                
+                # 创建新会话
+                create_result = subprocess.run(
+                    ["tmux", "new-session", "-d", "-s", session_name],
+                    capture_output=True,
+                    text=True
+                )
+                
+                if create_result.returncode == 0:
+                    return f"✅ 已创建 tmux 会话: {session_name}"
+                else:
+                    return f"❌ 创建会话失败: {create_result.stderr}"
+            except Exception as e:
+                return f"❌ 创建会话失败: {e}"
+        
+        elif action == "kill":
+            # 杀死 tmux 会话
+            session_name = args_str.strip()
+            if not session_name:
+                return "❌ 请指定会话名称\n用法: /tmux kill <会话名>"
+            
+            import subprocess
+            
+            try:
+                # 检查会话是否存在
+                check_result = subprocess.run(
+                    ["tmux", "has-session", "-t", session_name],
+                    capture_output=True
+                )
+                
+                if check_result.returncode != 0:
+                    return f"❌ 会话 '{session_name}' 不存在"
+                
+                # 杀死会话
+                kill_result = subprocess.run(
+                    ["tmux", "kill-session", "-t", session_name],
+                    capture_output=True,
+                    text=True
+                )
+                
+                if kill_result.returncode == 0:
+                    return f"✅ 已杀死的 tmux 会话: {session_name}"
+                else:
+                    return f"❌ 杀死会话失败: {kill_result.stderr}"
+            except Exception as e:
+                return f"❌ 杀死会话失败: {e}"
+        
+        else:
+            # 显示帮助信息
+            return """**tmux 管理命令** 🔧
+
+用法:
+- `/tmux list` - 列出所有 tmux 会话
+- `/tmux create <会话名>` - 创建新的 tmux 会话
+- `/tmux kill <会话名>` - 杀死指定的 tmux 会话
+- `/tmux` - 列出所有 tmux 会话（简写）
+
+示例:
+- `/tmux` - 查看所有 tmux 会话
+- `/tmux create test` - 创建名为 test 的会话
+- `/tmux kill test` - 杀死名为 test 的会话
+
+注意:
+- 创建的 tmux 会话需要手动启动 iflow
+- 杀死会话会同时停止该会话中的所有进程
+- 请谨慎使用 kill 命令"""
 
     
     

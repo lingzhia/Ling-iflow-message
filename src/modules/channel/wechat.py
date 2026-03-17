@@ -559,12 +559,15 @@ class WeChatChannel(BaseModule):
             # 解析命令
             parsed = self.command_handler.parse_command(content)
             
-            # 如果是命令，执行命令并回复
+            # 如果是命令，执行命令
             if parsed.get("is_command"):
                 result = await self.command_handler.execute(parsed, chat_id)
                 if result:
+                    # 已知命令，发送回复
                     await self.send_message(result, chat_id, is_group)
-                return
+                else:
+                    # 未知命令，透传给 iflow 处理（继续执行下面的消息发送逻辑）
+                    logger.info(f"[{self.module_id}] 未知命令，透传给 iflow: {parsed.get('cmd_name')} {parsed.get('cmd_args')}")
             
             # 使用消息转换器创建标准消息对象
             message = self.converter.create_wechat_inbound_message({
