@@ -196,12 +196,12 @@ class IFlowController:
             "Hi～今天想做点什么",
             "版本号:",
         ]
-        
+
         ui_ready = any(indicator in output for indicator in iflow_indicators)
         logger.debug(f"[check_iflow_ready] UI ready: {ui_ready}")
         if not ui_ready:
             return False
-        
+
         # 4. 检查是否在"生成中"（关键检查）
         # 使用 Monitor 的检测逻辑，确保一致性
         # 创建临时 Monitor 实例来复用检测逻辑
@@ -211,13 +211,24 @@ class IFlowController:
         logger.debug(f"[check_iflow_ready] Has '生成中': {has_generating}")
         if has_generating:
             return False  # ❌ 还在生成中
-        
+
         # 5. 检查输入框是否可用
-        has_input = ">   输入消息或@文件路径" in output
+        # 由于 tmux 输出中可能包含 ANSI 转义序列，我们使用更宽松的匹配方式
+        # 检查输出中是否包含"输入消息或@文件路径"
+        has_input = "输入消息或@文件路径" in output
+
+        # 如果包含 ANSI 转义序列，则进一步检查是否有">"符号
+        if has_input:
+            # 移除 ANSI 转义序列，检查是否有">"符号
+            import re
+            clean_output = re.sub(r'\x1b\[[0-9;]*m', '', output)
+            has_input = (">   输入消息或@文件路径" in clean_output or
+                        " >   输入消息或@文件路径" in clean_output)
+
         logger.debug(f"[check_iflow_ready] Has input box: {has_input}")
         if not has_input:
             return False  # ❌ 输入框未就绪
-        
+
         # 6. 所有条件满足，认为就绪
         logger.debug("[check_iflow_ready] All checks passed, iflow is ready")
         return True
