@@ -136,8 +136,9 @@ class CommandHandler:
                 logger.error(f"执行命令 {cmd_name} 失败: {e}", exc_info=True)
                 return f"❌ 执行命令失败: {e}"
         
-        # 未知命令
-        return f"❌ 未知命令: {cmd_name}\n\n发送 /help 查看可用命令"
+        # 未知命令：透传给 iflow 处理
+        logger.info(f"未知命令，透传给 iflow: {cmd_name} {cmd_args}")
+        return None
     
     async def _cmd_help(self, args: str, chat_id: str) -> str:
         """帮助命令"""
@@ -155,7 +156,11 @@ class CommandHandler:
 - `/channel list`：列出所有渠道
 - `/channel [status|start|stop|restart] [channel_name]`：渠道管理
 - `/help`：显示此帮助
-- `/lscmd`：列出所有可用命令"""
+- `/lscmd`：列出所有可用命令
+
+**iFlow 命令支持：**
+- 未知的斜杠命令会自动透传给 iflow 处理
+- 例如：`/run`、`/config`、`/exit` 等会直接传递给 iflow"""
     
     async def _cmd_status(self, args: str, chat_id: str) -> str:
         """状态命令 - 查看所有模块状态"""
@@ -373,7 +378,8 @@ class CommandHandler:
 **使用提示：**
 - 直接发送消息即可与 iflow 对话
 - 命令不区分大小写
-- 模块 ID 可省略，将显示所有模块的信息"""
+- 模块 ID 可省略，将显示所有模块的信息
+- 未知的斜杠命令会自动透传给 iflow 处理（如 `/run`、`/config` 等）"""
     
     async def _cmd_history(self, args: str, chat_id: str) -> str:
         """查看状态历史命令"""
