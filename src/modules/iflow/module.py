@@ -202,6 +202,23 @@ class IFlowModule(BaseModule):
         
         if not response.success:
             logger.warning(f"[{self.module_id}] 消息发送失败: {response.message}")
+            # 发送错误消息回来源模块
+            if source and self.message_bus:
+                from ...core.message import Message, MessageContent, CoreMessageType
+                error_message = Message(
+                    id=Message.generate_id(),
+                    type=CoreMessageType.TEXT,
+                    content=MessageContent(type=CoreMessageType.TEXT, text=f"❌ {response.message}"),
+                    from_module=self.module_id,
+                    metadata={
+                        "msg_type": "error",
+                        "chat_id": chat_id,
+                        "is_group": is_group,
+                        "receiver": source
+                    }
+                )
+                await self.send_to_bus(error_message)
+                logger.info(f"[{self.module_id}] 已发送错误消息到 {source}: {response.message}")
     
     # ==================== 公共接口 ====================
     
