@@ -70,6 +70,8 @@ class CommandHandler:
             "/channel": self._cmd_channel,
             "/snapshot": self._cmd_snapshot,
             "/tmux": self._cmd_tmux,
+            "/scope": self._cmd_scope,
+            "/mode": self._cmd_scope,  # 别名
         }
     
     def parse_command(self, content: str) -> Dict[str, Any]:
@@ -159,6 +161,7 @@ class CommandHandler:
 - `/channel list`：列出所有渠道
 - `/channel [status|start|stop|restart] [channel_name]`：渠道管理
 - `/tmux [list|create|kill]`：tmux 会话管理
+- `/scope [reply|all]`：切换回复模式（reply=仅回复，all=全部消息）
 - `/help`：显示此帮助
 - `/lscmd`：列出所有可用命令
 
@@ -231,6 +234,12 @@ class CommandHandler:
                     
                     status_lines.append(f"- ✅ {module_id}")
                     status_lines.append(f"  健康状态: {healthy_icon}{state_info}")
+                    
+                    # 显示回复模式
+                    reply_mode = status.get("reply_mode", "reply_only")
+                    mode_name = "仅回复模式" if reply_mode == "reply_only" else "全部消息模式"
+                    status_lines.append(f"  回复模式: {mode_name}")
+                    
                     status_lines.append(f"  启动时间: {status.get('started_at', 'N/A')}")
                     
                     # 获取性能指标
@@ -389,6 +398,10 @@ class CommandHandler:
 
 **故障排查：**
 - `/snapshot [channel_name]` - 查看 tmux 界面快照
+
+**消息控制：**
+- `/scope [reply|all]` - 切换回复模式（reply=仅回复，all=全部消息）
+- `/mode` - 等同于 /scope
 
 **tmux 管理：**
 - `/tmux list` - 列出所有 tmux 会话
@@ -888,6 +901,130 @@ class CommandHandler:
 - 创建的 tmux 会话需要手动启动 iflow
 - 杀死会话会同时停止该会话中的所有进程
 - 请谨慎使用 kill 命令"""
+    
+    async def _cmd_scope(self, args: str, chat_id: str) -> str:
+        """回复模式切换命令
+        
+        切换 IFlow 模块的回复模式：
+        - reply_only: 只发送 ✦ 标记的消息（默认）
+        - all_messages: 发送所有消息（包括 ✦、✻ 等）
+        
+        Args:
+            args: 命令参数
+            chat_id: 聊天 ID
+            
+        Returns:
+            命令执行结果
+        """
+        if not self.bus:
+            return "❌ 消息总线未初始化"
+        
+        if not self.manager:
+            return "❌ 模块管理器未初始化"
+        
+        # 模式映射
+        mode_mapping = {
+            "reply": "reply_only",
+            "only": "reply_only",
+            "reply_only": "reply_only",
+            "all": "all_messages",
+            "all_messages": "all_messages",
+        }
+        
+        # 如果没有参数，显示当前模式
+        args_str = args.strip()
+        if not args_str:
+            # 查询所有 iflow 模块的回复模式
+            all_status = self.manager.get_all_status()
+            if not all_status:
+                return "❌ 没有可用的模块"
+            
+            lines = ["**回复模式** 🎯\n"]
+            for module_id, status in all_status.items():
+                if module_id.startswith("iflow_"):
+                    reply_mode = status.get("reply_mode", "reply_only")
+                    mode_name = "仅回复模式" if reply_mode == "reply_only" else "全部消息模式"
+                    lines.append(f"- {module_id}: {mode_name}")
+            
+            if not lines[1:]:  # 只有标题
+                lines.append("ℹ️ 当前没有 iflow 模块运行")
+            
+            return "\n".join(lines)
+        
+        # 解析目标模块和模式
+        parts = args_str.split()
+        if len(parts) == 1:
+            # 只有模式，应用到所有 iflow 模块
+            target_mode = parts[0].lower()
+        elif len(parts) == 2:
+            # 有目标模块和模式
+            target_module, target_mode = parts
+            target_mode = target_mode.lower()
+        else:
+            return """**回复模式切换** 🎯
+
+用法:
+- `/scope` - 查看当前模式
+- `/scope reply` - 切换到仅回复模式（只发送 ✦ 消息）
+- `/scope all` - 切换到全部消息模式（发送所有消息）
+- `/scope <模块> <模式>` - 切换指定模块的回复模式
+
+别名:
+- `/mode` - 等同于 /scope
+
+示例:
+- `/scope` - 查看当前模式
+- `/scope reply` - 只看最终结果
+- `/scope all` - 查看完整生成过程
+- `/scope iflow_bot1 reply` - 切换指定模块到仅回复模式
+
+注意:
+- 模式切换只影响指定模块
+- 默认模式为仅回复模式"""
+        
+        # 映射模式
+        mapped_mode = mode_mapping.get(target_mode)
+        if not mapped_mode:
+            return f"❌ 无效的回复模式: {target_mode}\n可用模式: reply (仅回复) 或 all (全部消息)"
+        
+        # 应用模式到目标模块
+        all_status = self.manager.get_all_status()
+        if not all_status:
+            return "❌ 没有可用的模块"
+        
+        success_count = 0
+        fail_count = 0
+        
+        for module_id, status in all_status.items():
+            if not module_id.startswith("iflow_"):
+                continue
+            
+            # 如果指定了目标模块，只处理该模块
+            if len(parts) == 2 and module_id != target_module:
+                continue
+            
+            # 获取模块实例
+            module = self.bus.get_module(module_id)
+            if not module:
+                fail_count += 1
+                continue
+            
+            # 设置回复模式
+            if module.set_reply_mode(mapped_mode):
+                success_count += 1
+                logger.info(f"[{module_id}] 回复模式已切换为: {mapped_mode}")
+            else:
+                fail_count += 1
+        
+        if success_count == 0:
+            return f"❌ 没有模块被切换（可能模块不存在或未运行）"
+        
+        mode_name = "仅回复模式" if mapped_mode == "reply_only" else "全部消息模式"
+        result = f"✅ 已切换 {success_count} 个模块到 {mode_name}"
+        if fail_count > 0:
+            result += f"\n⚠️ {fail_count} 个模块切换失败"
+        
+        return result
 
     
     

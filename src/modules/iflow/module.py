@@ -98,6 +98,9 @@ class IFlowModule(BaseModule):
         # iflow 就绪状态
         self._is_ready: bool = False
         
+        # 回复模式：reply_only（仅回复✦标记的消息）或 all_messages（全部消息）
+        self.reply_mode: str = "reply_only"
+        
         # 模块管理器引用（用于状态上报）
         self.manager: Optional[Any] = None
         
@@ -350,12 +353,54 @@ class IFlowModule(BaseModule):
             "auto_restart": self.auto_restart,
             "iflow_state": self.state.value,
             "generating_duration": self.generating_duration,
+            "reply_mode": self.reply_mode,
             "session_info": session_info,
             "monitor_stats": monitor_stats,
             "session_manager_info": session_manager_info,
             "logger_stats": logger_stats,
             "message_store": store_stats
         }
+    
+    def should_send_message(self, message: OutboundMessage) -> bool:
+        """判断是否应该发送消息
+        
+        根据当前回复模式决定是否发送消息
+        
+        Args:
+            message: 出站消息
+            
+        Returns:
+            True表示应该发送，False表示不应该发送
+        """
+        if self.reply_mode == "all_messages":
+            # 全部消息模式，发送所有消息
+            return True
+        else:
+            # reply_only 模式，只发送 ✦ 标记的消息（reply类型）
+            return message.message_type == MessageType.REPLY
+    
+    def set_reply_mode(self, mode: str) -> bool:
+        """设置回复模式
+        
+        Args:
+            mode: 回复模式，"reply_only" 或 "all_messages"
+            
+        Returns:
+            True表示设置成功，False表示设置失败
+        """
+        if mode in ["reply_only", "all_messages"]:
+            self.reply_mode = mode
+            logger.info(f"[{self.module_id}] 回复模式已切换为: {mode}")
+            return True
+        return False
+    
+    def get_reply_mode(self) -> str:
+        """获取当前回复模式
+        
+        Returns:
+            当前回复模式
+        """
+        return self.reply_mode
     
     async def health_check(self) -> Dict[str, Any]:
         """健康检查
@@ -448,6 +493,11 @@ class IFlowModule(BaseModule):
                 # 恢复当前消息 ID（临时）
                 self.message_store._current_message_id = current_id
                 logger.debug(f"[{self.module_id}] 恢复消息归属: {current_id}, source={source}")
+        
+        # 检查 reply_mode 过滤（优先于 scope 过滤）
+        if not self.should_send_message(message):
+            logger.debug(f"[{self.module_id}] 过滤消息 (reply_mode={self.reply_mode}, type={message.type.value})")
+            return
         
         # 检查 scope 过滤
         if scope == "reply_only" and message.type != MessageType.REPLY:
