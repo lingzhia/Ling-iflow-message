@@ -377,7 +377,7 @@ class IFlowModule(BaseModule):
             return True
         else:
             # reply_only 模式，只发送 ✦ 标记的消息（reply类型）
-            return message.message_type == MessageType.REPLY
+            return message.type == MessageType.REPLY
     
     def set_reply_mode(self, mode: str) -> bool:
         """设置回复模式
