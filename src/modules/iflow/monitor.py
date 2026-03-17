@@ -463,7 +463,35 @@ class IFlowMonitor:
                 
                 logger.debug(f"[IFlowMonitor] Check #{self.stats['check_count']}: lightweight -> full")
             else:
-                # 仍然在 IDLE 状态，继续轻量级监控
+                # 仍然在 IDLE 状态，检查是否有新消息
+                # 获取完整输出检查新消息（修复：IDLE 状态下也应该提取消息）
+                if self._candidate_messages:
+                    # 有待发送的消息，尝试提取和发送
+                    full_output = await self.controller.capture_output(lines=self.LINES_FULL)
+                    current_messages = self._extract_messages(full_output)
+                    
+                    if current_messages != self._candidate_messages:
+                        # 消息已稳定，发送给订阅者
+                        stable_messages = current_messages
+                        logger.info(f"[IFlowMonitor] IDLE mode: extracted {len(stable_messages)} stable messages")
+                        
+                        for msg_data in stable_messages:
+                            if msg_data['marker_type'] == '✦':
+                                # 只有 ✦ 标记的消息才是回复，✻ 标记的是思考或其他
+                                outbound_msg = OutboundMessage(
+                                    type=MessageType.REPLY,
+                                    content=msg_data['content'],
+                                    receiver="",
+                                    scope="all",
+                                    metadata={"extracted_in": "idle_mode"}
+                                )
+                                await self._notify_subscribers(outbound_msg)
+                                logger.info(f"[IFlowMonitor] IDLE mode: sent reply message (length: {len(msg_data['content'])})")
+                        
+                        # 清空候选消息
+                        self._candidate_messages = []
+                        logger.info(f"[IFlowMonitor] IDLE mode: cleared candidate messages")
+                
                 if self.stats["check_count"] % 60 == 0:  # 每30秒输出一次（0.5s间隔）
                     logger.debug(f"[IFlowMonitor] Check #{self.stats['check_count']}: lightweight mode (idle)")
 
