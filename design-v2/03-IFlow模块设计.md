@@ -1,4 +1,4 @@
-# IFlow 模块完整设计文档
+# IFlow 模块设计文档
 
 ## 目录
 
@@ -7,9 +7,10 @@
 3. [模块组成](#模块组成)
 4. [状态管理](#状态管理)
 5. [消息处理](#消息处理)
-6. [交互式测试工具](#交互式测试工具)
-7. [使用示例](#使用示例)
-8. [故障排查](#故障排查)
+6. [消息提取优化](#消息提取优化)
+7. [测试工具设计](#测试工具设计)
+8. [使用示例](#使用示例)
+9. [故障排查](#故障排查)
 
 ---
 
@@ -342,7 +343,51 @@ def _extract_messages(self, output: str) -> List[Dict]:
 
 ---
 
-### 3. MessageStore - 消息库
+### 3. SessionManager - 会话管理器
+
+#### 职责
+
+管理 iflow 的会话文件，提供会话查询、创建等功能。
+
+#### 主要方法
+
+```python
+class SessionManager:
+    def get_latest_session(self) -> Optional[str]:
+        """获取最新的 session 文件
+        
+        Returns:
+            session 文件路径或 None
+        """
+        
+    def get_all_sessions(self, limit: int = 10) -> List[str]:
+        """获取所有 session 列表
+        
+        Args:
+            limit: 返回数量限制
+            
+        Returns:
+            session 文件路径列表
+        """
+        
+    def create_new_session(self) -> bool:
+        """创建新会话（清除上下文）
+        
+        Returns:
+            bool: 是否成功
+        """
+        
+    def get_current_session_info(self) -> dict:
+        """获取当前会话信息
+        
+        Returns:
+            会话信息字典
+        """
+```
+
+---
+
+### 4. MessageStore - 消息库
 
 #### 职责
 
@@ -391,7 +436,7 @@ class MessageStore:
 
 ---
 
-### 4. InteractionLogger - 交互记录器
+### 5. InteractionLogger - 交互记录器
 
 #### 职责
 
@@ -426,7 +471,7 @@ class MessageStore:
 
 ---
 
-### 5. IFlowModule - 消息交互层
+### 6. IFlowModule - 消息交互层
 
 #### 职责
 
@@ -678,7 +723,305 @@ iflow 返回 ✦ 回复3
 
 ---
 
-## 交互式测试工具
+## 消息提取优化
+
+### 问题分析
+
+#### 当前问题
+
+1. **消息内容缺失** - 只提取标记行，丢失了后续行的内容
+2. **消息重复发送** - 检测机制不准确导致重复
+3. **生成中消失不稳定** - 有时会短暂消失又重新出现，导致误判结束
+
+#### iflow 输出格式
+
+```
+✦ 回复标题
+  缩进的内容行1
+  缩进的内容行2
+
+✻ 思考中...
+  思考内容
+
+⠦ 生成中 6m 37s ... (按esc取消)
+```
+
+#### 标记说明
+
+- **✦ (回复标记)** - iflow 的实际回复内容，默认对外发送
+- **✻ (思考标记)** - iflow 的思考过程，内部记录但不对外发送
+- **⠦ 生成中** - 状态指示器，表示 iflow 正在生成回复
+
+#### 核心原则
+
+1. **完整记录** - IFlowMonitor 必须记录 iflow 中的全部消息，无论前面是什么标记（✦ 或 ✻）
+2. **选择性发送** - 对外回复的消息默认情况下只发送 ✦ 标记的消息，✻ 标记的消息不发送
+3. **状态检测** - 状态检测只关注"生成中"关键词及其持续时间，不依赖前面的符号 ⠦
+
+---
+
+### 倒数第二原则
+
+#### 核心策略：延迟提取
+
+**核心思想**：检测到新标记时，提取并发送**倒数第二个**标记消息（它是完整的，不会再变化）。
+
+#### 工作流程
+
+```
+时间线：
+T1: 检测到标记1 [✦ 回复1] → 记录（候选）
+T2: 检测到标记2 [✦ 回复2] → 发送标记1（倒数第二，完整），记录标记2
+T3: 检测到标记3 [✦ 回复3] → 发送标记2（倒数第二，完整），记录标记3
+...
+Tn: 生成中消失（稳定2秒）→ 发送最后一个标记（此时也是完整的）
+```
+
+#### 关键特性
+
+1. **倒数第二原则** - 每次检测到新标记时，发送上一个标记（倒数第二）
+2. **完整保证** - 倒数第二的标记已经完整，不会再变化
+3. **生成中也会发送** - 生成中时的新标记也会被记录并发送
+4. **稳定结束** - "生成中"消失并稳定2秒后，才判断回复结束
+
+#### 实现逻辑
+
+```python
+# 倒数第二原则伪代码
+last_messages = []  # 记录所有标记消息
+stable_start_time = None  # 稳定开始时间
+
+while monitoring:
+    current_messages = extract_all_messages(output)
+    is_generating = detect_generating(output)
+    
+    # 检测新标记
+    if len(current_messages) > len(last_messages):
+        # 有新标记
+        if len(last_messages) >= 1:
+            # 发送倒数第二的（即 last_messages 的最后一个）
+            send_message(last_messages[-1])
+        
+        # 更新记录
+        last_messages = current_messages
+        stable_start_time = None  # 重置稳定计时器
+    
+    # 检测生成中消失（需要稳定2秒）
+    elif not is_generating and len(last_messages) > 0:
+        if stable_start_time is None:
+            # 第一次检测到消失，开始计时
+            stable_start_time = now()
+        elif (now() - stable_start_time) >= 2:
+            # 稳定2秒，确认结束
+            send_message(last_messages[-1])
+            last_messages = []
+            stable_start_time = None
+    else:
+        # 生成中重新出现，重置计时器
+        stable_start_time = None
+```
+
+---
+
+### 两阶段检测策略
+
+#### 方案概述
+
+采用**两阶段检测策略**和**字符串定位机制**，进一步提升性能和准确性。
+
+**核心改进**：
+1. **两阶段检测**：未在生成中时只提取 50 行，减少不必要的处理
+2. **内容清理**：去掉 TUI 界面和无关内容
+3. **精确提取**：区分 iflow 收到的消息和带标记的消息
+4. **字符串定位**：用标记行字符串定位，简化去重逻辑
+5. **延迟发送**：最后统一发送，避免发送不完整的中间版本
+
+#### 监测流程（两阶段）
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ 阶段1：轻量级检测（未检测到"生成中"）                    │
+└─────────────────────────────────────────────────────────┘
+    ↓
+每 0.5 秒提取 tmux 中的 50 行
+    ↓
+检测是否有"生成中"
+    ↓
+┌─────────────────────────────────────┐
+│ 没有"生成中" → 不处理，继续检测    │
+└─────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────┐
+│ 有"生成中" → 切换到阶段2            │
+│ - 切换为提取 1000 行                │
+│ - 开始记录模式                      │
+└─────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│ 阶段2：完整记录（检测到"生成中"）                          │
+└─────────────────────────────────────────────────────────┘
+    ↓
+每 0.5 秒提取 tmux 中的 1000 行
+    ↓
+内容处理
+    ↓
+┌─────────────────────────────────────┐
+│ 1. 去掉 TUI 界面内容               │
+│ 2. 去掉最新一条发送消息前的内容     │
+└─────────────────────────────────────┘
+    ↓
+消息提取
+    ↓
+┌─────────────────────────────────────┐
+│ 1. 提取 iflow 收到的消息           │
+│ 2. 提取带标记的消息（✦、✻）        │
+│ 3. 保留原始顺序                    │
+└─────────────────────────────────────┘
+    ↓
+消息记录
+    ↓
+┌─────────────────────────────────────┐
+│ 首次扫描：                          │
+│ - 记录除最后一条外的所有消息        │
+│ - 保存最后一条标记消息的标记行      │
+└─────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────┐
+│ 后续扫描：                          │
+│ - 找到上次记录的最后标记行          │
+│ - 记录中间的新消息                  │
+│ - 更新最后标记行                    │
+└─────────────────────────────────────┘
+    ↓
+检查"生成中"是否存在
+    ↓
+┌─────────────────────────────────────┐
+│ 仍存在 → 继续记录                  │
+└─────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────┐
+│ 不存在 → 记录最后一条，结束         │
+│ - 记录最后一条标记消息              │
+│ - 统一发送所有记录的消息            │
+│ - 清空缓存                          │
+└─────────────────────────────────────┘
+```
+
+#### 核心差异对比
+
+| 方面 | 延迟提取方案 | 两阶段检测方案 |
+|-----|----------------|-------------------|
+| **提取行数** | 固定 1000 行 | 动态：50 行（检测中）→ 1000 行（记录中） |
+| **状态检测** | 始终检测"生成中" | 检测到"生成中"才开始记录 |
+| **消息发送** | 立即发送新增标记 | 延迟记录，最后统一发送 |
+| **内容处理** | 完整保留 | 去掉 TUI 界面 + 去掉发送消息前的内容 |
+| **消息类型** | 只提取带标记的消息 | 提取 iflow 收到的消息 + 带标记的消息 |
+| **去重机制** | 哈希去重 | 字符串定位（基于标记行） |
+| **结束检测** | 稳定检测（2 秒） | "生成中"消失 + 记录最后一条 |
+
+#### 性能优化
+
+**阶段1（轻量级检测）**：
+- 提取行数：50 行
+- 处理内容：仅检测"生成中"关键字
+- 资源消耗：极低
+
+**阶段2（完整记录）**：
+- 提取行数：1000 行
+- 处理内容：完整提取和记录
+- 资源消耗：正常
+
+**效果**：
+- 未在生成中时，性能提升约 **20 倍**（50 行 vs 1000 行）
+- 减少不必要的字符串处理和内存分配
+
+---
+
+### 状态检测顺序优化
+
+#### 检测逻辑
+
+1. **先检测状态变化**
+   - 检测"生成中"关键字
+   - 记录状态变化时间
+   - 触发状态变更回调
+
+2. **再处理消息提取**
+   - 根据当前状态选择提取策略
+   - IDLE 状态：轻量级检测
+   - GENERATING 状态：完整记录
+
+3. **最后发送消息**
+   - scope 过滤
+   - 构造 OutboundMessage
+   - 调用钩子
+   - 发送到消息总线
+   - 通知订阅者
+
+#### 优化效果
+
+- ✅ 避免状态检测和消息提取的时序问题
+- ✅ 确保状态正确更新后再处理消息
+- ✅ 减少重复检测和无效处理
+
+---
+
+### 标记更新处理
+
+#### 问题
+
+- 检测到新标记时，立即发送可能导致发送不完整的中间版本
+- 需要确保发送的消息是完整的
+
+#### 解决方案
+
+1. **延迟发送** - 记录候选消息，等待下一个标记出现后再发送上一个
+2. **完整保证** - 倒数第二的标记已经完整，不会再变化
+3. **统一发送** - 生成中消失后，统一发送所有记录的消息
+
+#### 实现逻辑
+
+```python
+# 标记更新处理
+candidate_messages = []  # 候选消息缓存
+
+# 检测到新标记
+if len(current_messages) > len(candidate_messages):
+    # 有新标记
+    if len(candidate_messages) > 0:
+        # 发送倒数第二的（保证完整）
+        message_to_send = candidate_messages[-1]
+        await self._send_message(message_to_send)
+    
+    # 更新候选缓存
+    candidate_messages = current_messages
+
+# 生成中消失
+elif not is_generating and len(candidate_messages) > 0:
+    # 发送最后一个
+    message_to_send = candidate_messages[-1]
+    await self._send_message(message_to_send)
+    
+    # 清空缓存
+    candidate_messages = []
+```
+
+---
+
+### 预期效果
+
+| 项目 | 当前状态 | 修复后 |
+|------|---------|--------|
+| 消息内容完整 | ❌ 只有标记行 | ✅ 完整内容 |
+| 发送时机 | ❌ 立即发送（可能不完整） | ✅ 延迟发送（保证完整） |
+| 重复发送 | ❌ 误判 | ✅ 基于哈希去重 |
+| 生成中处理 | ❌ 无处理 | ✅ 正常发送 |
+| 结束判断 | ❌ 不稳定，误判 | ✅ 稳定2秒确认 |
+| 性能 | ❌ 固定1000行 | ✅ 动态50/1000行 |
+
+---
+
+## 测试工具设计
 
 ### 概述
 
@@ -686,6 +1029,39 @@ iflow 返回 ✦ 回复3
 
 1. **交互模式**：持续交互，支持多种命令
 2. **命令行模式**：发送单条消息后退出，支持会话保持
+
+### 设计原则
+
+1. **消息格式一致** - 发送和接收的消息格式与消息总线完全一致
+2. **排除消息总线风险** - 使用模拟的消息总线，不依赖真实的消息总线实现
+3. **介于消息总线与 IFlowModule 之间** - 工具模拟消息总线的功能
+4. **完整测试流程** - 测试 IFlowModule 的完整消息处理流程
+5. **工具不感知 tmux** - 工具只对接 IFlowModule，不感知 tmux 的存在
+6. **保持 IFlowModule 接口不变** - 不修改 IFlowModule 的接口，不影响现有代码
+
+### 架构设计
+
+```
+工具 (IFlowInteractiveTool)
+  ↓ 从配置文件读取参数
+  ↓ 传递给 IFlowModule
+IFlowModule (接口不变)
+  ↓ 发送 Message
+模拟消息总线 (MockMessageBus)
+  ↓ 路由
+IFlowModule.receive(Message)
+  ↓ _on_receive
+IFlowModule.send()
+  ↓ controller.send_message()
+
+Monitor 提取 OutboundMessage
+  ↓ _on_monitor_message
+scope 过滤
+  ↓ 转换为 Message
+调用钩子 _message_sent_hook(Message)  ← 工具拦截
+  ↓ send_to_bus
+真实消息总线（可选）
+```
 
 ### 工具特性
 
@@ -768,141 +1144,26 @@ python tools/iflow_interactive_tool.py --message "最后一条消息" --cleanup
 | `--keep-alive` | 保持 tmux 会话（默认，命令行模式） | `True` |
 | `--cleanup` | 销毁 tmux 会话（命令行模式） | `False` |
 
-### 日志文件
+### 测试场景
 
-- **日志位置**：`logs/iflow_tool.log`
-- **日志级别**：
-  - 文件：DEBUG（所有日志）
-  - 控制台：WARNING+（仅警告和错误）
+1. **基本消息发送** - 验证消息能正确发送到 iflow
+2. **scope 过滤** - 验证只发送 ✦ 标记的消息
+3. **✻ 标记记录** - 验证 ✻ 标记的消息被正确记录但不发送
+4. **状态检测** - 验证状态正确变化
+5. **重复消息** - 验证去重逻辑
+6. **多行内容** - 验证多行内容正确提取
+7. **拒绝机制** - 验证生成中时拒绝新消息
+8. **会话保持** - 验证多次执行能复用会话
 
-### 工具功能详解
+### 关键优势
 
-#### 1. 模拟消息总线
-
-```python
-class MockMessageBus:
-    """模拟消息总线"""
-    
-    async def route(self, message: Message):
-        """路由消息
-        
-        - 来自 iflow 的消息通过回调处理
-        - 来自其他模块的消息发送到 iflow
-        - 避免循环：不将 iflow 消息发送回 iflow
-        """
-```
-
-#### 2. 消息去重
-
-```python
-self._processed_message_ids = set()  # 已处理的消息 ID
-
-# 去重检查
-if message.id in self._processed_message_ids:
-    logger.debug(f"消息已处理，跳过: {message.id}")
-    return
-```
-
-#### 3. 实时显示
-
-```python
-async def _on_iflow_message(self, message: Message):
-    """接收 IFlowModule 返回的消息"""
-    
-    # 解析消息类型
-    msg_type = message.content.type
-    content = message.content.content
-    
-    # 按类型显示
-    if msg_type == CoreMessageType.REPLY:
-        print(f"  [{time}] [reply] {content}")
-    elif msg_type == CoreMessageType.OTHER:
-        print(f"  [{time}] [other] {content}")
-    elif msg_type == CoreMessageType.COMPLETE:
-        print(f"  [{time}] [complete] 生成完成")
-```
-
-#### 4. 中断机制
-
-```python
-# 中断事件
-self._interrupt_event = asyncio.Event()
-
-# 等待完成（可中断）
-async def wait_for_complete(self):
-    """等待回复完成（可中断）"""
-    
-    while self.module and self.module.monitor.get_state() == IFlowState.GENERATING:
-        try:
-            await asyncio.wait_for(
-                self._interrupt_event.wait(),
-                timeout=1.0
-            )
-            # 被中断
-            logger.info("等待被中断")
-            return False
-        except asyncio.TimeoutError:
-            # 继续等待
-            continue
-    
-    return True
-
-# 中断处理
-async def _handle_interrupt(self):
-    """处理中断信号（Ctrl+C）"""
-    
-    if self.module and self.module.monitor.get_state() == IFlowState.GENERATING:
-        print("\n⚠️ 检测到中断信号")
-        print("   当前 iflow 正在生成回复")
-        print("   可以继续输入新消息，但 iflow 可能仍在生成中")
-        
-        # 触发中断事件
-        self._interrupt_event.set()
-    else:
-        print("\n正在退出...")
-        raise KeyboardInterrupt
-```
-
-#### 5. 会话保持
-
-```python
-def __init__(self, ..., keep_alive: bool = True):
-    """初始化工具
-    
-    Args:
-        keep_alive: 是否保持 tmux 会话（默认 True）
-    """
-    self.keep_alive = keep_alive
-
-async def start(self):
-    """启动工具"""
-    
-    # 检查 iflow 是否已经在运行
-    temp_controller = IFlowController(tmux_session)
-    iflow_running = await temp_controller.check_iflow_running()
-    
-    if iflow_running and self.keep_alive:
-        print(f"  检测到 iflow 已在运行（会话: {tmux_session}）")
-        print(f"  将复用现有 iflow 实例，保持会话上下文")
-
-async def stop(self, keep_alive: Optional[bool] = None):
-    """停止工具
-    
-    Args:
-        keep_alive: 是否保持 tmux 会话（None 表示使用实例变量）
-    """
-    should_keep_alive = keep_alive if keep_alive is not None else self.keep_alive
-    
-    if should_keep_alive:
-        # 保持会话，只停止监控器
-        await self.module.monitor.stop()
-        self.module._running = False
-        print("✅ 模块已停止（tmux 和 iflow 进程已保留）")
-    else:
-        # 销毁会话
-        await self.module.stop()
-        print("✅ 模块已停止（tmux 会话已销毁）")
-```
+1. **消息格式一致** - 发送和接收的都是 `Message` 对象
+2. **不依赖真实消息总线** - 使用模拟的消息总线
+3. **测试完整流程** - 包括 scope 过滤、消息转换
+4. **代码改动最小** - 只在 IFlowModule 中添加钩子，不影响现有代码
+5. **工具介于消息总线与 IFlowModule 之间** - 符合要求
+6. **工具不感知 tmux** - 工具只对接 IFlowModule
+7. **保持 IFlowModule 接口不变** - 不影响现有代码（bot.py）
 
 ---
 
@@ -1163,8 +1424,9 @@ python tools/iflow_interactive_tool.py --message "消息"
 5. **消息归属**：记录消息来源，支持多轮对话
 6. **订阅机制**：通过订阅通知关注方
 7. **性能优化**：双模式监控，性能提升 50 倍
-8. **中断机制**：支持中断等待，发送新消息
-9. **会话保持**：命令行模式默认保持会话
+8. **倒数第二原则**：延迟发送，保证消息完整
+9. **中断机制**：支持中断等待，发送新消息
+10. **会话保持**：命令行模式默认保持会话
 
 ### 最佳实践
 
@@ -1174,9 +1436,21 @@ python tools/iflow_interactive_tool.py --message "消息"
 4. **故障排查**：查看日志文件 `logs/iflow_tool.log`
 5. **性能监控**：观察 IDLE 状态的监控效率
 
+### 文件清单
+
+| 文件 | 说明 |
+|------|------|
+| `src/modules/iflow/__init__.py` | 模块导出 |
+| `src/modules/iflow/module.py` | IFlowModule 主类 |
+| `src/modules/iflow/controller.py` | tmux/iflow 控制器 |
+| `src/modules/iflow/monitor.py` | 输出监控器 |
+| `src/modules/iflow/session_manager.py` | 会话管理器 |
+| `src/modules/iflow/logger.py` | 交互记录器 |
+| `src/modules/iflow/message_store.py` | 消息库 |
+| `tools/iflow_interactive_tool.py` | 交互式测试工具 |
+
 ### 相关文档
 
-- [IFlow 模块设计方案](./04-IFlow模块设计方案.md)
 - [消息总线设计方案](./05-消息总线设计方案.md)
-- [消息提取优化方案](./07-消息提取优化方案.md)
-- [IFlowModule 测试工具方案](./08-IFlowModule测试工具方案.md)
+- [模块重构方案](./01-模块重构方案.md)
+- [启动方案设计](./06-启动方案设计.md)
