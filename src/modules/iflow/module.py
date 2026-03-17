@@ -98,6 +98,9 @@ class IFlowModule(BaseModule):
         # iflow 就绪状态
         self._is_ready: bool = False
         
+        # 模块管理器引用（用于状态上报）
+        self.manager: Optional[Any] = None
+        
         # 设置监控器回调
         self.monitor.subscribe(self._on_monitor_message)
         self.monitor.set_state_change_callback(self._on_state_change)
@@ -445,6 +448,14 @@ class IFlowModule(BaseModule):
             duration: 生成持续时间（秒）
         """
         logger.info(f"[{self.module_id}] State changed: {old_state.value} -> {new_state.value}, duration={duration}s")
+        
+        # 通知 ModuleManager 更新状态
+        if self.manager:
+            try:
+                self.manager.update_iflow_state(self.module_id, new_state.value, duration)
+                logger.debug(f"[{self.module_id}] 已通知 ModuleManager 更新状态")
+            except Exception as e:
+                logger.error(f"[{self.module_id}] 通知 ModuleManager 更新状态失败: {e}", exc_info=True)
 
         if new_state == IFlowState.IDLE and old_state == IFlowState.GENERATING:
             # 生成完成

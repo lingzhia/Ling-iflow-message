@@ -120,6 +120,9 @@ class WeChatChannel(BaseModule):
         # 注册通知处理器
         self.notification_manager.register_notification_handler("startup", self._handle_startup_notification)
         self.notification_manager.register_notification_handler("shutdown", self._handle_shutdown_notification)
+        
+        # 模块管理器引用
+        self.manager: Optional[Any] = None
     
     def set_message_bus(self, bus) -> None:
         """设置消息总线
@@ -137,6 +140,8 @@ class WeChatChannel(BaseModule):
         Args:
             manager: 模块管理器实例
         """
+        # 保存 manager 引用
+        self.manager = manager
         # 设置给 CommandHandler
         self.command_handler.set_manager(manager)
     

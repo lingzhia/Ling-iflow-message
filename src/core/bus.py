@@ -40,8 +40,12 @@ class MessageBus:
     负责模块注册、消息路由、绑定关系管理和发布-订阅机制。
     """
     
-    def __init__(self):
-        """初始化消息总线"""
+    def __init__(self, module_manager=None):
+        """初始化消息总线
+        
+        Args:
+            module_manager: 模块管理器实例（用于状态检查）
+        """
         # 注册的模块
         self.modules: Dict[str, BaseModule] = {}
         
@@ -51,12 +55,16 @@ class MessageBus:
         # 订阅者：主题 -> [回调函数]
         self.subscribers: Dict[str, List[Callable]] = defaultdict(list)
         
+        # 模块管理器
+        self.module_manager = module_manager
+        
         # 消息统计
         self.stats = {
             "messages_sent": 0,
             "messages_routed": 0,
             "messages_published": 0,
-            "errors": 0
+            "errors": 0,
+            "rejected": 0
         }
         
         logger.info("[MessageBus] 消息总线初始化完成")
@@ -228,6 +236,53 @@ class MessageBus:
         to_module = self.bindings[from_module]
         message.to_module = to_module
         
+        # 检查接收方状态
+        if self.module_manager:
+            check_result = await self.module_manager.check_receiver_availability(to_module)
+            
+            if not check_result["available"]:
+                # 接收方不可用，构造错误消息并返回给发送方
+                logger.warning(
+                    f"[MessageBus] ⚠️ 接收方不可用: {to_module}, "
+                    f"错误: {check_result['error']}, "
+                    f"消息: {check_result['error_message']}"
+                )
+                
+                # 生成错误消息
+                error_message = self.module_manager.generate_error_message(
+                    check_result["error"],
+                    check_result.get("details", {})
+                )
+                
+                # 创建错误消息对象
+                from .message import Message, MessageContent, MessageType
+                
+                error_msg = Message(
+                    id=Message.generate_id(),
+                    type=MessageType.TEXT,
+                    content=MessageContent(type=MessageType.TEXT, text=error_message),
+                    from_module="message_bus",
+                    to_module=from_module,
+                    metadata={
+                        "msg_type": "error_response",
+                        "error_type": check_result["error"],
+                        "error_message": check_result["error_message"],
+                        "original_message_id": message.id,
+                        "failed_receiver": to_module,
+                        "details": check_result.get("details", {})
+                    }
+                )
+                
+                # 路由错误消息回发送方
+                await self.send_to_module(error_msg)
+                
+                # 更新统计
+                self.stats["rejected"] += 1
+                self.stats["errors"] += 1
+                
+                return False  # 路由失败（被拒绝）
+        
+        # 接收方可用，正常路由
         content_preview = _format_content(message.content.text if message.content else "")
         logger.info(f"[MessageBus] 🔀 路由消息: {message.id}")
         logger.debug(f"   {from_module} -> {to_module}")

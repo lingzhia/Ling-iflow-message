@@ -1039,6 +1039,104 @@ class ModuleManager:
         
         logger.debug(f"[ModuleManager] IFlow 状态更新: {module_id} -> {state}")
     
+    # ==================== 接收方状态检查 ====================
+    
+    async def check_receiver_availability(
+        self,
+        receiver_id: str
+    ) -> Dict[str, Any]:
+        """检查接收方是否可用
+        
+        Args:
+            receiver_id: 接收方模块 ID
+            
+        Returns:
+            {
+                "available": bool,      # 是否可用
+                "error": str,          # 错误类型（不可用时）
+                "error_message": str,  # 错误消息（不可用时）
+                "details": dict        # 详细信息
+            }
+        """
+        # 检查模块是否存在
+        if receiver_id not in self.modules:
+            return {
+                "available": False,
+                "error": "MODULE_NOT_FOUND",
+                "error_message": f"接收方模块不存在: {receiver_id}",
+                "details": {}
+            }
+        
+        # 检查模块是否运行
+        if not self.is_module_running(receiver_id):
+            return {
+                "available": False,
+                "error": "MODULE_NOT_RUNNING",
+                "error_message": "接收方模块未运行",
+                "details": {}
+            }
+        
+        # 检查模块是否健康
+        if not self.is_module_healthy(receiver_id):
+            status = self.get_module_status(receiver_id)
+            error_msg = status.get("error", "未知错误")
+            return {
+                "available": False,
+                "error": "MODULE_UNHEALTHY",
+                "error_message": f"接收方模块异常: {error_msg}",
+                "details": {"status": status}
+            }
+        
+        # 特殊处理：IFlow 模块检查生成状态
+        if receiver_id.startswith("iflow_"):
+            if not self.is_iflow_available(receiver_id):
+                iflow_status = self.get_iflow_status(receiver_id)
+                duration = iflow_status.get("generating_duration", 0)
+                return {
+                    "available": False,
+                    "error": "IFLOW_GENERATING",
+                    "error_message": f"iflow 正在生成中，已持续 {duration} 秒，请稍后再试",
+                    "details": {
+                        "state": iflow_status.get("state"),
+                        "duration": duration
+                    }
+                }
+        
+        # 状态正常
+        return {
+            "available": True,
+            "error": None,
+            "error_message": None,
+            "details": {}
+        }
+    
+    def generate_error_message(
+        self,
+        error_type: str,
+        details: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """生成错误消息
+        
+        Args:
+            error_type: 错误类型
+            details: 详细信息
+            
+        Returns:
+            格式化的错误消息
+        """
+        details = details or {}
+        
+        error_messages = {
+            "MODULE_NOT_FOUND": "接收方模块不存在",
+            "MODULE_NOT_RUNNING": "接收方模块未运行",
+            "MODULE_UNHEALTHY": f"接收方模块状态异常: {details.get('status', {}).get('error', '未知错误')}",
+            "IFLOW_GENERATING": f"iflow 正在生成中，已持续 {details.get('duration', 0)} 秒，请稍后再试"
+        }
+        
+        error_message = error_messages.get(error_type, "未知错误")
+        
+        return f"❌ 消息发送失败\n\n{error_message}"
+    
     # ==================== 健康监控 ====================
     
     async def start_health_monitor(self) -> None:

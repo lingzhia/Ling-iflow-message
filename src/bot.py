@@ -107,13 +107,17 @@ class LingIflowBot:
             logger.info("创建模块管理器...")
             self.manager = ModuleManager(self.bus)
             
-            # 3. 创建所有企业微信渠道模块
+            # 3. 将 ModuleManager 设置到 MessageBus（用于状态检查）
+            logger.info("设置 MessageBus 的 ModuleManager 引用...")
+            self.bus.module_manager = self.manager
+            
+            # 4. 创建所有企业微信渠道模块
             await self._create_wechat_modules()
             
-            # 4. 创建所有模拟器渠道模块
+            # 5. 创建所有模拟器渠道模块
             await self._create_simulator_modules()
             
-            # 5. 为每个渠道创建对应的 iflow 模块和绑定关系
+            # 6. 为每个渠道创建对应的 iflow 模块和绑定关系
             await self._setup_channels()
             
             logger.info("所有组件初始化完成")
@@ -141,6 +145,8 @@ class LingIflowBot:
                     module_id=module_id,
                     config=bot_config
                 )
+                # 设置 manager 引用
+                wechat.set_manager(self.manager)
                 self.wechat_modules[bot_name] = wechat
                 await self.manager.register_module(module_id)
                 logger.info(f"创建企业微信模块: {module_id}")
@@ -205,6 +211,8 @@ class LingIflowBot:
                     "model": "glm-4.7"  # 默认模型
                 }
             )
+            # 设置 manager 引用
+            iflow.manager = self.manager
             self.iflow_modules[channel_name] = iflow
             await self.manager.register_module(iflow_module_id)
             logger.info(f"创建 iflow 模块: {iflow_module_id}, tmux会话: {tmux_session}")
