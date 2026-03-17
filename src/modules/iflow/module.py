@@ -204,7 +204,6 @@ class IFlowModule(BaseModule):
             logger.warning(f"[{self.module_id}] 消息发送失败: {response.message}")
             # 发送错误消息回来源模块
             if source and self.message_bus:
-                from ...core.message import Message, MessageContent, CoreMessageType
                 error_message = Message(
                     id=Message.generate_id(),
                     type=CoreMessageType.TEXT,
