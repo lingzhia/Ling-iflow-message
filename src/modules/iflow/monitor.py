@@ -76,6 +76,7 @@ class IFlowMonitor:
         # 状态管理
         self._state = IFlowState.IDLE
         self._generating_start_time: Optional[datetime] = None
+        self._last_generating_duration: int = 0  # 保存最后一次的生成持续时间
 
         # 初始化状态标志（防止在模块初始化期间触发错误的状态变更）
         self._is_initialized = False
@@ -121,7 +122,7 @@ class IFlowMonitor:
         """生成持续时间（秒）"""
         if self._state == IFlowState.GENERATING and self._generating_start_time:
             return int((datetime.now() - self._generating_start_time).total_seconds())
-        return 0
+        return self._last_generating_duration
     
     async def start(self) -> None:
         """启动监控器"""
@@ -316,12 +317,35 @@ class IFlowMonitor:
                         
                         # 清空缓存
                         self._missing_generating_count = 0
-                        
+
                         # 清理去重集合（为下一次对话准备）
                         self._sent_message_hashes.clear()
                         self._sent_marker_strings.clear()
-                            
-                            # 切换到IDLE状态（将在_check_state中触发）
+
+                        # 切换到IDLE状态
+                        old_state = self._state
+                        self._state = IFlowState.IDLE
+                        self.stats["state_changes"] += 1
+                        
+                        # 计算生成持续时间
+                        logger.debug(f"[IFlowMonitor] _generating_start_time: {self._generating_start_time}")
+                        if self._generating_start_time:
+                            duration = int((datetime.now() - self._generating_start_time).total_seconds())
+                        else:
+                            duration = 0
+                            logger.warning(f"[IFlowMonitor] _generating_start_time is None, duration set to 0")
+                        
+                        # 保存最后一次的生成持续时间
+                        self._last_generating_duration = duration
+                        
+                        logger.info(f"[IFlowMonitor] State changed: {old_state.value} -> {self._state.value} (completed after {duration}s)")
+                        
+                        # 触发状态变更回调
+                        if self._on_state_change:
+                            await self._call_callback(self._on_state_change, old_state, self._state, duration)
+                        
+                        # 重置生成开始时间
+                        self._generating_start_time = None
             elif self._state == IFlowState.IDLE:
                 # IDLE状态：只检查，不记录
                 pass
@@ -416,9 +440,8 @@ class IFlowMonitor:
             # 状态变更：生成中 -> 空闲
             logger.debug(f"[IFlowMonitor] 检测到状态可能变更: is_generating={is_generating}, state={self._state.value}")
 
-            # 如果生成中已经消失，等待稳定检测（在_check方法中处理）
-            # 不要在这里直接变回 idle，让 _check() 中的稳定检测逻辑处理
-            logger.debug(f"[IFlowMonitor] 等待稳定检测...")
+            # 连续3次扫描判断由 _check() 方法处理
+            # 不要在这里直接变回 idle，让 _check() 中的连续扫描逻辑处理
     
     def _detect_generating(self, output: str) -> bool:
         """检测是否处于生成中状态

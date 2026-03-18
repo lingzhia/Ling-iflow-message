@@ -197,7 +197,8 @@ class IFlowInteractiveTool:
         print(f"\n正在创建 IFlowModule 实例...")
 
         # 工具负责从配置文件读取参数，然后传递给 IFlowModule
-        tmux_session = self.config.get("tmux_session")
+        # 使用固定的tmux会话名称，避免创建大量tmux会话
+        tmux_session = "iflow"  # 固定使用tmux/iflow会话
         model = self.config.get("model", "kimi-k2.5")
         workspace = self.config.get("workspace", "~/.iflow")
         auto_restart = self.config.get("auto_restart", True)
@@ -410,8 +411,11 @@ class IFlowInteractiveTool:
         # 等待一下，让消息处理完成
         await asyncio.sleep(1)
     
-    async def wait_for_complete(self, timeout: float = 120.0) -> bool:
-        """等待回复完成（可中断）
+    async def wait_for_complete(self, timeout: float = 600.0) -> bool:
+        """等待回复完成（基于状态的智能等待）
+        
+        Args:
+            timeout: 全局超时时间（秒），默认 10 分钟
         
         Returns:
             是否正常完成（True: 完成，False: 被中断或超时）
@@ -422,7 +426,7 @@ class IFlowInteractiveTool:
         # 清空中断标志
         self._interrupt_event.clear()
         
-        print(f"等待回复完成（超时: {timeout}秒，按 Ctrl+C 中断）...")
+        print(f"等待回复完成（全局超时: {timeout}秒，按 Ctrl+C 中断）...")
         
         # 轮询状态
         elapsed = 0.0
@@ -430,7 +434,6 @@ class IFlowInteractiveTool:
         
         # 等待至少收到一条消息
         while elapsed < timeout and len(self.message_history) == 0:
-            # 检查是否被中断
             if self._interrupt_event.is_set():
                 print(f"\n   ⚠️ 等待已被中断")
                 return False
@@ -447,9 +450,13 @@ class IFlowInteractiveTool:
             return False
         
         print(f"\n   ✅ 收到 {len(self.message_history)} 条消息")
+        logger.info(f"[Tool] 收到 {len(self.message_history)} 条消息，进入状态检查循环")
         
-        # 等待状态变为 IDLE
+        # 基于状态的智能等待
         start_time = elapsed
+        last_message_count = len(self.message_history)
+        stable_count = 0  # 稳定计数器
+        
         while elapsed < timeout:
             # 检查是否被中断
             if self._interrupt_event.is_set():
@@ -460,22 +467,69 @@ class IFlowInteractiveTool:
             elapsed += check_interval
             
             current_state = self.module.state
+            generating_duration = self.module.generating_duration
+            message_count = len(self.message_history)
             
-            if int(elapsed) % 5 == 0:
-                print(f"   等待生成完成... {int(elapsed)}秒 (状态: {current_state.value})", end='\r', flush=True)
+            # 记录状态检查日志
+            logger.info(f"[Tool] 状态检查: elapsed={elapsed:.1f}s, state={current_state.value}, IDLE={current_state == IFlowState.IDLE}, messages={message_count}")
             
-            # 检查状态是否为 IDLE
+            # 每秒显示进度（优化显示逻辑）
+            if int(elapsed) % 5 == 0 or message_count > last_message_count:
+                if current_state == IFlowState.GENERATING:
+                    print(f"   生成中... 已持续 {generating_duration}秒，{message_count} 条消息 (总耗时 {int(elapsed)}秒)", 
+                          end='\r', flush=True)
+                else:
+                    print(f"   等待稳定... {int(elapsed)}秒", end='\r', flush=True)
+            
+            # 更新消息计数和稳定计数
+            if message_count == last_message_count:
+                stable_count += 1
+            else:
+                stable_count = 0
+                last_message_count = message_count
+            
+            # 核心改进：基于状态判断
             if current_state == IFlowState.IDLE:
-                # 额外等待 2 秒，确保状态稳定
+                # 状态已变为 IDLE，额外等待 2 秒确保稳定
+                print(f"\n   检测到状态变为 IDLE，等待 2 秒确认...")
+                logger.info(f"[Tool] 检测到 IDLE 状态，等待 2 秒确认...")
                 await asyncio.sleep(2)
-                if self.module.state == IFlowState.IDLE:
-                    print(f"\n✅ 生成完成 (耗时 {elapsed:.1f}秒)")
+                
+                # 再次确认状态
+                final_state = self.module.state
+                logger.info(f"[Tool] 状态确认: final_state={final_state.value}, expected=IDLE")
+                
+                if final_state == IFlowState.IDLE:
+                    print(f"\n✅ 生成完成 (总耗时 {elapsed:.1f}秒，生成持续 {generating_duration}秒)")
+                    print(f"   共收到 {len(self.message_history)} 条消息")
+                    logger.info(f"[Tool] 等待完成，返回 True")
                     return True
+                else:
+                    # 状态又变回 GENERATING，继续等待
+                    print(f"\n   状态再次变为生成中，继续等待...")
+                    logger.warning(f"[Tool] 状态回退: IDLE -> {final_state.value}")
+                    stable_count = 0
+            
+            # 强制完成检查：如果状态稳定为IDLE且30秒没有新消息，强制完成
+            if stable_count >= 30 and current_state == IFlowState.IDLE and message_count > 0:
+                logger.warning(f"[Tool] 消息历史已稳定30秒且状态为IDLE，强制完成")
+                print(f"\n⚠️ 消息历史已稳定且状态为IDLE，强制完成")
+                print(f"✅ 生成完成 (总耗时 {elapsed:.1f}秒)")
+                return True
+            
+            # 提示：如果生成时间超过 5 分钟，显示提示
+            if generating_duration > 300 and int(elapsed) % 60 == 0:
+                print(f"\n   💡 提示：生成已持续 {generating_duration}秒，请耐心等待...", end='', flush=True)
         
-        # 超时
-        logger.warning(f"[Tool] ⚠️ 等待超时 ({timeout}秒)")
-        logger.warning(f"[Tool] 最终状态: {self.module.state.value}, 消息数: {len(self.message_history)}")
-        print(f"\n   ⚠️ 超时 ({timeout}秒)")
+        # 全局超时
+        final_state = self.module.state
+        final_duration = self.module.generating_duration
+        logger.warning(f"[Tool] ⚠️ 全局超时 ({timeout}秒)")
+        logger.warning(f"[Tool] 最终状态: {final_state.value}, 生成持续: {final_duration}秒, 消息数: {len(self.message_history)}")
+        print(f"\n   ⚠️ 全局超时 ({timeout}秒)")
+        print(f"   最终状态: {final_state.value}")
+        print(f"   生成持续: {final_duration}秒")
+        print(f"   收到消息: {len(self.message_history)} 条")
         return False
     
     async def interactive_loop(self):
