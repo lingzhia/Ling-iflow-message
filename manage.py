@@ -80,7 +80,6 @@ def get_channel_info(config_path: str) -> dict:
         channels[bot['name']] = {
             'type': 'wechat',
             'name': bot['name'],
-            'enabled': bot.get('enabled', True),
             'tmux_session': f"{bot['name']}+iflow"
         }
 
@@ -90,7 +89,6 @@ def get_channel_info(config_path: str) -> dict:
         channels[sim['name']] = {
             'type': 'simulator',
             'name': sim['name'],
-            'enabled': sim.get('enabled', False),
             'tmux_session': f"{sim['name']}+iflow"
         }
     
@@ -104,13 +102,9 @@ def get_available_channels(config_path: str) -> list:
 
 
 def get_default_channel(config_path: str) -> str:
-    """获取默认渠道名称"""
+    """获取默认渠道名称（返回第一个渠道）"""
     channel_info = get_channel_info(config_path)
-    # 返回第一个启用的渠道
-    for channel_name, channel_config in channel_info.items():
-        if channel_config.get('enabled', False):
-            return channel_name
-    # 如果没有启用的渠道，返回第一个渠道
+    # 直接返回第一个渠道
     if channel_info:
         return list(channel_info.keys())[0]
     return "wechat_bot1"
@@ -136,18 +130,16 @@ def get_all_tmux_sessions(config_path: str) -> list:
     # 从 bots 中获取
     bots = config.get('bots', [])
     for bot in bots:
-        if bot.get('enabled', False):
-            tmux_session = f"{bot['name']}+iflow"
-            if tmux_session not in tmux_sessions:
-                tmux_sessions.append(tmux_session)
+        tmux_session = f"{bot['name']}+iflow"
+        if tmux_session not in tmux_sessions:
+            tmux_sessions.append(tmux_session)
 
     # 从 simulator_channels 中获取
     simulators = config.get('simulator_channels', [])
     for sim in simulators:
-        if sim.get('enabled', False):
-            tmux_session = f"{sim['name']}+iflow"
-            if tmux_session not in tmux_sessions:
-                tmux_sessions.append(tmux_session)
+        tmux_session = f"{sim['name']}+iflow"
+        if tmux_session not in tmux_sessions:
+            tmux_sessions.append(tmux_session)
 
     return tmux_sessions
 
@@ -187,26 +179,22 @@ def start(
         if config_data.get('bots'):
             for bot in config_data['bots']:
                 channel_name = bot['name']
-                enabled = bot.get('enabled', False)
                 tmux_session = f"{bot['name']}+iflow"
-                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}" if enabled else f"{COLOR_RED}未启用{COLOR_RESET}"
                 type_icon = "📱企业微信"
-                print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+                print(f"  {channel_name:<20} {type_icon:<10} 可用       {tmux_session:<25}")
 
         # 显示模拟器渠道
         if config_data.get('simulator_channels'):
             for sim in config_data['simulator_channels']:
                 channel_name = sim['name']
-                enabled = sim.get('enabled', False)
                 tmux_session = f"{sim['name']}+iflow"
-                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}" if enabled else f"{COLOR_RED}未启用{COLOR_RESET}"
                 type_icon = "🔧模拟器"
-                print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+                print(f"  {channel_name:<20} {type_icon:<10} 可用       {tmux_session:<25}")
 
         # 显示默认渠道
         default_channel = get_default_channel(config)
         print()
-        print_info(f"默认渠道: {default_channel}（第一个启用的渠道）")
+        print_info(f"默认渠道: {default_channel}（第一个渠道）")
         print()
         print_info("使用示例:")
         print("  ./manage.py start                      # 启动默认渠道")
@@ -328,21 +316,17 @@ def stop(
         if config_data.get('bots'):
             for bot in config_data['bots']:
                 channel_name = bot['name']
-                enabled = bot.get('enabled', False)
                 tmux_session = f"{bot['name']}+iflow"
-                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}" if enabled else f"{COLOR_RED}未启用{COLOR_RESET}"
                 type_icon = "📱企业微信"
-                print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+                print(f"  {channel_name:<20} {type_icon:<10} 可用       {tmux_session:<25}")
 
         # 显示模拟器渠道
         if config_data.get('simulator_channels'):
             for sim in config_data['simulator_channels']:
                 channel_name = sim['name']
-                enabled = sim.get('enabled', False)
                 tmux_session = f"{sim['name']}+iflow"
-                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}" if enabled else f"{COLOR_RED}未启用{COLOR_RESET}"
                 type_icon = "🔧模拟器"
-                print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+                print(f"  {channel_name:<20} {type_icon:<10} 可用       {tmux_session:<25}")
 
         print()
         print_info("使用示例:")
@@ -507,21 +491,17 @@ def restart(
         if config_data.get('bots'):
             for bot in config_data['bots']:
                 channel_name = bot['name']
-                enabled = bot.get('enabled', False)
                 tmux_session = f"{bot['name']}+iflow"
-                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}" if enabled else f"{COLOR_RED}未启用{COLOR_RESET}"
                 type_icon = "📱企业微信"
-                print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+                print(f"  {channel_name:<20} {type_icon:<10} 可用       {tmux_session:<25}")
 
         # 显示模拟器渠道
         if config_data.get('simulator_channels'):
             for sim in config_data['simulator_channels']:
                 channel_name = sim['name']
-                enabled = sim.get('enabled', False)
                 tmux_session = f"{sim['name']}+iflow"
-                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}" if enabled else f"{COLOR_RED}未启用{COLOR_RESET}"
                 type_icon = "🔧模拟器"
-                print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+                print(f"  {channel_name:<20} {type_icon:<10} 可用       {tmux_session:<25}")
 
         print()
         print_info("使用示例:")
@@ -741,16 +721,13 @@ def status(config: str = typer.Option("config.json", "--config", "-c", help="配
     if config_data.get('bots'):
         for bot in config_data['bots']:
             channel_name = bot['name']
-            enabled = bot.get('enabled', False)
             tmux_session = f"{bot['name']}+iflow"
             is_running = channel_name in running_channels
 
             if is_running:
                 status_icon = f"{COLOR_GREEN}已启动{COLOR_RESET}"
-            elif enabled:
-                status_icon = f"{COLOR_YELLOW}未启动{COLOR_RESET}"
             else:
-                status_icon = f"{COLOR_RED}未启用{COLOR_RESET}"
+                status_icon = f"{COLOR_YELLOW}未启动{COLOR_RESET}"
 
             type_icon = "📱企业微信"
             print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
@@ -759,16 +736,13 @@ def status(config: str = typer.Option("config.json", "--config", "-c", help="配
     if config_data.get('simulator_channels'):
         for sim in config_data['simulator_channels']:
             channel_name = sim['name']
-            enabled = sim.get('enabled', False)
             tmux_session = f"{sim['name']}+iflow"
             is_running = channel_name in running_channels
 
             if is_running:
                 status_icon = f"{COLOR_GREEN}已启动{COLOR_RESET}"
-            elif enabled:
-                status_icon = f"{COLOR_YELLOW}未启动{COLOR_RESET}"
             else:
-                status_icon = f"{COLOR_RED}未启用{COLOR_RESET}"
+                status_icon = f"{COLOR_YELLOW}未启动{COLOR_RESET}"
 
             type_icon = "🔧模拟器"
             print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
@@ -776,7 +750,7 @@ def status(config: str = typer.Option("config.json", "--config", "-c", help="配
     # 显示默认渠道
     default_channel = get_default_channel(config)
     print()
-    print_info(f"默认渠道: {default_channel}（第一个启用的渠道）")
+    print_info(f"默认渠道: {default_channel}（第一个渠道）")
     print()
     print_info("操作提示:")
     print("  ./manage.py start                      # 启动默认渠道")
@@ -920,36 +894,24 @@ def list_channels(config: str = typer.Option("config.json", "--config", "-c", he
     if config_data.get('bots'):
         for bot in config_data['bots']:
             channel_name = bot['name']
-            enabled = bot.get('enabled', False)
             tmux_session = f"{bot['name']}+iflow"
 
-            if enabled:
-                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}"
-            else:
-                status_icon = f"{COLOR_RED}未启用{COLOR_RESET}"
-
             type_icon = "📱企业微信"
-            print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+            print(f"  {channel_name:<20} {type_icon:<10} 可用       {tmux_session:<25}")
 
     # 显示模拟器渠道
     if config_data.get('simulator_channels'):
         for sim in config_data['simulator_channels']:
             channel_name = sim['name']
-            enabled = sim.get('enabled', False)
             tmux_session = f"{sim['name']}+iflow"
 
-            if enabled:
-                status_icon = f"{COLOR_GREEN}已启用{COLOR_RESET}"
-            else:
-                status_icon = f"{COLOR_RED}未启用{COLOR_RESET}"
-
             type_icon = "🔧模拟器"
-            print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+            print(f"  {channel_name:<20} {type_icon:<10} 可用       {tmux_session:<25}")
 
     # 显示默认渠道
     default_channel = get_default_channel(config)
     print()
-    print_success(f"默认渠道: {default_channel}（第一个启用的渠道）")
+    print_success(f"默认渠道: {default_channel}（第一个渠道）")
     print()
     print_info("操作提示:")
     print("  ./manage.py start                      # 启动默认渠道")

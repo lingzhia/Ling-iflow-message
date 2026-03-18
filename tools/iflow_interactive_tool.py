@@ -23,13 +23,18 @@ IFlowModule 交互式体验工具
     python tools/iflow_interactive_tool.py --message "第二条消息"
     python tools/iflow_interactive_tool.py --message "第三条消息"
 
+    # 指定正在运行的 tmux 会话
+    python tools/iflow_interactive_tool.py --tmux-session mysession --message "你好"
+
 选项：
-    --config PATH    配置文件路径（默认 config.json）
-    --message TEXT   命令行模式：发送消息后退出
-    --scope MODE     scope 模式：all 或 reply_only（默认）
-    --clean          清理残留的 tmux 会话（默认不复用）
-    --keep-alive     保持 tmux 会话（默认，命令行模式）
-    --cleanup        销毁 tmux 会话（命令行模式）
+    --config PATH        配置文件路径（默认 config.json）
+    --message TEXT       命令行模式：发送消息后退出
+    --scope MODE         scope 模式：all 或 reply_only（默认）
+    --tmux-session NAME  tmux 会话名称（默认 "iflow"）
+    --clean              清理残留的 tmux 会话（默认不复用）
+    --keep-alive         保持 tmux 会话（默认）
+    --cleanup            销毁 tmux 会话（结束时）
+    --no-cleanup         保留 tmux 会话（结束时）
 """
 
 import sys
@@ -138,13 +143,14 @@ class IFlowInteractiveTool:
     模拟消息总线与 IFlowModule 交互。
     """
 
-    def __init__(self, config_path: str = "config.json", clean: bool = False, keep_alive: bool = True):
+    def __init__(self, config_path: str = "config.json", clean: bool = False, keep_alive: bool = True, tmux_session: str = "iflow"):
         """初始化工具
 
         Args:
             config_path: 配置文件路径
             clean: 是否清理残留的 tmux 会话
             keep_alive: 是否保持 tmux 会话（默认 True）
+            tmux_session: tmux 会话名称（默认 "iflow"）
         """
         self.config_path = config_path
         self.config = self._load_config(config_path)
@@ -152,6 +158,7 @@ class IFlowInteractiveTool:
         self.module: Optional[IFlowModule] = None
         self.clean = clean  # 是否清理残留的 tmux 会话
         self.keep_alive = keep_alive  # 是否保持 tmux 会话
+        self.tmux_session_name = tmux_session  # tmux 会话名称
 
         # 当前身份和模式
         self.current_source: str = "tool"
@@ -197,13 +204,15 @@ class IFlowInteractiveTool:
         print(f"\n正在创建 IFlowModule 实例...")
 
         # 工具负责从配置文件读取参数，然后传递给 IFlowModule
-        # 使用固定的tmux会话名称，避免创建大量tmux会话
-        tmux_session = "iflow"  # 固定使用tmux/iflow会话
+        # 使用指定的tmux会话名称
+        tmux_session = self.tmux_session_name
         model = self.config.get("model", "kimi-k2.5")
         workspace = self.config.get("workspace", "~/.iflow")
         auto_restart = self.config.get("auto_restart", True)
         log_interactions = self.config.get("log_interactions", True)
         log_dir = self.config.get("log_dir", "logs/interactions")
+
+        print(f"  tmux 会话: {tmux_session}")
 
         # 检查并清理残留的 tmux 会话（仅在 clean=True 时）
         if self.clean and tmux_session:
@@ -252,6 +261,13 @@ class IFlowInteractiveTool:
         
         # 设置钩子（拦截返回的消息）
         self.module.set_message_sent_hook(self._on_iflow_message)
+        
+        # 同步 scope 到 IFlowModule 的 reply_mode（方案5）
+        # 这样 IFlowModule 才会根据工具的 scope 来正确过滤消息
+        if self.current_scope == "all":
+            self.module.set_reply_mode("all_messages")
+        else:
+            self.module.set_reply_mode("reply_only")
         
         print(f"  模块 ID: {self.module.module_id}")
         print(f"  tmux 会话: {self.module.tmux_session or '(启动时分配)'}")
@@ -320,20 +336,23 @@ class IFlowInteractiveTool:
         """接收 IFlowModule 返回的消息（通过钩子）"""
         logger.debug(f"[Tool] 收到消息: id={message.id}")
         
-        # 适配新的消息格式：使用 type 字段
-        message_type = None
+        # 添加完整内容日志（方案2）
+        logger.debug(f"[Tool] 消息详情:")
+        logger.debug(f"  完整内容 ({len(message.content.text)} 字符): {message.content.text}")
+        logger.debug(f"  content.type: {message.content.type}")
+        logger.debug(f"  metadata: {message.metadata}")
         
-        # 尝试从 content.type 获取
-        if hasattr(message.content, 'type'):
-            message_type = message.content.type.value if hasattr(message.content.type, 'value') else str(message.content.type)
+        # 修复消息类型识别逻辑（方案3）：优先使用 metadata.reply_type
+        message_type = message.metadata.get('reply_type', None)
         
-        # 如果没有，尝试从 metadata 获取
+        # 如果 metadata.reply_type 不存在，再尝试从 content.type 获取
         if message_type is None:
-            message_type = message.metadata.get('type', 'unknown')
+            if hasattr(message.content, 'type'):
+                message_type = message.content.type.value if hasattr(message.content.type, 'value') else str(message.content.type)
         
-        # 兼容旧格式：尝试从 metadata.get('reply_type') 获取
-        if message_type == 'unknown':
-            message_type = message.metadata.get('reply_type', 'unknown')
+        # 如果还是 unknown，尝试从 metadata.get('type') 获取
+        if message_type is None or message_type == 'unknown':
+            message_type = message.metadata.get('type', 'unknown')
         
         logger.debug(f"[Tool] 消息类型: {message_type}")
         
@@ -359,9 +378,16 @@ class IFlowInteractiveTool:
             print(f"{message.content.text}")
             print("─" * 60)
         else:
-            # 思考消息，根据 scope 决定是否显示
+            # 其他类型（思考消息、其他消息），根据 scope 决定是否显示
             if self.current_scope == "all":
-                print(f"\n💭 [✻ 思考] {message.content.text[:100]}{'...' if len(message.content.text) > 100 else ''}")
+                print("\n" + "─" * 60)
+                print(f"💭 iflow {message_type}:")
+                print("─" * 60)
+                print(f"{message.content.text}")
+                print("─" * 60)
+            else:
+                # reply_only 模式，不显示思考消息
+                logger.debug(f"[Tool] 跳过非回复消息 (type={message_type}, scope={self.current_scope})")
     
     async def send_message(self, content: str):
         """发送消息到 IFlowModule（模拟消息总线）"""
@@ -790,6 +816,7 @@ async def main():
     scope = "reply_only"
     clean = False
     keep_alive = True  # 默认保持会话
+    tmux_session = "iflow"  # 默认 tmux 会话名称
 
     # 解析命令行参数
     args = sys.argv[1:]
@@ -808,15 +835,20 @@ async def main():
         elif arg == '--scope' and i + 1 < len(args):
             scope = args[i + 1]
             i += 1
+        elif arg == '--tmux-session' and i + 1 < len(args):
+            tmux_session = args[i + 1]
+            i += 1
         elif arg == '--clean':
             clean = True
         elif arg == '--keep-alive':
             keep_alive = True
         elif arg == '--cleanup':
-            keep_alive = False
+            keep_alive = False  # 结束时销毁会话
+        elif arg == '--no-cleanup':
+            keep_alive = True  # 结束时保留会话
         i += 1
 
-    tool = IFlowInteractiveTool(config_path, clean=clean, keep_alive=keep_alive)
+    tool = IFlowInteractiveTool(config_path, clean=clean, keep_alive=keep_alive, tmux_session=tmux_session)
 
     try:
         await tool.start()

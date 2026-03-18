@@ -134,9 +134,6 @@ class LingIflowBot:
         
         for bot_config in bots_config:
             bot_name = bot_config.get("name")
-            if not bot_config.get("enabled", True):
-                logger.info(f"跳过已禁用的企业微信模块: {bot_name}")
-                continue
             
             try:
                 module_id = f"wechat_{bot_name}"
@@ -161,9 +158,6 @@ class LingIflowBot:
         
         for sim_config in simulator_config:
             sim_name = sim_config.get("name")
-            if not sim_config.get("enabled", False):
-                logger.info(f"跳过已禁用的模拟器模块: {sim_name}")
-                continue
             
             try:
                 module_id = f"simulator_{sim_name}"
@@ -184,15 +178,14 @@ class LingIflowBot:
         """为每个渠道创建对应的 iflow 模块和绑定关系"""
         # 设置企业微信渠道的 iflow 模块
         for bot_config in self.config.get("bots", []):
-            if isinstance(bot_config, dict) and bot_config.get("enabled", True):
+            if isinstance(bot_config, dict):
                 bot_name = bot_config.get("name")
                 await self._setup_channel_iflow(bot_name, bot_config)
         
         # 设置模拟器渠道的 iflow 模块
         for sim_config in self.config.get("simulator_channels", []):
-            if sim_config.get("enabled", False):
-                sim_name = sim_config.get("name")
-                await self._setup_channel_iflow(sim_name, sim_config)
+            sim_name = sim_config.get("name")
+            await self._setup_channel_iflow(sim_name, sim_config)
     
     async def _setup_channel_iflow(self, channel_name: str, channel_config: Dict) -> None:
         """为特定渠道设置 iflow 模块和绑定关系
@@ -357,7 +350,7 @@ class LingIflowBot:
             if channel_name not in self.wechat_modules:
                 # 尝试从配置中查找企业微信配置
                 for bot_config in self.config.get("bots", []):
-                    if bot_config.get("name") == channel_name and bot_config.get("enabled", True):
+                    if bot_config.get("name") == channel_name:
                         module_id = f"wechat_{channel_name}"
                         logger.info(f"动态创建企业微信模块: {module_id}")
                         wechat = await self.manager.create_module(
@@ -375,7 +368,7 @@ class LingIflowBot:
             if channel_name not in self.simulator_modules:
                 # 尝试从配置中查找模拟器配置
                 for sim_config in self.config.get("simulator_channels", []):
-                    if sim_config.get("name") == channel_name and sim_config.get("enabled", False):
+                    if sim_config.get("name") == channel_name:
                         module_id = f"simulator_{channel_name}"
                         logger.info(f"动态创建模拟器模块: {module_id}")
                         simulator = await self.manager.create_module(
