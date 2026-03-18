@@ -145,8 +145,9 @@ class LingIflowBot:
                     module_id=module_id,
                     config=bot_config
                 )
-                # 设置 manager 引用
+                # 设置 manager 和 bot 引用
                 wechat.set_manager(self.manager)
+                wechat.set_bot(self)
                 self.wechat_modules[bot_name] = wechat
                 await self.manager.register_module(module_id)
                 logger.info(f"创建企业微信模块: {module_id}")
@@ -173,6 +174,7 @@ class LingIflowBot:
                 )
                 self.simulator_modules[sim_name] = simulator
                 simulator.set_manager(self.manager)
+                simulator.set_bot(self)
                 await self.manager.register_module(module_id)
                 logger.info(f"创建模拟器模块: {module_id}")
             except Exception as e:
@@ -351,6 +353,42 @@ class LingIflowBot:
         results = {}
         
         try:
+            # 检查并创建企业微信模块（如果不存在）
+            if channel_name not in self.wechat_modules:
+                # 尝试从配置中查找企业微信配置
+                for bot_config in self.config.get("bots", []):
+                    if bot_config.get("name") == channel_name and bot_config.get("enabled", True):
+                        module_id = f"wechat_{channel_name}"
+                        logger.info(f"动态创建企业微信模块: {module_id}")
+                        wechat = await self.manager.create_module(
+                            module_type="wechat",
+                            module_id=module_id,
+                            config=bot_config
+                        )
+                        wechat.set_manager(self.manager)
+                        wechat.set_bot(self)
+                        self.wechat_modules[channel_name] = wechat
+                        await self.manager.register_module(module_id)
+                        break
+            
+            # 检查并创建模拟器模块（如果不存在）
+            if channel_name not in self.simulator_modules:
+                # 尝试从配置中查找模拟器配置
+                for sim_config in self.config.get("simulator_channels", []):
+                    if sim_config.get("name") == channel_name and sim_config.get("enabled", False):
+                        module_id = f"simulator_{channel_name}"
+                        logger.info(f"动态创建模拟器模块: {module_id}")
+                        simulator = await self.manager.create_module(
+                            module_type="simulator",
+                            module_id=module_id,
+                            config=sim_config
+                        )
+                        simulator.set_manager(self.manager)
+                        simulator.set_bot(self)
+                        self.simulator_modules[channel_name] = simulator
+                        await self.manager.register_module(module_id)
+                        break
+            
             # 启动企业微信模块
             if channel_name in self.wechat_modules:
                 wechat_module_id = f"wechat_{channel_name}"
@@ -363,8 +401,26 @@ class LingIflowBot:
                 result = await self.manager.start_module(simulator_module_id)
                 results[simulator_module_id] = result.success
             
-            # 启动对应的 iflow 模块
+            # 检查并创建 iflow 模块（如果不存在）
             iflow_module_id = f"iflow_{channel_name}"
+            if iflow_module_id not in self.manager.modules:
+                logger.info(f"动态创建 iflow 模块: {iflow_module_id}")
+                # 查找渠道配置
+                channel_config = None
+                for bot_config in self.config.get("bots", []):
+                    if bot_config.get("name") == channel_name:
+                        channel_config = bot_config
+                        break
+                if not channel_config:
+                    for sim_config in self.config.get("simulator_channels", []):
+                        if sim_config.get("name") == channel_name:
+                            channel_config = sim_config
+                            break
+                
+                if channel_config:
+                    await self._setup_channel_iflow(channel_name, channel_config)
+            
+            # 启动对应的 iflow 模块
             result = await self.manager.start_module(iflow_module_id)
             results[iflow_module_id] = result.success
             
@@ -373,6 +429,8 @@ class LingIflowBot:
             
         except Exception as e:
             logger.error(f"启动渠道失败 {channel_name}: {e}")
+            import traceback
+            traceback.print_exc()
         
         return results
     
@@ -534,13 +592,8 @@ class LingIflowBot:
             
             logger.info(f"Unix Socket控制服务器已启动: {self.control_socket_path}")
             
-            # 启动服务器
-            async with server:
-                self.control_server_task = asyncio.create_task(server.serve_forever())
-                try:
-                    await asyncio.sleep(float('inf'))
-                except asyncio.CancelledError:
-                    logger.info("Unix Socket控制服务器已停止")
+            # 启动服务器（不阻塞）
+            self.control_server_task = asyncio.create_task(server.serve_forever())
         except Exception as e:
             logger.error(f"启动Unix Socket控制服务器失败: {e}")
     

@@ -21,6 +21,8 @@ class MessageType(Enum):
     FILE = "file"
     SYSTEM = "system"
     ERROR = "error"
+    REPLY = "reply"
+    OTHER = "other"
 
 
 @dataclass

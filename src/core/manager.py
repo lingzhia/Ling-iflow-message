@@ -1219,6 +1219,7 @@ class ModuleManager:
         except asyncio.TimeoutError:
             logger.warning(f"[ModuleManager] 健康检查超时: {module_id}")
             self.module_states[module_id].healthy = False
+            self.module_states[module_id].error = "健康检查超时"
         except Exception as e:
             logger.error(f"[ModuleManager] 健康检查失败: {module_id}, {e}")
             self.module_states[module_id].healthy = False

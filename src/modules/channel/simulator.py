@@ -297,6 +297,19 @@ class SimulatorChannel(BaseModule):
         """
         try:
             # 转换为 Socket 消息格式
+            # 根据消息类型设置 message_type
+            from ...core.message import MessageType
+            message_type_map = {
+                MessageType.REPLY: "reply",
+                MessageType.OTHER: "other",
+                MessageType.TEXT: "text",
+                MessageType.IMAGE: "image",
+                MessageType.FILE: "file"
+            }
+            
+            # 从metadata中获取scope（如果存在）
+            scope = message.metadata.get("scope", "all") if message.metadata else "all"
+            
             message_json = {
                 "type": "reply_message",
                 "id": Message.generate_id(),
@@ -304,8 +317,8 @@ class SimulatorChannel(BaseModule):
                 "timestamp": asyncio.get_event_loop().time(),
                 "content": message.content.text if message.content else "",
                 "metadata": {
-                    "message_type": "text",
-                    "scope": "reply"
+                    "message_type": message_type_map.get(message.type, "text"),
+                    "scope": scope
                 }
             }
             

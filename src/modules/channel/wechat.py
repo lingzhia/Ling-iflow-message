@@ -552,7 +552,7 @@ class WeChatChannel(BaseModule):
             
             # 消息确认机制：立即发送确认消息
             if content:
-                confirmation = f"✅ 收到消息\n\n正在处理中...\n\n消息内容: {content[:100]}{'...' if len(content) > 100 else ''}"
+                confirmation = f"✅ 收到消息\n正在处理中...\n消息内容: {content[:100]}{'...' if len(content) > 100 else ''}"
                 await self.send_message(confirmation, chat_id, is_group)
                 logger.info(f"[{self.module_id}] 已发送消息确认到 {chat_id}")
             

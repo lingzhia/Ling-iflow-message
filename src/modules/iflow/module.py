@@ -504,20 +504,23 @@ class IFlowModule(BaseModule):
             recent = self.message_store.get_recent_processing()
             if recent:
                 source = recent.source
-                scope = recent.scope
                 current_id = recent.message_id
                 # 恢复当前消息 ID（临时）
                 self.message_store._current_message_id = current_id
                 logger.debug(f"[{self.module_id}] 恢复消息归属: {current_id}, source={source}")
         
-        # 检查 reply_mode 过滤（优先于 scope 过滤）
+        # 关键修复：使用 reply_mode 而不是 scope 来过滤消息
+        # scope 只用于记录消息的来源范围，reply_mode 用于控制发送行为
         if not self.should_send_message(message):
             logger.debug(f"[{self.module_id}] 过滤消息 (reply_mode={self.reply_mode}, type={message.type.value})")
             return
         
-        # 检查 scope 过滤
-        if scope == "reply_only" and message.type != MessageType.REPLY:
-            logger.debug(f"[{self.module_id}] 过滤非回复消息 (scope={scope})")
+        # 使用 reply_mode 进行过滤（不再使用 scope）
+        # reply_mode 是全局设置，通过 /scope 命令控制
+        # scope 是消息级别属性，用于记录消息的来源范围
+        effective_scope = "reply_only" if self.reply_mode == "reply_only" else "all"
+        if effective_scope == "reply_only" and message.type != MessageType.REPLY:
+            logger.debug(f"[{self.module_id}] 过滤非回复消息 (reply_mode={self.reply_mode}, effective_scope={effective_scope})")
             return
         
         # 设置接收方和范围
