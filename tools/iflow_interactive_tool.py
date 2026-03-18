@@ -94,7 +94,6 @@ class MockMessageBus:
     def __init__(self):
         self._iflow_module = None
         self._message_callback = None  # 消息回调（用于接收来自 iflow 的消息）
-        self._processed_message_ids = set()  # 已处理的消息 ID（用于去重）
 
     def bind(self, from_module, to_module, bidirectional=False):
         """绑定（简化版，不需要路由逻辑）"""
@@ -113,18 +112,8 @@ class MockMessageBus:
 
         if is_from_iflow:
             # 来自 iflow 的消息，通过回调处理
-            # 去重：检查是否已处理
-            if message.id in self._processed_message_ids:
-                logger.debug(f"[MockMessageBus] 消息已处理，跳过: {message.id}")
-                return
-            
-            # 添加到已处理集合
-            self._processed_message_ids.add(message.id)
-            
-            # 限制集合大小
-            if len(self._processed_message_ids) > 1000:
-                self._processed_message_ids = set(list(self._processed_message_ids)[-500:])
-            
+            # 注意：新模块已有完善的去重机制（字符串定位+哈希定位）
+            # 工具不再需要额外的去重逻辑
             if self._message_callback:
                 try:
                     await self._message_callback(message)
@@ -286,6 +275,12 @@ class IFlowInteractiveTool:
             print("正在等待监控器稳定...")
             await asyncio.sleep(3.0)
             print("✅ 监控器已稳定")
+            
+            # 提示用户新的消息处理机制
+            print("\n💡 提示：新模块使用延迟记录原则")
+            print("   - 只有2条或更多消息时才开始记录和发送")
+            print("   - 第一条消息不会立即发送，等待第二条消息出现")
+            print("   - 新模块使用字符串定位+哈希定位去重")
         except Exception as e:
             print(f"\n❌ 启动失败: {e}")
             raise
@@ -322,28 +317,41 @@ class IFlowInteractiveTool:
     
     async def _on_iflow_message(self, message: Message):
         """接收 IFlowModule 返回的消息（通过钩子）"""
-        print(f"  _on_iflow_message 被调用")
+        logger.debug(f"[Tool] 收到消息: id={message.id}")
         
-        reply_type = message.metadata.get('reply_type', 'unknown')
+        # 适配新的消息格式：使用 type 字段
+        message_type = None
+        
+        # 尝试从 content.type 获取
+        if hasattr(message.content, 'type'):
+            message_type = message.content.type.value if hasattr(message.content.type, 'value') else str(message.content.type)
+        
+        # 如果没有，尝试从 metadata 获取
+        if message_type is None:
+            message_type = message.metadata.get('type', 'unknown')
+        
+        # 兼容旧格式：尝试从 metadata.get('reply_type') 获取
+        if message_type == 'unknown':
+            message_type = message.metadata.get('reply_type', 'unknown')
+        
+        logger.debug(f"[Tool] 消息类型: {message_type}")
         
         # 记录历史
         self.message_history.append({
             "timestamp": datetime.now().isoformat(),
-            "type": reply_type,
+            "type": message_type,
             "content": message.content.text,
             "metadata": message.metadata
         })
         
-        print(f"  消息已记录: {reply_type}")
-        
         # 显示消息（优化界面格式）
-        if reply_type == 'complete':
+        if message_type == 'complete':
             print("\n" + "=" * 60)
             print("✅ 交互完成")
             print("=" * 60)
             print(f"{message.content.text}")
             print("=" * 60)
-        elif reply_type == 'reply':
+        elif message_type == 'reply':
             print("\n" + "─" * 60)
             print("📤 iflow 回复:")
             print("─" * 60)
@@ -622,6 +630,7 @@ class IFlowInteractiveTool:
         print("  quit/exit        - 退出")
         print("-" * 40)
         print(f"当前: source={self.current_source}, scope={self.current_scope}")
+        print("注意：新模块使用延迟记录原则，可能不会立即收到消息")
     
     async def _show_status(self):
         """显示状态"""

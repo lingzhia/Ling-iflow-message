@@ -82,13 +82,10 @@ class IFlowMonitor:
         self._initialization_time: Optional[datetime] = None
         
         # 消息记录（用于延迟记录原则）
-        self._current_messages: List[Dict] = []  # 当前提取的消息列表（按顺序）
-        self._sent_count: int = 0  # 已发送的消息数量
+        # 当前提取的消息列表（每次扫描都重新定位，不需要缓存）
         
         # 稳定检测（用于确认生成中真正消失）
-        self._stable_start_time: Optional[datetime] = None  # 稳定开始时间
-        self._stable_duration: float = 2.0  # 稳定持续时间（秒）
-        self._generating_state_started: bool = False  # 生成状态是否已开始
+        # 使用连续3次扫描判断，不需要时间变量
         
         # 消息定位（用于过滤发送消息前的内容）
         self._last_received_line: Optional[int] = None  # 记录接收消息的行号
@@ -101,6 +98,10 @@ class IFlowMonitor:
         
         # 消息去重（确保相同内容的消息只发送一次）
         self._sent_message_hashes: set = set()  # 已发送消息的内容哈希集合
+        self._sent_marker_strings: set = set()  # 已发送消息的标记行字符串集合（用于快速定位）
+        
+        # 结束判断（连续3次扫描）
+        self._missing_generating_count: int = 0  # "生成中"消失的次数
         
         # 统计信息
         self.stats = {
@@ -238,11 +239,8 @@ class IFlowMonitor:
                     logger.warning(f"[IFlowMonitor] Generating 状态持续超过 5 分钟（{duration}s），强制变回 idle")
                     self._state = IFlowState.IDLE
                     self._generating_start_time = None
-                    self._stable_start_time = None
                     self._generating_state_started = False
                     self._interaction_complete = False
-                    self._current_messages = []
-                    self._sent_count = 0
                     logger.info(f"[IFlowMonitor] State changed: {IFlowState.GENERATING.value} -> {IFlowState.IDLE.value} (timeout)")
             
             # 提取所有消息（只在GENERATING状态下提取）
@@ -256,7 +254,6 @@ class IFlowMonitor:
             # 调试日志：输出关键状态
             if self.stats["check_count"] % 5 == 0:  # 每5次检查输出一次
                 logger.debug(f"[IFlowMonitor] Check #{self.stats['check_count']}: state={self._state.value}, is_generating={is_generating}, "
-                           f"sent_count={self._sent_count}, "
                            f"current_count={len(current_messages)}")
                 
                 # 输出前几行用于调试
@@ -265,66 +262,64 @@ class IFlowMonitor:
                 for i, line in enumerate(lines[:10]):
                     logger.debug(f"  Line {i}: {line[:80]}")
             
-            # 延迟记录原则：找出新增的消息并记录发送
+            # 延迟记录原则：找出需要记录的消息并记录发送
             if self._state == IFlowState.GENERATING:
-                # 找出新增的消息（从已发送数量开始）
-                new_messages = current_messages[self._sent_count:]
+                # 只有2条或更多消息时才开始记录
+                if len(current_messages) < 2:
+                    logger.debug(f"[IFlowMonitor] 只有 {len(current_messages)} 条消息，不记录（延迟记录原则）")
+                    return
                 
-                if len(new_messages) > 0:
-                    logger.debug(f"[IFlowMonitor] 检测到 {len(new_messages)} 个新消息，已发送={self._sent_count}，当前总数={len(current_messages)}")
+                # 定位已记录的最新消息
+                last_sent_index = self._locate_last_sent_message(current_messages)
+                
+                # 计算需要记录的消息（已记录消息之后、最后一条消息之前）
+                if last_sent_index is None:
+                    # 未找到已记录的消息，记录第1条到倒数第2条
+                    messages_to_send = current_messages[:-1]
+                    logger.debug(f"[IFlowMonitor] 未找到已记录消息，记录第1条到倒数第2条：{len(messages_to_send)} 条")
+                else:
+                    # 找到已记录的消息，记录之后到倒数第2条
+                    messages_to_send = current_messages[last_sent_index + 1:-1]
+                    logger.debug(f"[IFlowMonitor] 找到已记录消息（索引={last_sent_index}），记录其后到倒数第2条：{len(messages_to_send)} 条")
+                
+                # 记录并发送消息
+                if len(messages_to_send) > 0:
+                    logger.debug(f"[IFlowMonitor] 记录并发送 {len(messages_to_send)} 条消息")
                     
-                    # 按顺序记录并发送新增的消息
-                    for i, message in enumerate(new_messages):
-                        # 记录消息
-                        self._sent_count += 1
+                    for i, message in enumerate(messages_to_send):
                         marker_symbol = message['marker_type']
-                        logger.debug(f"[IFlowMonitor] 记录消息 #{self._sent_count}: {marker_symbol} - {message['content'][:50]}...")
+                        logger.debug(f"[IFlowMonitor] 记录消息: {marker_symbol} - {message['content'][:50]}...")
                         
                         # 立即发送
                         await self._send_message(message)
-                        logger.info(f"[IFlowMonitor] 发送消息 #{self._sent_count}: {marker_symbol} - {message['content'][:50]}...")
-                
-                # 更新当前消息列表
-                self._current_messages = current_messages
+                        logger.info(f"[IFlowMonitor] 发送消息: {marker_symbol} - {message['content'][:50]}...")
                 
                 # 检测生成中是否消失
                 if not is_generating:
-                    # 生成中消失，开始稳定检测
-                    if self._stable_start_time is None:
-                        self._stable_start_time = datetime.now()
-                        logger.debug(f"[IFlowMonitor] 检测到生成中消失，开始稳定计时...")
-                    else:
-                        stable_time = (datetime.now() - self._stable_start_time).total_seconds()
-                        logger.debug(f"[IFlowMonitor] 等待稳定... ({stable_time:.1f}秒 / {self._stable_duration}秒)")
+                    # 生成中消失，增加计数
+                    self._missing_generating_count += 1
+                    logger.debug(f"[IFlowMonitor] 生成中消失，计数：{self._missing_generating_count}/3")
+                    
+                    # 连续3次扫描"生成中"消失，确认结束
+                    if self._missing_generating_count >= 3:
+                        # 确认结束
+                        logger.info(f"[IFlowMonitor] 连续3次扫描\"生成中\"消失，交互结束")
                         
-                        if stable_time >= self._stable_duration:
-                            # 稳定2秒，确认结束
-                            logger.info(f"[IFlowMonitor] 生成中稳定消失（{stable_time:.1f}s），交互结束")
+                        # 延迟记录原则：记录最后一条消息（倒数第1条）
+                        if len(current_messages) > 0:
+                            last_message = current_messages[-1]
+                            logger.debug(f"[IFlowMonitor] 记录最后一条消息: {last_message['marker_type']} - {last_message['content'][:50]}...")
                             
-                            # 记录剩余的所有消息
-                            remaining_messages = current_messages[self._sent_count:]
-                            
-                            if len(remaining_messages) > 0:
-                                logger.debug(f"[IFlowMonitor] 记录剩余的 {len(remaining_messages)} 个消息")
-                                
-                                # 按顺序记录并发送剩余的消息
-                                for message in remaining_messages:
-                                    # 记录消息
-                                    self._sent_count += 1
-                                    marker_symbol = message['marker_type']
-                                    logger.debug(f"[IFlowMonitor] 记录消息 #{self._sent_count}: {marker_symbol} - {message['content'][:50]}...")
-                                    
-                                    # 立即发送
-                                    await self._send_message(message)
-                                    logger.info(f"[IFlowMonitor] 发送消息 #{self._sent_count}: {marker_symbol} - {message['content'][:50]}...")
-                            
-                            # 清空缓存
-                            self._current_messages = []
-                            self._sent_count = 0
-                            self._stable_start_time = None
-                            
-                            # 清理去重集合（为下一次对话准备）
-                            self._sent_message_hashes.clear()
+                            # 立即发送
+                            await self._send_message(last_message)
+                            logger.info(f"[IFlowMonitor] 发送最后一条消息: {last_message['marker_type']} - {last_message['content'][:50]}...")
+                        
+                        # 清空缓存
+                        self._missing_generating_count = 0
+                        
+                        # 清理去重集合（为下一次对话准备）
+                        self._sent_message_hashes.clear()
+                        self._sent_marker_strings.clear()
                             
                             # 切换到IDLE状态（将在_check_state中触发）
             elif self._state == IFlowState.IDLE:
@@ -333,9 +328,10 @@ class IFlowMonitor:
             
             # 生成中存在，处理新增的消息
             elif is_generating:
-                if self._stable_start_time is not None:
-                    logger.debug(f"[IFlowMonitor] 生成中重新出现，重置稳定计时器")
-                    self._stable_start_time = None
+                # 生成中重新出现，重置消失计数
+                if self._missing_generating_count > 0:
+                    logger.debug(f"[IFlowMonitor] 生成中重新出现，重置消失计数")
+                    self._missing_generating_count = 0
                 
                 # 生成中重新出现，重置交互完成标志
                 if self._interaction_complete:
@@ -410,8 +406,6 @@ class IFlowMonitor:
             
             # 生成状态首次开始，清空缓存
             logger.debug(f"[IFlowMonitor] 生成状态首次开始，清空缓存")
-            self._current_messages = []
-            self._sent_count = 0
             self._generating_state_started = True
             
             # 触发状态变更回调
@@ -663,9 +657,15 @@ class IFlowMonitor:
             message_data: 消息数据字典
         """
         marker_symbol = message_data.get('marker_type', '')  # 标记符号（支持任意符号）
+        marker_only = message_data.get('marker_only', '')  # 标记行字符串（用于快速定位）
         full_content = message_data.get('content', '')
         
-        # 计算内容哈希（用于去重）
+        # 字符串定位（优先）
+        if marker_only in self._sent_marker_strings:
+            logger.debug(f"[IFlowMonitor] 消息已发送，跳过（标记行字符串相同）：{marker_only}")
+            return
+        
+        # 计算内容哈希（备用定位）
         content_hash = hashlib.md5(full_content.encode()).hexdigest()
         
         # 检查消息是否已发送（去重）
@@ -674,9 +674,13 @@ class IFlowMonitor:
             return
         
         # 添加到已发送集合
-        self._sent_message_hashes.add(content_hash)
+        self._sent_marker_strings.add(marker_only)  # 字符串定位
+        self._sent_message_hashes.add(content_hash)  # 哈希定位
         
         # 限制集合大小（防止内存泄漏）
+        if len(self._sent_marker_strings) > 1000:
+            # 保留最近的 500 个字符串
+            self._sent_marker_strings = set(list(self._sent_marker_strings)[-500:])
         if len(self._sent_message_hashes) > 1000:
             # 保留最近的 500 个哈希值
             self._sent_message_hashes = set(list(self._sent_message_hashes)[-500:])
@@ -698,6 +702,42 @@ class IFlowMonitor:
         self.stats["messages_extracted"] += 1
         
         logger.info(f"[IFlowMonitor] 发送消息: {full_content[:50]}")
+    
+    def _locate_last_sent_message(self, messages: List[Dict]) -> Optional[int]:
+        """定位已记录的最新消息
+        
+        使用字符串定位（优先）+ 哈希定位（备用）定位已记录的最新消息
+        
+        Args:
+            messages: 消息列表
+            
+        Returns:
+            已记录的最新消息的索引，如果未找到返回 None
+        """
+        # 从后往前查找标记行字符串
+        for i in range(len(messages) - 1, -1, -1):
+            message = messages[i]
+            marker_only = message.get('marker_only', '')
+            
+            # 字符串定位（优先）
+            if marker_only in self._sent_marker_strings:
+                # 检查是否有多个匹配（如果有，使用哈希定位）
+                matches = [j for j, msg in enumerate(messages) if msg.get('marker_only', '') == marker_only]
+                if len(matches) == 1:
+                    # 只有一个匹配，定位成功
+                    logger.debug(f"[IFlowMonitor] 定位成功（字符串）：索引={i}, 标记行字符串={marker_only}")
+                    return i
+                elif len(matches) > 1:
+                    # 多个匹配，使用哈希定位
+                    full_content = message.get('content', '')
+                    content_hash = hashlib.md5(full_content.encode()).hexdigest()
+                    if content_hash in self._sent_message_hashes:
+                        logger.debug(f"[IFlowMonitor] 定位成功（哈希）：索引={i}, 标记行字符串={marker_only}")
+                        return i
+        
+        # 未找到已记录的消息
+        logger.debug(f"[IFlowMonitor] 未找到已记录的消息")
+        return None
     
     def _clean_message_content(self, content: str) -> str:
         """清理消息内容，移除 iflow UI 元素
