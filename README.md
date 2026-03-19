@@ -2,196 +2,323 @@
 
 Ling-iflow 是一个 iflow CLI 交互模式管理工具，通过 tmux 管理和监控 iflow CLI 会话，实现与企业微信的双向消息同步。
 
-## 项目状态
+## 目录
 
-✅ **重构完成**
-
-项目已完成从紧耦合架构到基于消息总线的松耦合架构的重构。
-
-## 架构概述
-
-基于**发布-订阅模式**和**消息总线**设计，实现模块解耦：
-
-### 核心组件
-
-1. **企业微信消息模块** - 纯粹的企业微信 API 封装
-2. **消息总线** - 模块间消息路由和分发
-3. **iflow 消息模块** - iflow CLI 的完整管理
-4. **模块管理器** - 模块生命周期管理和状态监控
-
-### 核心优势
-
-- ✅ **解耦清晰** - 模块间通过消息总线通信
-- ✅ **扩展性强** - 添加新功能无需修改现有代码
-- ✅ **灵活度高** - 支持多对多绑定和动态绑定
-- ✅ **易于维护** - 模块独立开发测试，故障隔离
-- ✅ **统一管理** - 模块管理器统一管理模块生命周期和状态
-
-## 目录结构
-
-```
-Ling-iflow/
-├── src/                # 新版本（重构完成）
-│   ├── core/           # 核心基础类
-│   │   ├── base.py     # 模块基类
-│   │   ├── bus.py      # 消息总线
-│   │   ├── manager.py  # 模块管理器
-│   │   └── message.py  # 消息定义
-│   ├── modules/        # 模块实现
-│   │   ├── channel/    # 消息渠道
-│   │   │   ├── wechat.py    # 企业微信渠道
-│   │   │   └── simulator.py # 模拟器渠道
-│   │   ├── common/     # 通用组件
-│   │   │   ├── converter.py     # 消息转换器
-│   │   │   └── notifications.py # 通知管理器
-│   │   ├── iflow/      # iflow 模块
-│   │   └── command/    # 命令处理器
-│   └── bot.py          # 主程序入口
-├── manage.py           # 项目管理脚本
-├── src_old/            # 旧版本（备份）
-│   ├── channels/       # 渠道模块
-│   ├── interactive/    # 交互模式核心模块
-│   ├── config/         # 配置管理模块
-│   ├── cli/            # CLI 命令模块
-│   ├── utils/          # 工具函数模块
-│   ├── tool/           # 测试工具模块
-│   ├── design/         # 旧版本设计文档
-│   ├── manage.py       # 项目管理脚本
-│   ├── wechat_bot.py   # 企业微信 Bot 主程序
-│   ├── tmux_manager.py # tmux 管理工具
-│   └── README-old.md   # 旧版本 README 备份
-├── design-v2/          # 重构设计方案
-│   ├── 01-模块重构方案.md
-│   ├── 02-重构计划.md
-│   ├── 03-微信模块增强方案.md
-│   ├── 04-IFlow模块设计方案.md
-│   ├── 05-消息总线设计方案.md
-│   ├── 06-启动方案设计.md
-│   └── README.md
-├── tests/              # 测试文件
-│   ├── test_message_bus.py
-│   ├── test_base_module.py
-│   ├── test_iflow_module.py
-│   ├── test_wechat_module.py
-│   ├── test_command_handler.py
-│   ├── test_integration.py
-│   ├── test_full_integration.py
-│   └── mock_wechat.py
-├── tools/              # 测试工具
-│   ├── iflow_interactive_tool.py
-│   └── wechat_test_tool.py
-├── logs/               # 日志目录
-├── config.json         # 配置文件
-├── config.example.json # 配置示例
-├── pyproject.toml      # 项目依赖配置
-└── README.md           # 本文档
-```
-
-## 文档
-
-### 设计文档
-- [design-v2/01-模块重构方案.md](design-v2/01-模块重构方案.md) - 详细的模块拆分方案
-- [design-v2/02-重构计划.md](design-v2/02-重构计划.md) - 重构计划和进度
-- [design-v2/03-微信模块增强方案.md](design-v2/03-微信模块增强方案.md) - 微信模块设计
-- [design-v2/04-IFlow模块设计方案.md](design-v2/04-IFlow模块设计方案.md) - IFlow模块设计
-- [design-v2/05-消息总线设计方案.md](design-v2/05-消息总线设计方案.md) - 消息总线设计
-- [design-v2/06-启动方案设计.md](design-v2/06-启动方案设计.md) - 启动方案和管理脚本设计
-- [design-v2/11-模块管理器设计方案.md](design-v2/11-模块管理器设计方案.md) - 模块管理器设计
-- [design-v2/13-渠道架构重构方案.md](design-v2/13-渠道架构重构方案.md) - 渠道架构重构方案
-- [design-v2/14-多渠道支持方案.md](design-v2/14-多渠道支持方案.md) - 多渠道支持方案
-
-### 旧版本文档（参考）
-- [src_old/README-old.md](src_old/README-old.md) - 旧版本 README
-- [src_old/WECHAT_SETUP.md](src_old/WECHAT_SETUP.md) - 企业微信配置说明
+- [快速开始](#快速开始)
+- [安装和配置](#安装和配置)
+- [启动和管理](#启动和管理)
+- [使用方法](#使用方法)
+- [测试](#测试)
+- [功能特性](#功能特性)
+- [贡献](#贡献)
 
 ## 快速开始
 
-### 安装依赖
+### 5 分钟快速开始
 
 ```bash
-# 安装基础依赖
+# 1. 克隆项目
+git clone git@github.com:lingzhia/Ling-iflow-message.git
+cd Ling-iflow
+
+# 2. 安装依赖
+pip install -e ".[dev,wechat]"
+
+# 3. 配置文件
+cp config.example.json config.json
+# 编辑 config.json，填入企业微信配置
+
+# 4. 启动服务
+./manage.py start
+
+# 5. 查看状态
+./manage.py status
+
+# 6. 查看日志
+./manage.py logs -f
+```
+
+### 测试模式（无需企业微信）
+
+如果你想先测试功能而不配置企业微信，可以使用模拟器：
+
+```bash
+# 1. 启动模拟器渠道
+./manage.py start --channel simulator1
+
+# 2. 使用测试工具
+python3 tools/iflow_interactive_tool.py --tmux-session simulator1+iflow
+
+# 3. 在测试工具中输入消息
+1+1=?
+写一个 Python 脚本
+quit
+
+# 4. 停止服务
+./manage.py stop
+```
+
+### 常用命令速查
+
+```bash
+# 启动服务
+./manage.py start
+
+# 停止服务
+./manage.py stop
+
+# 重启服务
+./manage.py restart
+
+# 查看状态
+./manage.py status
+
+# 查看日志
+./manage.py logs -f
+
+# 渠道管理
+./manage.py channel list
+./manage.py channel status
+./manage.py channel start bot1
+./manage.py channel stop bot1
+```
+
+## 安装和配置
+
+### 前置要求
+
+在安装之前，请确保系统满足以下要求：
+
+- **Python**: 3.10 或更高版本
+- **pip**: Python 包管理器
+- **tmux**: 会话管理工具（用于 iflow CLI 会话管理）
+- **iflow CLI**: iflow 命令行工具
+
+**检查 Python 版本：**
+```bash
+python3 --version
+# 输出示例：Python 3.10.0 或更高
+```
+
+**检查 tmux 是否安装：**
+```bash
+tmux -V
+# 输出示例：tmux 3.0a 或更高
+```
+
+**安装 tmux（如果未安装）：**
+```bash
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install tmux
+
+# CentOS/RHEL
+sudo yum install tmux
+
+# macOS
+brew install tmux
+```
+
+### 克隆项目
+
+```bash
+# 克隆项目到本地
+git clone git@github.com:lingzhia/Ling-iflow-message.git
+
+# 进入项目目录
+cd Ling-iflow
+```
+
+### 安装依赖
+
+#### 基础安装（仅核心功能）
+
+```bash
+# 安装基础依赖（仅包含核心功能）
 pip install -e .
+```
 
-# 安装企业微信依赖
+**此安装方式包含：**
+- ✅ pydantic (数据验证)
+- ✅ pydantic-settings (配置管理)
+- ✅ loguru (日志记录)
+- ✅ typer (CLI 命令行)
+
+#### 开发环境安装（包含测试工具）
+
+```bash
+# 安装开发环境依赖（包含测试工具）
+pip install -e ".[dev]"
+```
+
+**此安装方式额外包含：**
+- ✅ pytest (测试框架)
+- ✅ pytest-asyncio (异步测试支持)
+
+#### 企业微信功能安装
+
+```bash
+# 安装企业微信依赖（包含企业微信相关依赖）
 pip install -e ".[wechat]"
+```
 
+**此安装方式额外包含：**
+- ✅ httpx (HTTP 客户端)
+- ✅ aiohttp (异步 HTTP 客户端)
+- ✅ cryptography (加密库，用于消息加解密)
+
+#### 完整安装（推荐）
+
+```bash
 # 完整安装（包含开发和微信功能）
 pip install -e ".[dev,wechat]"
 ```
 
-### 配置
+**此安装方式包含所有依赖，适合开发和使用企业微信功能。**
+
+### 验证安装
 
 ```bash
-# 复制配置文件
-cp config.example.json config.json
+# 检查命令是否可用
+ling-iflow --help
 
-# 编辑配置文件
-vim config.json
+# 应该看到帮助信息输出，例如：
+# Usage: ling-iflow [OPTIONS] COMMAND [ARGS]...
+#
+#   Ling-iflow CLI - iflow CLI 交互模式管理工具
+#
+# Options:
+#   --help  Show this message and exit.
+#
+# Commands:
+#   start   启动服务
+#   stop    停止服务
+#   restart 重启服务
+#   status  查看服务状态
+#   logs    查看日志
+#   channel 渠道管理
 ```
 
-### 配置项说明
+### 配置文件
 
-**核心配置：**
-- `groups`: 组定义（支持多组管理）
-  - `modules`: 组包含的模块列表
-  - `default`: 是否为默认组
-  - `auto_start`: 是否自动启动
-  - `description`: 组描述
-- `tmux_sessions`: iflow 会话配置（支持多实例）
-  - `name`: 会话名称
-  - `workspace`: 工作目录
-  - `model`: 模型名称（如 glm-4.7）
-- `bots`: 企业微信机器人配置（支持多机器人）
-  - `name`: 机器人名称
-  - `enabled`: 是否启用
-  - `corp_id`: 企业ID
-  - `agent_id`: 应用AgentId
-  - `secret`: 应用Secret
-  - `user_id`: 用户账号
-  - `token`: 回调Token
-  - `encoding_aes_key`: EncodingAESKey
-  - `callback_port`: 回调端口
-  - `tmux_session`: 关联的tmux会话
-- `simulator_channels`: 模拟器渠道配置（支持多模拟器）
-  - `name`: 模拟器名称
-  - `enabled`: 是否启用
-  - `host`: 监听地址
-  - `port`: 监听端口
-  - `tmux_session`: 关联的tmux会话
-- `log_level`: 日志级别（INFO, DEBUG, ERROR等）
+#### 复制配置文件
 
-### 启动
+```bash
+# 复制示例配置文件
+cp config.example.json config.json
 
-#### 方式1: 使用管理脚本（推荐）
+# 使用你喜欢的编辑器编辑配置
+vim config.json  # 或使用其他编辑器
+```
+
+#### 配置文件结构
+
+```json
+{
+  "bots": [
+    {
+      "name": "bot1",
+      "corp_id": "企业ID",
+      "agent_id": "应用AgentId",
+      "secret": "应用Secret",
+      "user_id": "用户账号",
+      "token": "回调Token",
+      "encoding_aes_key": "EncodingAESKey",
+      "callback_host": "0.0.0.0",
+      "callback_port": 8788,
+      "stream_mode": false,
+      "poll_interval": 5,
+      "allow_from": [],
+      "group_policy": "mention",
+      "group_allow_from": [],
+      "tmux_session": "wechat_bot1+iflow"
+    }
+  ],
+  "simulator_channels": [
+    {
+      "name": "simulator1",
+      "host": "localhost",
+      "port": 19999,
+      "tmux_session": "simulator1+iflow"
+    }
+  ],
+  "log_level": "INFO",
+  "filter_thinking": true
+}
+```
+
+#### 配置项说明
+
+**bots 配置（企业微信机器人）：**
+
+| 配置项 | 说明 | 示例 | 必填 |
+|--------|------|------|------|
+| name | 机器人名称（唯一标识） | "bot1" | ✅ |
+| corp_id | 企业 ID | "ww1234567890abcdef" | ✅ |
+| agent_id | 应用 AgentId | "1234567890" | ✅ |
+| secret | 应用 Secret | "your_secret_here" | ✅ |
+| user_id | 用户账号（用于发送消息） | "user@example.com" | ✅ |
+| token | 回调配置的 Token | "your_token_here" | ✅ |
+| encoding_aes_key | 回调配置的 EncodingAESKey | "your_key_here" | ✅ |
+| callback_host | 回调服务监听地址 | "0.0.0.0" | ✅ |
+| callback_port | 回调服务端口 | 8788 | ✅ |
+| stream_mode | 是否启用 Stream Mode | false | ❌ |
+| poll_interval | 轮询间隔（秒） | 5 | ❌ |
+| allow_from | 允许的用户 ID 白名单 | [] | ❌ |
+| group_policy | 群聊消息响应策略 | "mention" | ❌ |
+| group_allow_from | 群聊白名单 | [] | ❌ |
+| tmux_session | 关联的 tmux 会话名称 | "wechat_bot1+iflow" | ✅ |
+
+**simulator_channels 配置（模拟器渠道）：**
+
+| 配置项 | 说明 | 示例 | 必填 |
+|--------|------|------|------|
+| name | 模拟器名称 | "simulator1" | ✅ |
+| host | 监听地址 | "localhost" | ✅ |
+| port | 监听端口 | 19999 | ✅ |
+| tmux_session | 关联的 tmux 会话名称 | "simulator1+iflow" | ✅ |
+
+**全局配置：**
+
+| 配置项 | 说明 | 示例 |
+|--------|------|------|
+| log_level | 日志级别（INFO, DEBUG, WARNING, ERROR） | "INFO" |
+| filter_thinking | 是否过滤思考过程 | true |
+
+## 启动和管理
+
+Ling-iflow 提供三种启动方式，推荐使用**管理脚本**方式。
+
+### 方式1: 使用管理脚本（推荐）
 
 **基本命令：**
 
 ```bash
-# 启动服务（默认后台启动组1）
+# 启动服务（默认后台启动第一个渠道）
 ./manage.py start
 
-# 启动所有组（后台）
+# 启动所有渠道（后台）
 ./manage.py start -a
 
-# 前台启动组1
+# 前台启动默认渠道
 ./manage.py start -f
 
-# 前台启动所有组
+# 前台启动所有渠道
 ./manage.py start -a -f
 
-# 停止服务（默认停止组1）
+# 停止服务（默认停止默认渠道）
 ./manage.py stop
 
-# 停止所有组
+# 停止所有渠道
 ./manage.py stop -a
 
-# 重启服务（默认后台重启组1）
+# 重启服务（默认后台重启默认渠道）
 ./manage.py restart
 
-# 重启所有组（后台）
+# 重启所有渠道（后台）
 ./manage.py restart -a
 
-# 前台重启组1
+# 前台重启默认渠道
 ./manage.py restart -f
 
 # 查看状态
@@ -203,103 +330,99 @@ vim config.json
 # 实时跟踪日志
 ./manage.py logs -f
 
+# 查看最近 N 行日志
+./manage.py logs -n 200
+
 # 清理日志和缓存
 ./manage.py clean
-```
-
-**指定组操作：**
-
-```bash
-# 启动指定组
-./manage.py start -g g1              # 启动 g1 组
-./manage.py start -g g2              # 启动 g2 组
-./manage.py start -g g_simulator     # 启动模拟器组
-
-# 停止指定组
-./manage.py stop -g g1               # 停止 g1 组
-./manage.py stop -g g2               # 停止 g2 组
-
-# 重启指定组
-./manage.py restart -g g1            # 重启 g1 组
-./manage.py restart -g g2            # 重启 g2 组
-```
-
-**查看可用组：**
-
-```bash
-# 列出所有可用组
-./manage.py start -g ls
-./manage.py stop -g ls
-./manage.py restart -g ls
 ```
 
 **指定渠道操作：**
 
 ```bash
 # 启动指定渠道
-./manage.py start --channel wechat_bot1   # 指定企业微信渠道
-./manage.py start --channel simulator1    # 指定模拟器渠道
+./manage.py start --channel bot1            # 启动企业微信渠道 bot1
+./manage.py start --channel simulator1     # 启动模拟器渠道 simulator1
 
-# 后台启动指定渠道
-./manage.py start --channel wechat_bot1 -d
+# 停止指定渠道
+./manage.py stop --channel bot1             # 停止企业微信渠道 bot1
+./manage.py stop --channel simulator1      # 停止模拟器渠道 simulator1
+
+# 重启指定渠道
+./manage.py restart --channel bot1          # 重启企业微信渠道 bot1
+./manage.py restart --channel simulator1   # 重启模拟器渠道 simulator1
 ```
 
-**使用自定义配置：**
+**查看可用渠道：**
 
 ```bash
-# 使用指定配置文件
-./manage.py start -c config-dev.json
-./manage.py start -c config-test.json -g g1
-
-# 后台启动使用指定配置
-./manage.py start -c config.json -g g1 -d
+# 列出所有可用渠道
+./manage.py start --channel ls
 ```
 
-**参数组合示例：**
+**渠道管理命令：**
 
 ```bash
-# 启动指定组（后台）
-./manage.py start -g g2
+# 列出所有渠道
+./manage.py channel list
 
-# 启动指定组（前台）
-./manage.py start -g g2 -f
+# 查看所有渠道状态
+./manage.py channel status
 
-# 启动所有组（后台）
-./manage.py start -a
+# 查看指定渠道状态
+./manage.py channel status bot1
 
-# 启动所有组（前台）
-./manage.py start -a -f
+# 启动指定渠道
+./manage.py channel start bot1
 
-# 重启指定组（后台）
-./manage.py restart -g g2
+# 停止指定渠道
+./manage.py channel stop bot1
 
-# 重启指定组（前台）
-./manage.py restart -g g2 -f
-
-# 使用自定义配置启动指定组（后台）
-./manage.py start -c config.json -g g1
-
-# 使用自定义配置启动指定组（前台）
-./manage.py start -c config.json -g g1 -f
+# 重启指定渠道
+./manage.py channel restart bot1
 ```
 
 **参数说明：**
 
-- `-a, --all`: 启动/停止/重启所有组
-- `-g, --group <组名>`: 指定要操作的组
-- `-f, --foreground`: 前台运行（默认后台运行）
-- `-c, --config <文件>`: 指定配置文件
-- `--channel <渠道名>`: 指定要启动的渠道
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| `-a, --all` | 启动/停止/重启所有渠道 | `./manage.py start -a` |
+| `-f, --foreground` | 前台运行（默认后台运行） | `./manage.py start -f` |
+| `--channel <渠道名>` | 指定要操作的渠道 | `./manage.py start --channel bot1` |
+| `--channel ls` | 列出所有可用渠道 | `./manage.py start --channel ls` |
 
-**参数限制：**
+### 方式2: 使用全局命令（安装后）
 
-- `-a` 和 `-g` 参数互斥，不能同时使用
-- `-g` 支持特殊值 `ls`，用于列出所有可用组
-- `--channel` 和 `-g` 参数互斥，优先使用 `--channel`
-- 默认组为配置文件中标记为 `default` 的组（通常为 g1）
-- 默认为后台运行，使用 `-f` 启用前台运行
+**先执行项目安装：**
+```bash
+pip install -e .
+```
 
-#### 方式2: 直接启动
+**然后可以在任意目录使用：**
+```bash
+# 启动服务
+ling-iflow start
+
+# 停止服务
+ling-iflow stop
+
+# 重启服务
+ling-iflow restart
+
+# 查看状态
+ling-iflow status
+
+# 查看日志
+ling-iflow logs -f
+
+# 渠道管理
+ling-iflow channel list
+ling-iflow channel status
+ling-iflow channel start bot1
+ling-iflow channel stop bot1
+```
+
+### 方式3: 直接启动
 
 ```bash
 # 使用默认配置启动
@@ -308,40 +431,321 @@ python3 -m src.bot
 # 指定配置文件启动
 python3 -m src.bot config.json
 
-# 指定组启动
-python3 -m src.bot config.json --group g1
+# 指定渠道启动
+python3 -m src.bot config.json --channel bot1
 
-# 启动所有组
-python3 -m src.bot config.json --group all
+# 启动所有渠道
+python3 -m src.bot config.json --channel all
 ```
 
-**推荐使用方式1**，提供更完整的管理功能和参数支持。
+**推荐使用方式1（管理脚本）**，提供更完整的管理功能和参数支持。
 
-## 消息流转流程
+## 使用方法
+
+### 一、企业微信使用
+
+#### 1. 基本对话
+
+**在企业微信中发送消息：**
 
 ```
-企业微信用户发送消息
-        ↓
-[WeChatChannel] 接收回调
-        ↓
-[WeChatModule] 处理消息
-        ↓
-[MessageBus] 路由到 iflow 模块
-        ↓
-[IFlowController] 注入到 iflow CLI
-        ↓
-iflow CLI 处理并返回
-        ↓
-[IFlowMonitor] 监听并提取输出
-        ↓
-[IFlowModule] 封装为消息
-        ↓
-[MessageBus] 路由回 WeChat 模块
-        ↓
-[WeChatChannel] 发送到企业微信
-        ↓
-用户收到回复
+你: 帮我写一个 Python 脚本
+bot: ⏳ 正在执行: 帮我写一个 Python 脚本
+bot: ✅ [脚本内容]
 ```
+
+**iflow 会自动：**
+- 接收消息
+- 通过 tmux 注入到 iflow CLI
+- 监控 iflow 的回复
+- 提取并返回给用户
+
+#### 2. 连续对话
+
+**保持上下文：**
+
+```
+你: 帮我写一个 Python 脚本
+bot: ✅ [脚本内容]
+
+你: 再帮我添加一个函数
+bot: ⏳ 正在执行: 再帮我添加一个函数
+bot: ✅ [更新后的脚本]
+
+你: 继续完善这个脚本
+bot: ⏳ 正在执行: 继续完善这个脚本
+bot: ✅ [完善后的脚本]
+```
+
+**iflow 会自动：**
+- 保持会话上下文
+- 支持连续对话
+- 记住之前的对话内容
+
+#### 3. 命令使用
+
+**支持的命令：**
+
+```bash
+# 查看帮助
+/help
+
+# 查看服务状态
+/status
+
+# 创建新会话（清除上下文）
+/new
+
+# 查看历史会话
+/sessions
+
+# 查看消息历史
+/history
+
+# 查看性能指标
+/metrics
+
+# 列出可用命令
+/lscmd
+
+# 切换消息范围
+/scope all        # 显示所有消息（包括思考过程）
+/scope reply      # 只显示回复消息（默认）
+```
+
+**命令示例：**
+
+```
+你: /status
+bot: ✅ 服务状态：
+    - tmux 会话: iflow
+    - iflow 运行中: 是
+    - 当前会话: session-abc123.jsonl
+    - 消息统计: 已发送 5 条，已接收 5 条
+
+你: /new
+bot: ✅ 已开始新会话
+
+你: /sessions
+bot: ✅ 历史会话：
+    1. session-abc123.jsonl (2026-03-18 10:00:00)
+    2. session-def456.jsonl (2026-03-18 11:30:00)
+```
+
+#### 4. 群聊使用
+
+**在群聊中使用：**
+
+```
+# @机器人发送消息
+@bot1 帮我分析这个代码
+
+# 机器人会回复
+bot1: ⏳ 正在执行: 帮我分析这个代码
+bot1: ✅ [分析结果]
+```
+
+**群聊配置：**
+- `group_policy`: 群聊消息响应策略
+  - `"mention"`: 只响应 @机器人 的消息（推荐）
+  - `"all"`: 响应所有消息
+- `group_allow_from`: 群聊白名单
+
+### 二、模拟器使用（测试）
+
+#### 1. 启动模拟器
+
+```bash
+# 启动模拟器渠道
+./manage.py start --channel simulator1
+```
+
+#### 2. 使用测试客户端
+
+```bash
+# 运行测试客户端
+python3 tools/test_client.py
+
+# 连接到模拟器服务器
+connect
+
+# 发送消息
+send "测试消息"
+
+# 断开连接
+disconnect
+
+# 退出
+quit
+```
+
+#### 3. 使用交互式测试工具
+
+```bash
+# 运行交互式测试工具
+python3 tools/iflow_interactive_tool.py
+
+# 支持的命令：
+#   /source <wechat|tool> - 切换身份
+#   /scope <all|reply> - 切换模式
+#   /status - 状态查询
+#   /history - 历史记录
+#   /spam - 拒绝机制测试
+#   quit - 退出
+```
+
+**测试工具示例：**
+
+```
+============================================================
+IFlowModule 交互式体验工具
+============================================================
+💬 你: 1+1=?
+📤 iflow 回复: 2
+✅ 收到 1 条消息
+
+💬 你: /scope all
+✅ 已切换模式: all
+
+💬 你: 写一个 Python 脚本
+📤 iflow 回复: [脚本内容]
+📤 iflow 回复: ✻ 思考中...
+📤 iflow 回复: [更多内容]
+✅ 收到 3 条消息
+```
+
+### 三、查看日志
+
+#### 1. 使用管理脚本
+
+```bash
+# 查看最近 100 行日志
+./manage.py logs
+
+# 查看最近 N 行日志
+./manage.py logs -n 200
+
+# 实时跟踪日志
+./manage.py logs -f
+```
+
+#### 2. 直接查看日志文件
+
+```bash
+# 查看主日志
+tail -f logs/bot.log
+
+# 查看交互日志
+tail -f logs/interactions/*.jsonl
+```
+
+#### 3. 日志内容示例
+
+```
+2026-03-18 10:00:00 [INFO] [src.bot] 启动服务...
+2026-03-18 10:00:01 [INFO] [src.modules.iflow.module] [iflow_bot1] 启动 iflow 模块
+2026-03-18 10:00:02 [INFO] [src.modules.iflow.controller] 创建 tmux 会话: wechat_bot1+iflow
+2026-03-18 10:00:05 [INFO] [src.modules.iflow.module] [iflow_bot1] iflow 已就绪
+2026-03-18 10:00:10 [INFO] [src.modules.channel.wechat] 收到消息: 帮我写一个 Python 脚本
+2026-03-18 10:00:11 [INFO] [src.core.bus] 路由消息: wechat_bot1 -> iflow_bot1
+2026-03-18 10:00:12 [INFO] [src.modules.iflow.controller] 注入消息到 iflow: 帮我写一个 Python 脚本
+2026-03-18 10:00:20 [INFO] [src.modules.iflow.monitor] 提取消息: ✦ [脚本内容]
+2026-03-18 10:00:21 [INFO] [src.modules.iflow.module] [iflow_bot1] 发送回复到 wechat_bot1
+2026-03-18 10:00:22 [INFO] [src.modules.channel.wechat] 发送消息到企业微信
+```
+
+### 四、故障排查
+
+#### 1. 服务无法启动
+
+**检查依赖：**
+```bash
+# 检查 Python 版本
+python3 --version
+
+# 检查 tmux 是否安装
+tmux -V
+
+# 检查 iflow 是否可用
+iflow --version
+```
+
+**检查配置：**
+```bash
+# 验证配置文件格式
+python3 -c "import json; json.load(open('config.json'))"
+
+# 检查配置文件语法
+cat config.json | python3 -m json.tool
+```
+
+**查看日志：**
+```bash
+# 查看详细日志
+./manage.py logs -f
+```
+
+#### 2. 消息无法发送
+
+**检查 tmux 会话：**
+```bash
+# 查看 tmux 会话列表
+tmux ls
+
+# 查看 iflow 会话
+tmux attach -t wechat_bot1+iflow
+```
+
+**检查 iflow 状态：**
+```bash
+# 查看服务状态
+./manage.py status
+
+# 查看模块状态
+./manage.py channel status
+```
+
+**检查网络连接（企业微信）：**
+```bash
+# 测试企业微信 API 连通性
+curl -X POST https://qyapi.weixin.qq.com/cgi-bin/gettoken
+```
+
+#### 3. 消息重复发送
+
+**检查缓存设置：**
+```bash
+# 查看日志中的缓存清理信息
+./manage.py logs | grep "清理缓存"
+```
+
+**切换 scope 模式：**
+```bash
+# 只显示回复消息（默认）
+/scope reply
+
+# 显示所有消息（包括思考过程）
+/scope all
+```
+
+#### 4. iflow 生成中被拒绝
+
+**检查 iflow 状态：**
+```bash
+# 查看 iflow 是否在生成中
+./manage.py status
+
+# 查看 tmux 中的 iflow 输出
+tmux capture-pane -t wechat_bot1+iflow -p
+```
+
+**等待 iflow 完成：**
+```bash
+# 等待 iflow 完成当前任务后再发送新消息
+# 或者使用 /new 命令创建新会话
+/new
+```
+
 
 ## 测试
 
@@ -380,18 +784,8 @@ python3 tools/wechat_test_tool.py listen
 - ✅ 拒绝机制（生成中拒绝新消息）
 - ✅ 多轮对话来源归属
 - ✅ 交互日志记录
-
-**多组管理（单进程多组架构）：**
-- ✅ 单进程管理多个组
-- ✅ 组定义支持（groups 配置）
-- ✅ 默认组自动识别
-- ✅ 动态组管理（启动/停止/重启）
-- ✅ Unix Socket 控制接口
-- ✅ 组管理命令（/groups, /group status/start/stop/restart）
-- ✅ 管理脚本组管理（./manage.py group）
-- ✅ 模块预创建和按需启动
-- ✅ 组间状态独立管理
-- ✅ 健康监控和状态同步
+- ✅ 延迟记录原则和字符串定位机制
+- ✅ 缓存管理（修复历史消息重复问题）
 
 **多实例支持：**
 - ✅ 多 iflow 实例支持
@@ -400,6 +794,7 @@ python3 tools/wechat_test_tool.py listen
 - ✅ 多 tmux 会话管理
 - ✅ 渠道最小化架构
 - ✅ 模块化设计
+- ✅ 渠道架构简化（移除 enabled 字段）
 
 **模块管理：**
 - ✅ 模块管理器统一管理模块生命周期
@@ -414,8 +809,17 @@ python3 tools/wechat_test_tool.py listen
 - ✅ 服务生命周期管理（启动/停止/重启/状态/日志）
 - ✅ 启动/停止通知机制
 - ✅ Message 对象规范化
-- ✅ 参数化配置管理
+- ✅ 渠道控制命令（channel list/status/start/stop/restart）
+- ✅ 项目安装支持（pip install -e .）
+- ✅ 全局命令支持（ling-iflow）
+- ✅ Unix Socket 控制接口
 - ✅ 日志和缓存清理
+
+### 最新修复（2026-03-19）✅
+
+- ✅ 修复 /scope 命令历史消息重复问题
+- ✅ 实现缓存清理机制（最大 100 条，保留 50 条）
+- ✅ 更新缓存管理策略文档
 
 ### 待实现 🚧
 

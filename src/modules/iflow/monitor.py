@@ -319,8 +319,10 @@ class IFlowMonitor:
                         self._missing_generating_count = 0
 
                         # 清理去重集合（为下一次对话准备）
-                        self._sent_message_hashes.clear()
-                        self._sent_marker_strings.clear()
+                        # 修复：注释掉缓存清空逻辑，保留去重机制避免历史消息重复发送
+                        # 参考：design-v2/19-scope命令历史消息重复问题修复方案.md
+                        # self._sent_message_hashes.clear()
+                        # self._sent_marker_strings.clear()
 
                         # 切换到IDLE状态
                         old_state = self._state
@@ -669,10 +671,35 @@ class IFlowMonitor:
                     'marker_type': marker_type,
                     'marker_only': marker_content
                 })
-        
+
         logger.debug(f"[IFlowMonitor] _extract_messages: extracted {len(messages)} messages total")
         return messages
-    
+
+    def _cleanup_cache(self) -> None:
+        """清理旧缓存，保留最近的 N 条消息
+
+        参考：design-v2/19-scope命令历史消息重复问题修复方案.md
+
+        清理策略：
+        - 最大缓存大小：100 条
+        - 保留数量：50 条
+        - 清理时机：在添加新消息到缓存后检查
+        """
+        max_cache_size = 100
+        keep_count = 50
+
+        # 清理标记行字符串缓存
+        if len(self._sent_marker_strings) > max_cache_size:
+            # 保留最近的 keep_count 条消息
+            self._sent_marker_strings = set(list(self._sent_marker_strings)[-keep_count:])
+            logger.debug(f"[IFlowMonitor] 清理缓存：保留最近 {keep_count} 条标记行字符串")
+
+        # 清理内容哈希缓存
+        if len(self._sent_message_hashes) > max_cache_size:
+            # 保留最近的 keep_count 条消息
+            self._sent_message_hashes = set(list(self._sent_message_hashes)[-keep_count:])
+            logger.debug(f"[IFlowMonitor] 清理缓存：保留最近 {keep_count} 条内容哈希")
+
     async def _send_message(self, message_data: Dict) -> None:
         """发送消息
         
@@ -700,14 +727,10 @@ class IFlowMonitor:
         self._sent_marker_strings.add(marker_only)  # 字符串定位
         self._sent_message_hashes.add(content_hash)  # 哈希定位
         
-        # 限制集合大小（防止内存泄漏）
-        if len(self._sent_marker_strings) > 1000:
-            # 保留最近的 500 个字符串
-            self._sent_marker_strings = set(list(self._sent_marker_strings)[-500:])
-        if len(self._sent_message_hashes) > 1000:
-            # 保留最近的 500 个哈希值
-            self._sent_message_hashes = set(list(self._sent_message_hashes)[-500:])
-        
+        # 清理旧缓存（控制内存占用）
+        # 参考：design-v2/19-scope命令历史消息重复问题修复方案.md
+        self._cleanup_cache()
+
         # 创建出站消息
         msg_type = MessageType.REPLY if marker_symbol == '✦' else MessageType.OTHER
         

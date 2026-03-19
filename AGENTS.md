@@ -86,7 +86,8 @@ Ling-iflow/
 │   ├── 15-ModuleManager优化方案.md
 │   ├── 16-单进程多组管理方案.md
 │   ├── 17-渠道架构简化方案.md
-│   └── README.md
+│   ├── 18-状态管理优化方案.md
+│   └── 19-scope命令历史消息重复问题修复方案.md
 ├── tests/                        # 测试文件
 │   ├── test_message_bus.py
 │   ├── test_base_module.py
@@ -173,7 +174,6 @@ vim config.json
   "bots": [
     {
       "name": "bot1",
-      "enabled": true,
       "corp_id": "企业ID",
       "agent_id": "应用AgentId",
       "secret": "应用Secret",
@@ -193,7 +193,6 @@ vim config.json
   "simulator_channels": [
     {
       "name": "simulator1",
-      "enabled": false,
       "host": "localhost",
       "port": 19999,
       "tmux_session": "simulator1+iflow"
@@ -207,7 +206,6 @@ vim config.json
 **配置项说明**：
 - `bots`: 企业微信机器人配置（支持多机器人）
   - `name`: 机器人名称（唯一标识）
-  - `enabled`: 是否启用
   - `corp_id`: 企业 ID
   - `agent_id`: 应用 AgentId
   - `secret`: 应用 Secret
@@ -224,7 +222,6 @@ vim config.json
   - `tmux_session`: 关联的 tmux 会话名称（格式：渠道名+iflow）
 - `simulator_channels`: 模拟器渠道配置（可选）
   - `name`: 模拟器名称
-  - `enabled`: 是否启用
   - `host`: 监听地址（默认：localhost）
   - `port`: 监听端口（默认：19999）
   - `tmux_session`: 关联的 tmux 会话名称
@@ -458,7 +455,6 @@ iflow CLI 的完整管理模块。
 
 **配置项：**
 - `name`: 渠道标识符
-- `enabled`: 是否启用
 - `host`: 监听地址（默认：localhost）
 - `port`: 监听端口（默认：19999）
 - `tmux_session`: 绑定的 iflow 会话
@@ -600,6 +596,13 @@ python3 tools/tmux_viewer.py
 - ✅ 全局命令支持（ling-iflow）
 - ✅ Unix Socket 控制接口
 - ✅ 渠道控制命令（channel list/status/start/stop/restart）
+- ✅ 延迟记录原则和字符串定位机制
+- ✅ IFlowMonitor 缓存管理（修复历史消息重复问题）
+
+### 最新修复（2026-03-19）✅
+- ✅ 修复 /scope 命令历史消息重复问题
+- ✅ 实现缓存清理机制（最大 100 条，保留 50 条）
+- ✅ 更新缓存管理策略文档
 
 ## 待实现功能
 
@@ -613,49 +616,9 @@ python3 tools/tmux_viewer.py
 - 🚧 配置热更新
 - 🚧 监控告警
 
-## 设计文档
-
-### 重构设计文档
-- [design-v2/01-模块重构方案.md](design-v2/01-模块重构方案.md) - 详细的模块拆分方案
-- [design-v2/02-重构计划.md](design-v2/02-重构计划.md) - 重构计划和进度
-- [design-v2/03-微信模块增强方案.md](design-v2/03-微信模块增强方案.md) - 微信模块设计
-- [design-v2/04-IFlow模块设计方案.md](design-v2/04-IFlow模块设计方案.md) - IFlow模块设计
-- [design-v2/05-消息总线设计方案.md](design-v2/05-消息总线设计方案.md) - 消息总线设计
-- [design-v2/06-启动方案设计.md](design-v2/06-启动方案设计.md) - 启动方案和管理脚本设计
-- [design-v2/07-消息提取优化方案.md](design-v2/07-消息提取优化方案.md) - 消息提取优化
-- [design-v2/08-IFlowModule测试工具方案.md](design-v2/08-IFlowModule测试工具方案.md) - 测试工具方案
-- [design-v2/11-模块管理器设计方案.md](design-v2/11-模块管理器设计方案.md) - 模块管理器设计
-- [design-v2/12-消息模拟器和测试工具方案.md](design-v2/12-消息模拟器和测试工具方案.md) - 消息模拟器设计
-- [design-v2/13-渠道架构重构方案.md](design-v2/13-渠道架构重构方案.md) - 渠道架构重构方案
-- [design-v2/14-多渠道支持方案.md](design-v2/14-多渠道支持方案.md) - 多渠道支持方案
-- [design-v2/15-ModuleManager优化方案.md](design-v2/15-ModuleManager优化方案.md) - 模块管理器优化方案
-- [design-v2/16-单进程多组管理方案.md](design-v2/16-单进程多组管理方案.md) - 单进程多组管理方案
-- [design-v2/17-渠道架构简化方案.md](design-v2/17-渠道架构简化方案.md) - 渠道架构简化方案
-
-### 旧版本文档（参考）
-- [tmp/src_old/README-old.md](tmp/src_old/README-old.md) - 旧版本 README
-- [tmp/src_old/WECHAT_SETUP.md](tmp/src_old/WECHAT_SETUP.md) - 企业微信配置说明
-
-## 开发规范
-
-### 代码风格
-- 使用 Python 3.10+ 类型注解
-- 遵循 PEP 8 代码规范
-- 使用 logging 模块记录日志
-- 使用 asyncio 进行异步编程
-
-### 测试
-- 使用 pytest 进行单元测试
-- 使用 pytest-asyncio 进行异步测试
-- 测试文件命名：`test_*.py`
-
-### 提交规范
-- 清晰的提交信息
-- 包含必要的文档更新
-- 通过所有测试
-
 ## 重要记忆
 
+### 项目状态
 - 项目状态：重构完成，基于消息总线的松耦合架构，已实现多渠道支持，已完成渠道架构简化
 - 核心技术：Python 3.10+, pydantic, loguru, typer, asyncio, tmux
 - 配置文件位置：`config.json`
@@ -677,18 +640,62 @@ python3 tools/tmux_viewer.py
 - 支持 Unix Socket 控制接口
 - 支持渠道控制命令（channel list/status/start/stop/restart）
 
-## 已知问题和修复历史
+### 关键技术细节
 
-### 已修复问题
+#### IFlowMonitor 消息提取原则
+1. **延迟记录原则**：只有检测到 2 条或更多消息时才开始记录和发送
+2. **字符串定位优先**：使用标记行字符串优先定位已记录的消息
+3. **哈希定位备用**：字符串定位失败时使用内容哈希作为备用
+4. **倒数第二原则**：倒数第二的标记已经完整，不会再变化
+5. **状态检测原则**：连续 3 次扫描"生成中"消失，记录最后一条消息
+
+#### 缓存管理策略
+- **缓存用途**：消息去重，避免重复发送相同消息
+- **最大缓存大小**：100 条
+- **保留数量**：50 条
+- **清理时机**：在添加新消息到缓存后检查
+- **清理方法**：`_cleanup_cache()`
+
+#### 行号不可靠性
+- tmux 有 history-limit 限制（默认：2000 行）
+- 超过限制后，旧内容会被删除
+- 行号会发生变化
+- **不能依赖行号过滤消息**
+- 必须使用缓存去重机制
+
+### 已知问题和修复历史
+
+#### 已修复问题
+
 1. **history 接口 BUG**：服务端 history 函数数据过滤逻辑错误，导致只返回最后一支股票的数据。修复方法是将数据过滤逻辑移到 pivot 转换之后。服务端版本已更新到 v4.4。
+
 2. **get_history_fundamentals 接口测试失败**：
    - 测试5失败：聚宽端执行错误 'IncomeStatementAcc' - 服务端状态不一致问题
    - 测试13、20失败：TypeError: agg function failed - pandas版本差异导致（本地pandas 2.3.3 vs 聚宽pandas 1.x）
+
 3. **IFlowMonitor 消息提取逻辑**：修复了消息提取逻辑，实现完整的倒数第二原则
+
 4. **IFlowMonitor 状态检测顺序**：修复状态检测顺序，确保状态正确更新
+
 5. **IFlowMonitor 标记更新处理**：避免重复发送中间版本
+
 6. **停止通知发送失败**：修复停止通知发送失败问题，将通知处理改为同步等待，确保在资源关闭前完成发送
+
 7. **NotificationManager 异步处理器判断**：修复异步处理器判断逻辑，使用 `asyncio.iscoroutinefunction` 而不是 `hasattr(handler, '__await__')`
+
+8. **/scope 命令历史消息重复问题**（2026-03-19）：
+   - **问题**：执行 `/scope all` 后，历史消息被重复发送
+   - **根本原因**：
+     1. 行号过滤失效：虽然记录了 `_last_received_line`，但是故意不使用
+     2. 缓存去重失效：每次回复完成后清空缓存（monitor.py 第 318-323 行）
+   - **修复方案**：
+     1. 注释掉缓存清空逻辑（monitor.py 第 318-323 行）
+     2. 添加 `_cleanup_cache()` 方法
+     3. 在 `_send_message` 方法中调用缓存清理
+   - **修复效果**：
+     - 历史消息不再重复发送
+     - /scope 命令正常工作
+     - 内存占用可控
 
 ## 常见问题
 
@@ -731,154 +738,48 @@ A: 先执行 `pip install -e .` 安装项目，然后可以在任意目录使用
 ### Q: 如何使用渠道管理命令？
 A: 使用 `./manage.py channel list/status/start/stop/restart` 或 `ling-iflow channel list/status/start/stop/restart`
 
-## 异常自动回复方案
+## 开发规范
 
-### 问题描述
+### 代码风格
+- 使用 Python 3.10+ 类型注解
+- 遵循 PEP 8 代码规范
+- 使用 logging 模块记录日志
+- 使用 asyncio 进行异步编程
 
-当前项目中，当 tmux/iflow 异常时（如未运行、生成中），企业微信用户请求消息后只收到"正在处理中..."的确认消息，但没有后续的错误回复。用户无法得知消息处理失败的具体原因。
+### 测试
+- 使用 pytest 进行单元测试
+- 使用 pytest-asyncio 进行异步测试
+- 测试文件命名：`test_*.py`
 
-### 方案概述
+### 提交规范
+- 清晰的提交信息
+- 包含必要的文档更新
+- 通过所有测试
 
-在消息路由过程中，通过 ModuleManager 检查接收方状态，如果状态异常，由 ModuleManager 生成格式化的错误消息，并通过 MessageBus 路由回发送方，实现异常自动回复。
+## 设计文档
 
-### 核心原则
+### 重构设计文档
+- [design-v2/01-模块重构方案.md](design-v2/01-模块重构方案.md) - 详细的模块拆分方案
+- [design-v2/02-重构计划.md](design-v2/02-重构计划.md) - 重构计划和进度
+- [design-v2/03-微信模块增强方案.md](design-v2/03-微信模块增强方案.md) - 微信模块设计
+- [design-v2/04-IFlow模块设计方案.md](design-v2/04-IFlow模块设计方案.md) - IFlow模块设计
+- [design-v2/05-消息总线设计方案.md](design-v2/05-消息总线设计方案.md) - 消息总线设计
+- [design-v2/06-启动方案设计.md](design-v2/06-启动方案设计.md) - 启动方案和管理脚本设计
+- [design-v2/07-消息提取优化方案.md](design-v2/07-消息提取优化方案.md) - 消息提取优化
+- [design-v2/08-IFlowModule测试工具方案.md](design-v2/08-IFlowModule测试工具方案.md) - 测试工具方案
+- [design-v2/11-模块管理器设计方案.md](design-v2/11-模块管理器设计方案.md) - 模块管理器设计
+- [design-v2/12-消息模拟器和测试工具方案.md](design-v2/12-消息模拟器和测试工具方案.md) - 消息模拟器设计
+- [design-v2/13-渠道架构重构方案.md](design-v2/13-渠道架构重构方案.md) - 渠道架构重构方案
+- [design-v2/14-多渠道支持方案.md](design-v2/14-多渠道支持方案.md) - 多渠道支持方案
+- [design-v2/15-ModuleManager优化方案.md](design-v2/15-ModuleManager优化方案.md) - 模块管理器优化方案
+- [design-v2/16-单进程多组管理方案.md](design-v2/16-单进程多组管理方案.md) - 单进程多组管理方案
+- [design-v2/17-渠道架构简化方案.md](design-v2/17-渠道架构简化方案.md) - 渠道架构简化方案
+- [design-v2/18-状态管理优化方案.md](design-v2/18-状态管理优化方案.md) - 状态管理优化方案
+- [design-v2/19-scope命令历史消息重复问题修复方案.md](design-v2/19-scope命令历史消息重复问题修复方案.md) - /scope 命令历史消息重复问题修复方案
 
-1. **职责分离**
-   - MessageBus：消息路由 + 状态检查请求
-   - ModuleManager：状态管理 + 错误消息生成
-   - NotificationManager：保持生命周期通知的单一职责
-   - WeChatChannel：消息收发（不关心错误处理）
-
-2. **统一管理**
-   - 错误消息格式由 ModuleManager 统一管理
-   - 利用已有的异常体系（`exceptions.py`）和 Result 类型（`result.py`）
-   - 保持 NotificationManager 的单一职责（生命周期通知）
-
-### 消息流程
-
-#### 正常流程
-1. WeChatChannel 发送消息到 MessageBus
-2. MessageBus 根据绑定关系确定接收方（IFlowModule）
-3. MessageBus 调用 ModuleManager 检查接收方状态
-4. ModuleManager 检查状态，返回"可用"
-5. MessageBus 将消息路由给 IFlowModule
-6. IFlowModule 处理并返回回复
-
-#### 异常流程
-1. WeChatChannel 发送消息到 MessageBus
-2. MessageBus 根据绑定关系确定接收方（IFlowModule）
-3. MessageBus 调用 ModuleManager 检查接收方状态
-4. ModuleManager 检查状态，发现异常：
-   - 返回"不可用"状态
-   - 返回错误类型和错误详情
-5. MessageBus 请求 ModuleManager 生成错误消息
-6. ModuleManager 根据错误类型生成格式化的错误消息
-7. MessageBus 将错误消息路由回 WeChatChannel
-8. WeChatChannel 发送错误消息给用户
-
-### 实现方案
-
-#### 1. ModuleManager 新增方法
-
-**方法1：检查接收方状态**
-- 输入：接收方模块 ID
-- 输出：包含可用性标志、错误类型、错误详情的字典
-
-**方法2：生成错误消息**
-- 输入：错误类型、错误详情
-- 输出：格式化的错误消息文本
-
-**职责**：
-- 利用已有的异常定义（`exceptions.py`）
-- 统一管理错误消息格式
-- 根据不同的错误类型生成不同的消息
-
-#### 2. MessageBus 修改路由逻辑
-
-**修改点**：
-- 在路由前调用 ModuleManager 检查状态
-- 如果接收方不可用，调用 ModuleManager 生成错误消息
-- 将错误消息路由回发送方
-- 记录拒绝统计
-
-**职责**：
-- 只负责路由和状态检查
-- 不生成错误消息，只请求 ModuleManager 生成
-- 保持简单，不关心业务逻辑
-
-#### 3. 组件关联
-
-**初始化顺序**：
-1. 创建 MessageBus
-2. 创建 ModuleManager（传入 MessageBus）
-3. 将 ModuleManager 设置到 MessageBus
-4. 创建各个模块
-
-#### 4. IFlowModule 状态上报
-
-**状态变化时**：
-- 通知 ModuleManager 更新状态
-- ModuleManager 实时维护 IFlow 的生成状态和持续时间
-
-### 错误消息格式示例
-
-由 ModuleManager 统一生成：
-
-- **模块不存在**："❌ 消息发送失败\n\n接收方模块不存在"
-- **模块未运行**："❌ 消息发送失败\n\n接收方模块未运行"
-- **模块不健康**："❌ 消息发送失败\n\n接收方模块状态异常：[具体错误]"
-- **IFlow 生成中**："❌ 消息发送失败\n\niflow 正在生成中，已持续 15 秒，请稍后再试"
-
-### 优势
-
-1. **职责清晰**
-   - MessageBus：路由 + 检查请求
-   - ModuleManager：状态管理 + 错误生成
-   - NotificationManager：保持生命周期通知的单一职责
-
-2. **统一管理**
-   - 错误消息格式由 ModuleManager 统一管理
-   - 利用已有的异常体系和 Result 类型
-   - 易于维护和扩展
-
-3. **符合架构**
-   - 不改变现有的消息流转方式
-   - 利用已有的设计（异常定义、Result 类型）
-   - 符合设计文档的职责划分
-
-4. **用户体验**
-   - 用户立即收到明确的错误通知
-   - 错误消息格式统一、友好
-   - 包含详细信息（如生成持续时间）
-
-### 实施状态
-
-- ✅ 方案设计完成
-- ✅ 已实施
-
----
-
-## 状态管理优化
-
-**问题**：IFlowModule 内部监控与 ModuleManager 健康监控不协调，导致状态不准确、恢复机制冲突。
-
-**方案**：
-- 移除 IFlowModule 内部监控任务
-- IFlowModule 和 WeChatChannel 实现 `health_check()` 方法
-- ModuleManager 统一负责健康监控和自动恢复
-- 增强自动恢复策略和状态通知
-
-**效果**：状态准确、及时恢复、避免冲突
-
-**实施状态**：✅ 已完成
-
-详细方案见：[design-v2/18-状态管理优化方案.md](design-v2/18-状态管理优化方案.md)
-
-## 下一步工作
-
-1. **P1 增强**：错误处理、日志优化
-2. **可选**：消息去重机制测试（需快速重发消息）
-3. **P2 扩展**：Web 控制台、配置热更新、监控告警
+### 旧版本文档（参考）
+- [tmp/src_old/README-old.md](tmp/src_old/README-old.md) - 旧版本 README
+- [tmp/src_old/WECHAT_SETUP.md](tmp/src_old/WECHAT_SETUP.md) - 企业微信配置说明
 
 ## 贡献
 
