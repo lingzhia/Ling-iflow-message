@@ -34,6 +34,8 @@ class MessageRecord:
     completed_at: Optional[datetime] = None    # 完成时间
     reply_count: int = 0               # 回复数量
     metadata: Dict[str, Any] = field(default_factory=dict)  # 其他元数据
+    requires_buffering: bool = False   # 是否需要缓冲回复（无来源时为 True）
+    buffered_replies: List[str] = field(default_factory=list)  # 缓冲的回复内容
 
 
 class MessageStore:
@@ -149,6 +151,70 @@ class MessageStore:
         """
         current = self.get_current_message()
         return current.scope if current else "reply_only"
+    
+    def find_by_content(self, content: str) -> Optional[MessageRecord]:
+        """根据内容查找消息记录
+        
+        查找规则：
+        - 精确匹配消息内容
+        - 只匹配状态为 PROCESSING 的消息
+        - 时间窗口：5分钟内（避免误匹配）
+        
+        Args:
+            content: 消息内容
+            
+        Returns:
+            匹配的消息记录，无匹配则返回 None
+        """
+        import time
+        
+        for record in self._records.values():
+            # 1. 精确匹配
+            if record.content == content:
+                # 2. 状态过滤（只匹配 PROCESSING）
+                if record.status == MessageStatus.PROCESSING:
+                    # 3. 时间窗口（5分钟内）
+                    if record.processing_at and (time.time() - record.processing_at.timestamp()) < 300:
+                        logger.debug(f"[MessageStore] 找到匹配记录: {record.message_id}, source={record.source}")
+                        return record
+        
+        logger.debug(f"[MessageStore] 未找到匹配记录: {content}")
+        return None
+    
+    def add_buffered_reply(self, message_id: str, reply_content: str) -> bool:
+        """添加缓冲的回复
+        
+        Args:
+            message_id: 消息 ID
+            reply_content: 回复内容
+            
+        Returns:
+            是否添加成功
+        """
+        record = self._records.get(message_id)
+        if not record:
+            logger.warning(f"[MessageStore] 未找到消息记录: {message_id}")
+            return False
+        
+        record.buffered_replies.append(reply_content)
+        logger.debug(f"[MessageStore] 添加缓冲回复: {message_id}, 总数={len(record.buffered_replies)}")
+        return True
+    
+    def get_buffered_replies(self, message_id: str) -> List[str]:
+        """获取缓冲的回复
+        
+        Args:
+            message_id: 消息 ID
+            
+        Returns:
+            缓冲的回复列表
+        """
+        record = self._records.get(message_id)
+        if not record:
+            logger.warning(f"[MessageStore] 未找到消息记录: {message_id}")
+            return []
+        
+        return record.buffered_replies
     
     def get_recent_processing(self) -> Optional[MessageRecord]:
         """获取最近的处理中或已完成消息（按时间倒序）

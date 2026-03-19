@@ -101,6 +101,10 @@ class IFlowMonitor:
         self._sent_message_hashes: set = set()  # 已发送消息的内容哈希集合
         self._sent_marker_strings: set = set()  # 已发送消息的标记行字符串集合（用于快速定位）
         
+        # 发送模式控制（消息来源差异化处理）
+        self._send_mode: str = "STREAM_MODE"  # 发送模式：STREAM_MODE 或 BUFFER_MODE
+        self._current_request_record: Optional[Any] = None  # 当前请求的记录（Any 类型避免循环导入）
+        
         # 结束判断（连续3次扫描）
         self._missing_generating_count: int = 0  # "生成中"消失的次数
         
@@ -341,6 +345,13 @@ class IFlowMonitor:
                         self._last_generating_duration = duration
                         
                         logger.info(f"[IFlowMonitor] State changed: {old_state.value} -> {self._state.value} (completed after {duration}s)")
+                        
+                        # 消息来源差异化处理：刷新缓冲区（如果是缓冲模式）
+                        if self._send_mode == "BUFFER_MODE":
+                            await self._flush_buffered_messages()
+                        # 重置发送模式
+                        self._send_mode = "STREAM_MODE"
+                        self._current_request_record = None
                         
                         # 触发状态变更回调
                         if self._on_state_change:
@@ -596,6 +607,31 @@ class IFlowMonitor:
             # 这样可以确保新消息被正确提取
             self._last_received_line = received_line
             logger.debug(f"[IFlowMonitor] 找到接收消息: {received_message[:50]}..., 行号: {received_line}")
+            
+            # 消息来源差异化处理：匹配 MessageStore，判断发送模式
+            if received_message and hasattr(self.controller, 'module') and self.controller.module:
+                message_store = self.controller.module.message_store
+                matched_record = message_store.find_by_content(received_message)
+                
+                if matched_record:
+                    # 找到匹配的消息记录
+                    self._current_request_record = matched_record
+                    
+                    # 判断是否有明确来源
+                    if matched_record.source:
+                        # 有明确来源：流式发送（逐条）
+                        self._send_mode = "STREAM_MODE"
+                        logger.debug(f"[IFlowMonitor] 请求消息有明确来源 ({matched_record.source})，使用流式发送")
+                    else:
+                        # 无明确来源：缓冲发送（整合）
+                        self._send_mode = "BUFFER_MODE"
+                        matched_record.requires_buffering = True
+                        logger.debug(f"[IFlowMonitor] 请求消息无明确来源，使用缓冲发送")
+                else:
+                    # 未找到匹配的消息记录（可能是手动输入）
+                    self._send_mode = "BUFFER_MODE"
+                    self._current_request_record = None
+                    logger.debug(f"[IFlowMonitor] 请求消息未匹配到记录，使用缓冲发送")
         
         # 不过滤内容，扫描整个输出提取消息
         # 这样可以确保所有消息都被正确提取
@@ -703,6 +739,10 @@ class IFlowMonitor:
     async def _send_message(self, message_data: Dict) -> None:
         """发送消息
         
+        根据 send_mode 决定发送方式：
+        - STREAM_MODE：立即发送（流式模式）
+        - BUFFER_MODE：缓冲消息（缓冲模式）
+        
         Args:
             message_data: 消息数据字典
         """
@@ -731,23 +771,110 @@ class IFlowMonitor:
         # 参考：design-v2/19-scope命令历史消息重复问题修复方案.md
         self._cleanup_cache()
 
+        # 根据 send_mode 决定发送方式
+        if self._send_mode == "STREAM_MODE":
+            # 流式模式：立即发送
+            await self._send_immediately(message_data)
+        elif self._send_mode == "BUFFER_MODE":
+            # 缓冲模式：暂存到缓冲区
+            await self._buffer_message(message_data)
+        else:
+            # 默认：立即发送（向后兼容）
+            await self._send_immediately(message_data)
+    
+    async def _send_immediately(self, message_data: Dict) -> None:
+        """立即发送消息（流式模式）
+        
+        流式模式：有明确来源的消息立即发送到来源模块。
+        
+        Args:
+            message_data: 消息数据字典
+        """
+        marker_symbol = message_data.get('marker_type', '')
+        full_content = message_data.get('content', '')
+        
         # 创建出站消息
         msg_type = MessageType.REPLY if marker_symbol == '✦' else MessageType.OTHER
+        
+        # 设置接收方为当前请求的来源
+        receiver = ""
+        if self._current_request_record:
+            receiver = self._current_request_record.source
         
         message = OutboundMessage(
             type=msg_type,
             content=full_content,
-            receiver="",
-            scope="all",  # 由IFlowModule根据reply_mode过滤
+            receiver=receiver,
+            scope="all",
             timestamp=datetime.now(),
-            metadata={'marker_symbol': marker_symbol}
+            metadata={'marker_symbol': marker_symbol, 'send_mode': 'stream'}
         )
         
         # 通知订阅者
         await self._notify_subscribers(message)
         self.stats["messages_extracted"] += 1
         
-        logger.info(f"[IFlowMonitor] 发送消息: {full_content[:50]}")
+        logger.info(f"[IFlowMonitor] 流式发送消息: {full_content[:50]}, receiver={receiver}")
+    
+    async def _buffer_message(self, message_data: Dict) -> None:
+        """缓冲消息（缓冲模式）
+        
+        缓冲模式：无明确来源的消息暂存到缓冲区，等待生成结束。
+        
+        Args:
+            message_data: 消息数据字典
+        """
+        marker_symbol = message_data.get('marker_type', '')
+        full_content = message_data.get('content', '')
+        
+        # 只缓冲 ✦ 标记的消息
+        if marker_symbol == '✦' and self._current_request_record:
+            # 添加到消息库的缓冲区
+            if hasattr(self.controller, 'module') and self.controller.module:
+                message_store = self.controller.module.message_store
+                message_store.add_buffered_reply(self._current_request_record.message_id, full_content)
+                logger.debug(f"[IFlowMonitor] 缓冲回复消息: {full_content[:50]}")
+        else:
+            logger.debug(f"[IFlowMonitor] 跳过缓冲: marker={marker_symbol}")
+    
+    async def _flush_buffered_messages(self) -> None:
+        """发送缓冲的消息（生成结束时调用）
+        
+        整合所有缓冲的 ✦ 消息为一条，发送到消息总线。
+        """
+        if not self._current_request_record or not self._current_request_record.requires_buffering:
+            logger.debug("[IFlowMonitor] 不需要刷新缓冲区")
+            return
+        
+        if not hasattr(self.controller, 'module') or not self.controller.module:
+            logger.warning("[IFlowMonitor] 无法访问消息库")
+            return
+        
+        message_store = self.controller.module.message_store
+        buffered_replies = message_store.get_buffered_replies(self._current_request_record.message_id)
+        
+        if not buffered_replies:
+            logger.debug("[IFlowMonitor] 没有缓冲的消息")
+            return
+        
+        # 整合所有 ✦ 消息为一条
+        merged_content = '\n'.join(buffered_replies)
+        
+        # 创建并发送整合后的消息
+        message = OutboundMessage(
+            type=MessageType.REPLY,
+            content=merged_content,
+            receiver=self._current_request_record.source,  # 空字符串（无来源）
+            scope="all",
+            timestamp=datetime.now(),
+            metadata={'merged': True, 'reply_count': len(buffered_replies), 'send_mode': 'buffer'}
+        )
+        
+        await self._notify_subscribers(message)
+        logger.info(f"[IFlowMonitor] 已发送整合后的消息（{len(buffered_replies)} 条回复）")
+        
+        # 清空缓冲区
+        message_store.buffered_replies.clear()
     
     def _locate_last_sent_message(self, messages: List[Dict]) -> Optional[int]:
         """定位已记录的最新消息
