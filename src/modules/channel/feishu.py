@@ -867,7 +867,7 @@ class FeishuChannel(BaseModule):
                         .build()
                     ).build()
                 
-                response = self._client.im.v1.messageReaction.create(request)
+                response = self._client.im.v1.message_reaction.create(request)
                 
                 if not response.success():
                     logger.error(
@@ -925,7 +925,7 @@ class FeishuChannel(BaseModule):
                     .reaction_id(reaction_id) \
                     .build()
                 
-                response = self._client.im.v1.messageReaction.delete(request)
+                response = self._client.im.v1.message_reaction.delete(request)
                 
                 if not response.success():
                     logger.error(
