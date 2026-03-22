@@ -105,6 +105,9 @@ class IFlowMonitor:
         self._send_mode: str = "STREAM_MODE"  # 发送模式：STREAM_MODE 或 BUFFER_MODE
         self._current_request_record: Optional[Any] = None  # 当前请求的记录（Any 类型避免循环导入）
         
+        # 无来源消息缓冲区（用户直接在 iflow 中输入消息时使用）
+        self._no_source_buffer: List[str] = []  # 缓冲的回复内容列表
+        
         # 结束判断（连续3次扫描）
         self._missing_generating_count: int = 0  # "生成中"消失的次数
         
@@ -828,12 +831,17 @@ class IFlowMonitor:
         full_content = message_data.get('content', '')
         
         # 只缓冲 ✦ 标记的消息
-        if marker_symbol == '✦' and self._current_request_record:
-            # 添加到消息库的缓冲区
-            if hasattr(self.controller, 'module') and self.controller.module:
-                message_store = self.controller.module.message_store
-                message_store.add_buffered_reply(self._current_request_record.message_id, full_content)
-                logger.debug(f"[IFlowMonitor] 缓冲回复消息: {full_content[:50]}")
+        if marker_symbol == '✦':
+            if self._current_request_record:
+                # 有来源：添加到消息库的缓冲区
+                if hasattr(self.controller, 'module') and self.controller.module:
+                    message_store = self.controller.module.message_store
+                    message_store.add_buffered_reply(self._current_request_record.message_id, full_content)
+                    logger.debug(f"[IFlowMonitor] 缓冲回复消息（有来源）: {full_content[:50]}")
+            else:
+                # 无来源：添加到独立的缓冲区
+                self._no_source_buffer.append(full_content)
+                logger.debug(f"[IFlowMonitor] 缓冲回复消息（无来源）: {full_content[:50]}")
         else:
             logger.debug(f"[IFlowMonitor] 跳过缓冲: marker={marker_symbol}")
     
@@ -841,40 +849,66 @@ class IFlowMonitor:
         """发送缓冲的消息（生成结束时调用）
         
         整合所有缓冲的 ✦ 消息为一条，发送到消息总线。
+        
+        支持两种情况：
+        1. 有来源：从 MessageStore 获取缓冲消息
+        2. 无来源：从 _no_source_buffer 获取缓冲消息（用户直接在 iflow 中输入）
         """
-        if not self._current_request_record or not self._current_request_record.requires_buffering:
-            logger.debug("[IFlowMonitor] 不需要刷新缓冲区")
+        # 情况1：有来源的消息
+        if self._current_request_record and self._current_request_record.requires_buffering:
+            if not hasattr(self.controller, 'module') or not self.controller.module:
+                logger.warning("[IFlowMonitor] 无法访问消息库")
+                return
+            
+            message_store = self.controller.module.message_store
+            buffered_replies = message_store.get_buffered_replies(self._current_request_record.message_id)
+            
+            if not buffered_replies:
+                logger.debug("[IFlowMonitor] 没有缓冲的消息（有来源）")
+                return
+            
+            # 整合所有 ✦ 消息为一条
+            merged_content = '\n'.join(buffered_replies)
+            
+            # 创建并发送整合后的消息
+            message = OutboundMessage(
+                type=MessageType.REPLY,
+                content=merged_content,
+                receiver=self._current_request_record.source,
+                scope="all",
+                timestamp=datetime.now(),
+                metadata={'merged': True, 'reply_count': len(buffered_replies), 'send_mode': 'buffer', 'has_source': True}
+            )
+            
+            await self._notify_subscribers(message)
+            logger.info(f"[IFlowMonitor] 已发送整合后的消息（{len(buffered_replies)} 条回复，有来源）")
+            
+            # 清空缓冲区
+            message_store.buffered_replies.clear()
             return
         
-        if not hasattr(self.controller, 'module') or not self.controller.module:
-            logger.warning("[IFlowMonitor] 无法访问消息库")
+        # 情况2：无来源的消息（用户直接在 iflow 中输入）
+        if self._no_source_buffer:
+            merged_content = '\n'.join(self._no_source_buffer)
+            
+            # 创建并发送整合后的消息（receiver 为空字符串，表示广播）
+            message = OutboundMessage(
+                type=MessageType.REPLY,
+                content=merged_content,
+                receiver="",  # 空字符串表示无特定接收方，消息总线将广播
+                scope="all",
+                timestamp=datetime.now(),
+                metadata={'merged': True, 'reply_count': len(self._no_source_buffer), 'send_mode': 'buffer', 'has_source': False}
+            )
+            
+            await self._notify_subscribers(message)
+            logger.info(f"[IFlowMonitor] 已发送整合后的消息（{len(self._no_source_buffer)} 条回复，无来源，广播模式）")
+            
+            # 清空缓冲区
+            self._no_source_buffer.clear()
             return
         
-        message_store = self.controller.module.message_store
-        buffered_replies = message_store.get_buffered_replies(self._current_request_record.message_id)
-        
-        if not buffered_replies:
-            logger.debug("[IFlowMonitor] 没有缓冲的消息")
-            return
-        
-        # 整合所有 ✦ 消息为一条
-        merged_content = '\n'.join(buffered_replies)
-        
-        # 创建并发送整合后的消息
-        message = OutboundMessage(
-            type=MessageType.REPLY,
-            content=merged_content,
-            receiver=self._current_request_record.source,  # 空字符串（无来源）
-            scope="all",
-            timestamp=datetime.now(),
-            metadata={'merged': True, 'reply_count': len(buffered_replies), 'send_mode': 'buffer'}
-        )
-        
-        await self._notify_subscribers(message)
-        logger.info(f"[IFlowMonitor] 已发送整合后的消息（{len(buffered_replies)} 条回复）")
-        
-        # 清空缓冲区
-        message_store.buffered_replies.clear()
+        logger.debug("[IFlowMonitor] 不需要刷新缓冲区")
     
     def _locate_last_sent_message(self, messages: List[Dict]) -> Optional[int]:
         """定位已记录的最新消息
