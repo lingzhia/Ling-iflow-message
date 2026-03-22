@@ -804,10 +804,11 @@ class IFlowMonitor:
         # 创建出站消息
         msg_type = MessageType.REPLY if marker_symbol == '✦' else MessageType.OTHER
         
-        # 设置接收方为当前请求的来源
+        # 设置接收方：使用 metadata 中的 chat_id（实际聊天 ID）
+        # source 是来源模块 ID，不能作为消息接收方
         receiver = ""
         if self._current_request_record:
-            receiver = self._current_request_record.source
+            receiver = self._current_request_record.metadata.get("chat_id", "")
         
         message = OutboundMessage(
             type=msg_type,
@@ -901,10 +902,12 @@ class IFlowMonitor:
         if self._current_request_record.source:
             # 有来源：直接整合发送
             merged_content = '\n'.join(buffered_replies)
+            # 使用 metadata 中的 chat_id 作为接收方
+            receiver = self._current_request_record.metadata.get("chat_id", "")
             message = OutboundMessage(
                 type=MessageType.REPLY,
                 content=merged_content,
-                receiver=self._current_request_record.source,
+                receiver=receiver,
                 scope="all",
                 timestamp=datetime.now(),
                 metadata={'merged': True, 'reply_count': len(buffered_replies), 'send_mode': 'buffer', 'has_source': True}

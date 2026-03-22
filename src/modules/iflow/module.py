@@ -612,10 +612,12 @@ class IFlowModule(BaseModule):
 
             if completed:
                 # 发送完成通知
+                # 使用 metadata 中的 chat_id 作为接收方，而不是 source（模块 ID）
+                receiver = completed.metadata.get("chat_id", "")
                 complete_message = OutboundMessage(
                     type=MessageType.COMPLETE,
                     content=f"【回复结束】本次交互共 {completed.reply_count} 条消息，处理耗时 {duration} 秒",
-                    receiver=completed.source,
+                    receiver=receiver,
                     scope=completed.scope,
                     metadata={
                         "reply_type": "complete",  # 统一使用 reply_type 字段
