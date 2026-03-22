@@ -863,7 +863,7 @@ class FeishuChannel(BaseModule):
                     .message_id(message_id) \
                     .request_body(
                         CreateMessageReactionRequestBody.builder()
-                        .emoji_type(emoji_type)
+                        .reaction_type(emoji_type)
                         .build()
                     ).build()
                 
