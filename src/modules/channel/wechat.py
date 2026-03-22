@@ -319,7 +319,8 @@ class WeChatChannel(BaseModule):
                 service_info = f"""💻 tmux 会话: 无连接
 📁 工作目录: {expanded_workspace}"""
             
-            restart_command = "python3 -m src.bot config.json"
+            # 使用 manage.py 格式的重启命令
+            restart_command = f"./manage.py start --channel {channel_name}"
             
             await self.notification_manager.send_shutdown_notification(
                 module_name="iFlow 企业微信机器人",

@@ -942,7 +942,9 @@ class FeishuChannel(BaseModule):
             service_info = f"""📁 工作目录：{workspace}
 💻 tmux 会话：{tmux_session}"""
             
-            restart_command = "python3 -m src.bot config.json"
+            # 从 module_id 提取渠道名称 (feishu_feishu1 -> feishu1)
+            channel_name = self.module_id.replace("feishu_", "")
+            restart_command = f"./manage.py start --channel {channel_name}"
             
             await self.notification_manager.send_shutdown_notification(
                 module_name="iFlow 飞书机器人",
