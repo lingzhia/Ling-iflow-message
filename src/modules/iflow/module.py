@@ -528,9 +528,9 @@ class IFlowModule(BaseModule):
             return
         
         # 设置接收方和范围
-        # 注意：如果 message.receiver 已经为空（无来源消息），保持为空
-        if message.receiver != "":
-            message.receiver = source
+        # 注意：message.receiver 已经在 monitor 中正确设置为 chat_id
+        # 不要用 source（模块 ID）覆盖它
+        # 如果 receiver 为空（无来源消息），保持为空用于广播
         message.scope = scope
         
         # 增加回复计数
