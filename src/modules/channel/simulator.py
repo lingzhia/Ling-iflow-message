@@ -131,6 +131,7 @@ class SimulatorChannel(BaseModule):
         Args:
             message: 接收到的消息
         """
+        logger.info(f"[{self.module_id}] 收到来自消息总线的消息: {message.content.text[:50] if message.content else '(空)'}...")
         try:
             # 将消息发送给所有连接的客户端
             for conn_id, conn in self._connections.items():
