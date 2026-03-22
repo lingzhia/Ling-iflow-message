@@ -458,6 +458,9 @@ class FeishuChannel(BaseModule):
                 "msg_type": msg_type
             }, self.module_id)
             
+            # 添加表情反应，表示已收到正在处理
+            await self.add_reaction(message_id, "THUMBSUP")
+            
             # 添加到消息总线
             if self.message_bus:
                 await self.send_to_bus(message_obj)
@@ -831,6 +834,120 @@ class FeishuChannel(BaseModule):
         # 简单实现：直接返回 Markdown 元素
         # 可以扩展为支持表格、标题等复杂格式
         return [{"tag": "markdown", "content": content}]
+
+    async def add_reaction(self, message_id: str, emoji_type: str = "THUMBSUP") -> Optional[str]:
+        """给消息添加表情反应
+        
+        Args:
+            message_id: 消息 ID
+            emoji_type: 表情类型，常用值：
+                - THUMBSUP: 点赞 👍
+                - SMILE: 笑脸 😀
+                - HEART: 爱心 ❤️
+                - FIRE: 火 🔥
+                - OK: OK手势 👌
+                - CLAP: 鼓掌 👏
+            
+        Returns:
+            表情反应 ID，失败返回 None
+        """
+        if not self._client:
+            logger.error(f"[{self.module_id}] 客户端未初始化")
+            return None
+        
+        try:
+            loop = asyncio.get_running_loop()
+            
+            def _add_reaction_sync():
+                request = CreateMessageReactionRequest.builder() \
+                    .message_id(message_id) \
+                    .request_body(
+                        CreateMessageReactionRequestBody.builder()
+                        .emoji_type(emoji_type)
+                        .build()
+                    ).build()
+                
+                response = self._client.im.v1.messageReaction.create(request)
+                
+                if not response.success():
+                    logger.error(
+                        f"[{self.module_id}] 添加表情失败：code={response.code}, "
+                        f"msg={response.msg}"
+                    )
+                    return None
+                
+                data = getattr(response, "data", None)
+                if data:
+                    return getattr(data, "reaction_id", None)
+                return None
+            
+            reaction_id = await loop.run_in_executor(None, _add_reaction_sync)
+            
+            if reaction_id:
+                logger.debug(f"[{self.module_id}] 已添加表情 {emoji_type} 到消息 {message_id}")
+                # 缓存表情反应 ID
+                self._typing_reaction_ids[message_id] = reaction_id
+            
+            return reaction_id
+            
+        except Exception as e:
+            logger.error(f"[{self.module_id}] 添加表情异常：{e}", exc_info=True)
+            return None
+
+    async def remove_reaction(self, message_id: str, reaction_id: Optional[str] = None) -> bool:
+        """删除消息的表情反应
+        
+        Args:
+            message_id: 消息 ID
+            reaction_id: 表情反应 ID（可选，如果不提供则从缓存中获取）
+            
+        Returns:
+            是否删除成功
+        """
+        if not self._client:
+            logger.error(f"[{self.module_id}] 客户端未初始化")
+            return False
+        
+        # 如果没有提供 reaction_id，从缓存中获取
+        if not reaction_id:
+            reaction_id = self._typing_reaction_ids.pop(message_id, None)
+        
+        if not reaction_id:
+            logger.debug(f"[{self.module_id}] 未找到表情反应 ID")
+            return False
+        
+        try:
+            loop = asyncio.get_running_loop()
+            
+            def _remove_reaction_sync():
+                request = DeleteMessageReactionRequest.builder() \
+                    .message_id(message_id) \
+                    .reaction_id(reaction_id) \
+                    .build()
+                
+                response = self._client.im.v1.messageReaction.delete(request)
+                
+                if not response.success():
+                    logger.error(
+                        f"[{self.module_id}] 删除表情失败：code={response.code}, "
+                        f"msg={response.msg}"
+                    )
+                    return False
+                
+                return True
+            
+            result = await loop.run_in_executor(None, _remove_reaction_sync)
+            
+            if result:
+                logger.debug(f"[{self.module_id}] 已删除表情反应 {reaction_id}")
+                # 清理缓存
+                self._typing_reaction_ids.pop(message_id, None)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"[{self.module_id}] 删除表情异常：{e}", exc_info=True)
+            return False
 
     async def _is_duplicate_message(self, message_id: str) -> bool:
         """检查是否为重复消息"""
