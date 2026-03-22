@@ -124,6 +124,165 @@ def output_error(code: str, message: str, command: str = "", exit_code: int = EX
     return exit_code
 
 
+# ==================== IFlow Session 控制器 ====================
+class SessionController:
+    """IFlow 会话文件管理器
+    
+    管理工作目录下的 session-*.jsonl 文件
+    """
+    
+    def __init__(self, workspace: str = None):
+        """初始化
+        
+        Args:
+            workspace: iflow 工作目录（默认 ~/.iflow）
+        """
+        if workspace:
+            self.workspace = Path(workspace).expanduser().absolute()
+        else:
+            self.workspace = Path.home() / ".iflow"
+        
+        self.projects_dir = self.workspace / "projects"
+    
+    def _get_project_dir(self, cwd: str = None) -> Path:
+        """获取项目目录
+        
+        Args:
+            cwd: 当前工作目录（None 则使用当前目录）
+            
+        Returns:
+            项目目录路径
+        """
+        if cwd:
+            cwd_path = Path(cwd).absolute()
+            # 将路径转换为 iflow 格式：/path/to/project -> -path-to-project
+            dir_name = "-" + str(cwd_path).replace("/", "-").lstrip("-")
+        else:
+            # 使用当前工作目录
+            cwd_path = Path.cwd()
+            dir_name = "-" + str(cwd_path).replace("/", "-").lstrip("-")
+        
+        return self.projects_dir / dir_name
+    
+    def list_sessions(self, cwd: str = None, limit: int = 20) -> List[Dict[str, Any]]:
+        """列出会话文件
+        
+        Args:
+            cwd: 工作目录
+            limit: 最大返回数量
+            
+        Returns:
+            会话文件列表
+        """
+        project_dir = self._get_project_dir(cwd)
+        
+        if not project_dir.exists():
+            return []
+        
+        sessions = []
+        for session_file in sorted(project_dir.glob("session-*.jsonl"), key=lambda x: x.stat().st_mtime, reverse=True)[:limit]:
+            stat = session_file.stat()
+            sessions.append({
+                "name": session_file.name,
+                "path": str(session_file),
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+            })
+        
+        return sessions
+    
+    def get_current_session(self, cwd: str = None) -> Optional[Dict[str, Any]]:
+        """获取最新的会话文件
+        
+        Args:
+            cwd: 工作目录
+            
+        Returns:
+            最新会话信息
+        """
+        sessions = self.list_sessions(cwd, limit=1)
+        return sessions[0] if sessions else None
+    
+    def create_new_session(self, cwd: str = None) -> Dict[str, Any]:
+        """创建新会话（清除上下文）
+        
+        通过删除当前会话文件来实现
+        
+        Args:
+            cwd: 工作目录
+            
+        Returns:
+            操作结果
+        """
+        project_dir = self._get_project_dir(cwd)
+        
+        if not project_dir.exists():
+            return {"success": True, "message": "项目目录不存在，无需清理"}
+        
+        # 删除所有会话文件
+        deleted = []
+        for session_file in project_dir.glob("session-*.jsonl"):
+            session_file.unlink()
+            deleted.append(session_file.name)
+        
+        return {
+            "success": True,
+            "deleted_sessions": deleted,
+            "message": f"已删除 {len(deleted)} 个会话文件，下次对话将开始新会话"
+        }
+    
+    def view_session(self, session_name: str = None, cwd: str = None, 
+                     lines: int = 50) -> Dict[str, Any]:
+        """查看会话内容
+        
+        Args:
+            session_name: 会话文件名（None 则使用最新的）
+            cwd: 工作目录
+            lines: 显示行数
+            
+        Returns:
+            会话内容
+        """
+        project_dir = self._get_project_dir(cwd)
+        
+        if not project_dir.exists():
+            return {"success": False, "error": "project_not_found", "message": "项目目录不存在"}
+        
+        if session_name:
+            session_file = project_dir / session_name
+            if not session_file.exists():
+                return {"success": False, "error": "session_not_found", "message": f"会话文件 {session_name} 不存在"}
+        else:
+            # 使用最新的会话
+            sessions = self.list_sessions(cwd, limit=1)
+            if not sessions:
+                return {"success": False, "error": "no_sessions", "message": "没有会话文件"}
+            session_file = Path(sessions[0]["path"])
+        
+        try:
+            content_lines = []
+            with open(session_file, "r", encoding="utf-8") as f:
+                for i, line in enumerate(f):
+                    if i >= lines:
+                        break
+                    try:
+                        data = json.loads(line.strip())
+                        role = data.get("role", "unknown")
+                        content = data.get("content", [{}])[0].get("text", "")[:200] if data.get("content") else ""
+                        content_lines.append({"role": role, "content": content, "line": i + 1})
+                    except json.JSONDecodeError:
+                        content_lines.append({"role": "raw", "content": line.strip()[:200], "line": i + 1})
+            
+            return {
+                "success": True,
+                "session": session_file.name,
+                "total_lines": sum(1 for _ in open(session_file, "r", encoding="utf-8")),
+                "content": content_lines
+            }
+        except Exception as e:
+            return {"success": False, "error": "read_error", "message": str(e)}
+
+
 # ==================== Tmux 控制器 ====================
 class TmuxController:
     """Tmux 会话控制器"""
@@ -868,6 +1027,83 @@ async def cmd_interactive(args):
         await tool.disconnect()
 
 
+# ==================== Session 命令处理 ====================
+async def cmd_session_list(args):
+    """处理 session list 命令"""
+    controller = SessionController(workspace=args.workspace)
+    sessions = controller.list_sessions(limit=args.limit or 20)
+    
+    if args.json:
+        output_json({"sessions": sessions, "count": len(sessions)}, command="session list")
+    else:
+        if not sessions:
+            print("没有会话文件")
+        else:
+            print(f"会话文件 ({len(sessions)} 个):")
+            print("-" * 60)
+            for s in sessions:
+                modified = s["modified"][11:19]  # 只取时间部分
+                size_kb = s["size"] / 1024
+                print(f"  {s['name']}: {size_kb:.1f}KB, {modified}")
+    return EXIT_SUCCESS
+
+
+async def cmd_session_current(args):
+    """处理 session current 命令"""
+    controller = SessionController(workspace=args.workspace)
+    session = controller.get_current_session()
+    
+    if args.json:
+        output_json({"session": session}, command="session current")
+    else:
+        if session:
+            print(f"当前会话: {session['name']}")
+            print(f"  大小: {session['size'] / 1024:.1f}KB")
+            print(f"  修改: {session['modified']}")
+        else:
+            print("没有当前会话")
+    return EXIT_SUCCESS
+
+
+async def cmd_session_new(args):
+    """处理 session new 命令"""
+    controller = SessionController(workspace=args.workspace)
+    result = controller.create_new_session()
+    
+    if args.json:
+        output_json(result, success=result.get("success", False), command="session new")
+    else:
+        if result.get("success"):
+            print(f"✅ {result['message']}")
+        else:
+            print(f"❌ {result.get('message', '未知错误')}")
+    return EXIT_SUCCESS if result.get("success") else EXIT_ERROR
+
+
+async def cmd_session_view(args):
+    """处理 session view 命令"""
+    controller = SessionController(workspace=args.workspace)
+    result = controller.view_session(
+        session_name=args.name if hasattr(args, 'name') else None,
+        lines=args.lines or 50
+    )
+    
+    if args.json:
+        output_json(result, success=result.get("success", False), command="session view")
+    else:
+        if result.get("success"):
+            print(f"会话: {result['session']}")
+            print(f"总行数: {result['total_lines']}")
+            print("-" * 60)
+            for item in result["content"]:
+                role = item["role"]
+                content = item["content"][:100]
+                print(f"  [{role}] {content}...")
+        else:
+            print(f"❌ {result.get('message', '未知错误')}")
+    return EXIT_SUCCESS if result.get("success") else EXIT_ERROR
+
+
 # ==================== 参数解析 ====================
 def create_parser():
     """创建命令行参数解析器"""
@@ -939,6 +1175,33 @@ def create_parser():
     interactive_parser.add_argument("--scope", choices=["all", "reply_only"], default="reply_only")
     interactive_parser.add_argument("--source", default="tool")
     interactive_parser.set_defaults(func=cmd_interactive)
+    
+    # session 子命令
+    session_parser = subparsers.add_parser("session", help="IFlow 会话文件管理")
+    session_subparsers = session_parser.add_subparsers(dest="session_command", help="Session 命令")
+    
+    # session list
+    session_list_parser = session_subparsers.add_parser("list", help="列出会话文件")
+    session_list_parser.add_argument("--workspace", "-w", help="工作目录")
+    session_list_parser.add_argument("--limit", "-n", type=int, default=20, help="最大返回数量")
+    session_list_parser.set_defaults(func=cmd_session_list)
+    
+    # session current
+    session_current_parser = session_subparsers.add_parser("current", help="显示当前会话")
+    session_current_parser.add_argument("--workspace", "-w", help="工作目录")
+    session_current_parser.set_defaults(func=cmd_session_current)
+    
+    # session new
+    session_new_parser = session_subparsers.add_parser("new", help="创建新会话（清空上下文）")
+    session_new_parser.add_argument("--workspace", "-w", help="工作目录")
+    session_new_parser.set_defaults(func=cmd_session_new)
+    
+    # session view
+    session_view_parser = session_subparsers.add_parser("view", help="查看会话内容")
+    session_view_parser.add_argument("name", nargs="?", help="会话文件名（默认最新）")
+    session_view_parser.add_argument("--workspace", "-w", help="工作目录")
+    session_view_parser.add_argument("--lines", "-n", type=int, default=50, help="显示行数")
+    session_view_parser.set_defaults(func=cmd_session_view)
     
     # 兼容旧命令行参数
     parser.add_argument("--message", "-M", help="发送消息（兼容旧命令）")
