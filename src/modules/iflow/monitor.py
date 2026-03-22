@@ -868,7 +868,7 @@ class IFlowMonitor:
             
             # 处理无来源缓冲区（备用逻辑）
             merged_replies = '\n'.join(self._no_source_buffer)
-            formatted_content = f"未知来源消息回复结束，原请求消息内容是{self._no_source_request_content}，回复内容是：{merged_replies}"
+            formatted_content = f"未知来源消息回复结束！\n原请求消息内容是：{self._no_source_request_content}\n回复内容如下：\n{merged_replies}"
             
             message = OutboundMessage(
                 type=MessageType.REPLY,
@@ -915,7 +915,7 @@ class IFlowMonitor:
             # 无来源：按用户要求格式发送
             merged_replies = '\n'.join(buffered_replies)
             original_request = self._current_request_record.content
-            formatted_content = f"未知来源消息回复结束，原请求消息内容是{original_request}，回复内容是：{merged_replies}"
+            formatted_content = f"未知来源消息回复结束！\n原请求消息内容是：{original_request}\n回复内容如下：\n{merged_replies}"
             
             message = OutboundMessage(
                 type=MessageType.REPLY,
