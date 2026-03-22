@@ -1591,7 +1591,7 @@ def help_all():
 tmux_app = typer.Typer(help="Tmux 会话管理命令")
 
 
-def get_all_tmux_sessions() -> list:
+def get_system_tmux_sessions() -> list:
     """获取系统中所有 tmux 会话
     
     Returns:
@@ -1668,7 +1668,7 @@ def resolve_session_name(session_ref: str, config_path: str = "config.json") -> 
         return session_ref
     
     # 获取所有会话并编号
-    all_sessions = get_all_tmux_sessions()
+    all_sessions = get_system_tmux_sessions()
     project_sessions = get_project_tmux_sessions(config_path)
     
     # 合并并编号：先项目会话，再其他会话
@@ -1715,7 +1715,7 @@ def tmux_list(
     print_header("Tmux 会话列表")
     
     # 获取所有会话
-    all_sessions = get_all_tmux_sessions()
+    all_sessions = get_system_tmux_sessions()
     project_sessions = get_project_tmux_sessions(config)
     
     if not all_sessions:
@@ -1788,7 +1788,7 @@ def tmux_status(
     print_header("项目 Tmux 会话状态")
     
     project_sessions = get_project_tmux_sessions(config)
-    all_sessions = get_all_tmux_sessions()
+    all_sessions = get_system_tmux_sessions()
     
     # 创建会话名到会话信息的映射
     session_map = {s['name']: s for s in all_sessions}
@@ -1878,7 +1878,7 @@ def tmux_kill_all(
         print()
         
         # 获取所有会话
-        sessions = get_all_tmux_sessions()
+        sessions = get_system_tmux_sessions()
         
         if not sessions:
             print_warning("没有运行中的 tmux 会话")
@@ -1898,7 +1898,7 @@ def tmux_kill_all(
         print_header("关闭所有项目 Tmux 会话")
         
         project_sessions = get_project_tmux_sessions(config)
-        all_sessions_list = get_all_tmux_sessions()
+        all_sessions_list = get_system_tmux_sessions()
         session_map = {s['name']: s for s in all_sessions_list}
         
         # 只关闭运行中的项目会话

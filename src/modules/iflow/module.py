@@ -524,7 +524,9 @@ class IFlowModule(BaseModule):
             return
         
         # 设置接收方和范围
-        message.receiver = source
+        # 注意：如果 message.receiver 已经为空（无来源消息），保持为空
+        if message.receiver != "":
+            message.receiver = source
         message.scope = scope
         
         # 增加回复计数
@@ -566,8 +568,15 @@ class IFlowModule(BaseModule):
         
         # 发送到消息总线
         if self.message_bus:
-            await self.send_to_bus(msg)
-            logger.debug(f"[{self.module_id}] 已发送 iflow 回复到消息总线")
+            if message.receiver == "":
+                # 无来源消息：广播给所有绑定者
+                logger.info(f"[{self.module_id}] 无来源消息，使用广播模式")
+                count = await self.message_bus.broadcast_to_bindings(msg, self.module_id)
+                logger.debug(f"[{self.module_id}] 已广播 iflow 回复到 {count} 个模块")
+            else:
+                # 有来源消息：按绑定关系路由
+                await self.send_to_bus(msg)
+                logger.debug(f"[{self.module_id}] 已发送 iflow 回复到消息总线")
 
         # 通知订阅者
         await self._notify_subscribers(message)

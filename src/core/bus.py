@@ -198,6 +198,51 @@ class MessageBus:
             logger.error(f"[MessageBus] ❌ 发送失败: 接收模块 {message.to_module} 不存在 (消息: {message.id})")
             self.stats["errors"] += 1
             return False
+    
+    async def broadcast_to_bindings(self, message: Message, sender_id: str) -> int:
+        """广播消息给所有绑定了发送者的模块
+        
+        用于无来源消息的场景：当 receiver 为空时，向所有绑定了发送者的模块广播。
+        
+        Args:
+            message: 消息对象
+            sender_id: 发送模块 ID（通常是 iflow 模块）
+            
+        Returns:
+            成功发送的模块数量
+        """
+        success_count = 0
+        
+        # 找出所有绑定了发送者的模块
+        for from_module, to_module in self.bindings.items():
+            if from_module == sender_id:
+                # 发送者是绑定的发起方，跳过（避免循环）
+                continue
+            if to_module == sender_id:
+                # 绑定的接收方是发送者，向发起方广播
+                target_module_id = from_module
+            else:
+                continue
+            
+            # 发送到目标模块
+            if target_module_id in self.modules:
+                try:
+                    target_message = Message(
+                        id=Message.generate_id(),
+                        type=message.type,
+                        content=message.content,
+                        from_module=sender_id,
+                        to_module=target_module_id,
+                        metadata=message.metadata
+                    )
+                    await self.modules[target_module_id].receive(target_message)
+                    success_count += 1
+                    logger.debug(f"[MessageBus] 广播消息到: {target_module_id}")
+                except Exception as e:
+                    logger.error(f"[MessageBus] 广播到 {target_module_id} 失败: {e}")
+        
+        logger.info(f"[MessageBus] 📢 广播消息: {message.id} 到 {success_count} 个模块")
+        return success_count
         
         try:
             target_module = self.modules[message.to_module]
