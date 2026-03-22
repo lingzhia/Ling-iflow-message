@@ -684,12 +684,21 @@ class CommandHandler:
                 # 指定了渠道名，转换为 iflow 模块名
                 module_id = f"iflow_{target}"
         else:
-            # 未指定目标，尝试从消息上下文推断
-            # 暂时使用第一个 iflow 模块
+            # 未指定目标，查找有可用 tmux 会话的 iflow 模块
             iflow_modules = [mid for mid in self.bus.modules.keys() if mid.startswith("iflow_")]
             if not iflow_modules:
                 return "❌ 没有可用的 iflow 模块"
-            module_id = iflow_modules[0]
+            
+            # 遍历找到有 tmux 会话的模块
+            module_id = None
+            for mid in iflow_modules:
+                mod = self.bus.modules.get(mid)
+                if mod and hasattr(mod, 'controller') and mod.controller and mod.controller.tmux_session:
+                    module_id = mid
+                    break
+            
+            if not module_id:
+                return f"❌ 没有可用的 tmux 会话（检查了 {len(iflow_modules)} 个 iflow 模块）"
         
         # 检查模块是否存在
         if module_id not in self.bus.modules:
@@ -708,12 +717,18 @@ class CommandHandler:
         if not tmux_session:
             return f"❌ 模块 {module_id} 没有 tmux 会话"
         
+        # 检查 tmux 会话是否真的存在
+        if hasattr(controller, 'check_tmux_session'):
+            tmux_exists = await controller.check_tmux_session()
+            if not tmux_exists:
+                return f"❌ tmux 会话 {tmux_session} 不存在或已关闭"
+        
         try:
             # 捕获 tmux 输出（最后 50 行）
             output = await controller.capture_output(lines=50)
             
             if not output:
-                return f"❌ 无法捕获 tmux 会话 {tmux_session} 的输出"
+                return f"❌ 无法捕获 tmux 会话 {tmux_session} 的输出（可能会话为空）"
             
             # 清理输出（移除控制字符）
             cleaned_output = self._clean_tmux_output(output)
