@@ -718,8 +718,16 @@ class FeishuChannel(BaseModule):
             # 提取消息内容
             content = message.content.text if message.content else ""
             
-            # 从 metadata 获取接收者 ID（如果有）
-            receive_id = message.metadata.get("chat_id") or message.metadata.get("receive_id")
+            # 从 metadata 获取接收者 ID（支持多种字段名）
+            # receiver: IFlowModule COMPLETE 消息使用
+            # chat_id: 标准字段
+            # receive_id: 兼容字段
+            receive_id = (
+                message.metadata.get("receiver") or
+                message.metadata.get("chat_id") or
+                message.metadata.get("receive_id") or
+                message.chat_id
+            )
             
             if not content:
                 logger.warning(f"[{self.module_id}] 消息内容为空")
@@ -859,11 +867,13 @@ class FeishuChannel(BaseModule):
             loop = asyncio.get_running_loop()
             
             def _add_reaction_sync():
+                # reaction_type 需要传入 Emoji 对象
+                emoji_obj = Emoji.builder().emoji_type(emoji_type).build()
                 request = CreateMessageReactionRequest.builder() \
                     .message_id(message_id) \
                     .request_body(
                         CreateMessageReactionRequestBody.builder()
-                        .reaction_type(emoji_type)
+                        .reaction_type(emoji_obj)
                         .build()
                     ).build()
                 

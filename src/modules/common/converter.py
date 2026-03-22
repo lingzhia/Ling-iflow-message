@@ -174,9 +174,18 @@ class MessageConverter:
         """
         content = message.content.text if message.content else ""
         
+        # 支持多种字段名获取聊天 ID
+        # receiver: IFlowModule COMPLETE 消息使用
+        # chat_id: 标准字段
+        chat_id = (
+            message.chat_id or
+            message.metadata.get("receiver") or
+            message.metadata.get("chat_id", "")
+        )
+        
         return {
             "content": content,
-            "chat_id": message.chat_id or message.metadata.get("chat_id", ""),
+            "chat_id": chat_id,
             "is_group": message.is_group,
             "msg_type": "text"
         }
