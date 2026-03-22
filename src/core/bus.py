@@ -198,6 +198,25 @@ class MessageBus:
             logger.error(f"[MessageBus] ❌ 发送失败: 接收模块 {message.to_module} 不存在 (消息: {message.id})")
             self.stats["errors"] += 1
             return False
+        
+        try:
+            target_module = self.modules[message.to_module]
+            content_preview = _format_content(message.content.text if message.content else "")
+            
+            logger.debug(f"[MessageBus] 📤 发送消息: {message.id}")
+            logger.debug(f"   从: {message.from_module or '(未知)'}")
+            logger.debug(f"   到: {message.to_module}")
+            logger.debug(f"   内容: {content_preview}")
+            
+            await target_module.receive(message)
+            self.stats["messages_sent"] += 1
+            
+            logger.info(f"[MessageBus] ✅ 消息发送成功: {message.id} -> {message.to_module}")
+            return True
+        except Exception as e:
+            logger.error(f"[MessageBus] ❌ 消息发送异常: {message.id}, 错误: {e}", exc_info=True)
+            self.stats["errors"] += 1
+            return False
     
     async def broadcast_to_bindings(self, message: Message, sender_id: str) -> int:
         """广播消息给所有绑定了发送者的模块
@@ -243,25 +262,6 @@ class MessageBus:
         
         logger.info(f"[MessageBus] 📢 广播消息: {message.id} 到 {success_count} 个模块")
         return success_count
-        
-        try:
-            target_module = self.modules[message.to_module]
-            content_preview = _format_content(message.content.text if message.content else "")
-            
-            logger.debug(f"[MessageBus] 📤 发送消息: {message.id}")
-            logger.debug(f"   从: {message.from_module or '(未知)'}")
-            logger.debug(f"   到: {message.to_module}")
-            logger.debug(f"   内容: {content_preview}")
-            
-            await target_module.receive(message)
-            self.stats["messages_sent"] += 1
-            
-            logger.info(f"[MessageBus] ✅ 消息发送成功: {message.id} -> {message.to_module}")
-            return True
-        except Exception as e:
-            logger.error(f"[MessageBus] ❌ 消息发送异常: {message.id}, 错误: {e}", exc_info=True)
-            self.stats["errors"] += 1
-            return False
     
     async def route(self, message: Message) -> bool:
         """路由消息（根据绑定关系）

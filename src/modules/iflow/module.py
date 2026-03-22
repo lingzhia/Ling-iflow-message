@@ -180,6 +180,7 @@ class IFlowModule(BaseModule):
         Args:
             message: 接收到的消息
         """
+        logger.info(f"[{self.module_id}] 收到来自消息总线的消息")
         # 从消息中提取信息
         content = getattr(message, 'content', None)
         if hasattr(content, 'text'):
