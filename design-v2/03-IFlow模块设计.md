@@ -750,6 +750,131 @@ iflow 返回 ✦ 回复3
 3. 支持多轮对话，每次对话独立归属
 ```
 
+### 无来源消息处理
+
+#### 场景定义
+
+**无来源消息**：用户直接在 tmux 会话中的 iflow 输入框输入消息，而不是通过外部渠道（企业微信、飞书等）发送。
+
+**特点**：
+- 没有外部渠道触发的入站消息
+- IFlowModule 没有记录 source
+- 无法确定回复应该发给谁
+
+#### 检测机制
+
+**检测方式**：IFlowMonitor 持续监控 tmux 输出，检测用户直接输入的消息。
+
+```
+用户在 iflow 中输入消息
+    ↓
+iflow 处理消息
+    ↓
+IFlowMonitor 检测到新的用户输入
+    ↓
+判断：是否有对应的入站消息记录？
+    ├─ 有 → 正常归属流程（source 不为空）
+    └─ 无 → 无来源消息处理流程
+```
+
+**检测方法**：
+
+1. **消息输入检测**：检测 iflow 输出中出现的用户输入（`>` 开头的行）
+2. **归属判断**：查询 MessageStore 中是否有 processing 状态的消息
+3. **无来源标记**：如果没有对应的入站记录，标记为无来源消息
+
+#### 处理流程
+
+```
+检测到无来源消息
+    ↓
+记录到 MessageStore（source=""）
+    ↓
+等待 iflow 生成回复
+    ↓
+IFlowMonitor 提取回复消息
+    ↓
+合并所有 ✦ 标记的消息为一条
+    ↓
+构造 OutboundMessage：
+  - type: reply
+  - content: 合并后的回复内容
+  - receiver: ""（空，表示无特定接收者）
+    ↓
+发送到消息总线
+    ↓
+MessageBus 广播给所有订阅者
+    ↓
+订阅者（渠道模块）根据业务逻辑决定是否处理
+```
+
+#### 消息合并规则
+
+**原则**：将一次对话的所有 ✦ 标记消息合并为一条完整消息。
+
+**合并逻辑**：
+```python
+def merge_reply_messages(messages: List[Dict]) -> str:
+    """合并回复消息"""
+    reply_contents = []
+    for msg in messages:
+        if msg.get('marker_type') == '✦':
+            reply_contents.append(msg.get('content', ''))
+    return '\n\n'.join(reply_contents)
+```
+
+#### 消息总线路由
+
+**路由策略**：无来源消息（receiver=""）使用**广播模式**。
+
+```python
+# MessageBus 路由逻辑
+if message.receiver == "":
+    # 广播给所有订阅 iflow 输出的模块
+    for subscriber in self._iflow_subscribers:
+        await subscriber.on_message(message)
+else:
+    # 点对点路由
+    target_module = self.get_module(message.receiver)
+    if target_module:
+        await target_module.on_message(message)
+```
+
+#### 渠道处理策略
+
+**渠道模块的处理策略**：
+
+| 策略 | 说明 | 适用场景 |
+|------|------|---------|
+| 忽略 | 不处理无来源消息 | 企业微信、飞书（无法确定发给谁） |
+| 通知 | 发送通知给管理员 | 运维监控场景 |
+| 记录 | 仅记录日志 | 审计场景 |
+| 广播 | 发送给所有关联用户 | 公告场景 |
+
+**默认策略**：忽略无来源消息（渠道模块自行决定是否处理）
+
+#### 配置项
+
+```json
+{
+  "iflow": {
+    "handle_no_source": true,        // 是否处理无来源消息
+    "no_source_strategy": "ignore",  // 处理策略：ignore/notify/log/broadcast
+    "no_source_notify_user": ""      // 通知目标用户（strategy=notify 时）
+  }
+}
+```
+
+#### 与有来源消息的对比
+
+| 项目 | 有来源消息 | 无来源消息 |
+|------|-----------|-----------|
+| 触发方式 | 外部渠道发送 | 用户直接在 iflow 输入 |
+| source 字段 | 渠道标识（如 `wechat_bot1`） | 空字符串 |
+| MessageStore 记录 | 有入站记录 | 只有出站记录 |
+| 回复归属 | 点对点（指定 receiver） | 广播（receiver=""） |
+| 渠道处理 | 发送给对应用户 | 根据策略处理 |
+
 ---
 
 ## 完整消息链路
@@ -2127,3 +2252,4 @@ self._sent_marker_strings.clear()
 | v1.2 | 2025-01-25 | 优化状态检测逻辑 |
 | v1.3 | 2025-02-01 | 添加字符串定位机制 |
 | v1.4 | 2026-03-18 | 添加缓存管理策略，修复 /scope 命令历史消息重复问题 |
+| v1.5 | 2026-03-22 | 添加无来源消息处理章节，明确用户直接在 iflow 中输入消息的处理流程 |

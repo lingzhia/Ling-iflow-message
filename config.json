@@ -1,1 +1,57 @@
-{"bots": [{"name": "bot1", "corp_id": "ww6e6c8f55511c0100", "agent_id": "1000002", "secret": "glGm51i1mbRzGZVpzRePogV-2829E-peKVJkiMIM3gg", "user_id": "YuLingZhi", "token": "UdP3NJDU3T86VBktdtw", "encoding_aes_key": "eCrMvRSZjACg4uSJL4h2fP5o7WeJ8UKgaDidHwocruI", "callback_port": 8787, "callback_host": "0.0.0.0", "stream_mode": false, "poll_interval": 5, "allow_from": [], "group_policy": "mention", "group_allow_from": []}, {"name": "bot2", "corp_id": "ww6e6c8f55511c0100", "agent_id": "1000003", "secret": "hs4CXo6rxBE_9a1CRt861VH3SeTVOoDJTD-tzsK6Bvs", "user_id": "YuLingZhi", "token": "cLtI1i0tAG6iB7LJkpT", "encoding_aes_key": "q83ezpTykPQfzNzdfxQJFYCrdYZrImi2aTivK8FjUDB", "callback_port": 8788, "callback_host": "0.0.0.0", "stream_mode": false, "poll_interval": 5, "allow_from": [], "group_policy": "mention", "group_allow_from": []}], "simulator_channels": [{"name": "simulator1", "host": "localhost", "port": 19999}], "log_level": "INFO", "filter_thinking": true}
+{
+  "bots": [
+    {
+      "name": "wecom1",
+      "corp_id": "ww6e6c8f55511c0100",
+      "agent_id": "1000002",
+      "secret": "glGm51i1mbRzGZVpzRePogV-2829E-peKVJkiMIM3gg",
+      "user_id": "YuLingZhi",
+      "token": "UdP3NJDU3T86VBktdtw",
+      "encoding_aes_key": "eCrMvRSZjACg4uSJL4h2fP5o7WeJ8UKgaDidHwocruI",
+      "callback_port": 8787,
+      "callback_host": "0.0.0.0",
+      "stream_mode": false,
+      "poll_interval": 5,
+      "allow_from": [],
+      "group_policy": "mention",
+      "group_allow_from": []
+    },
+    {
+      "name": "wecom2",
+      "corp_id": "ww6e6c8f55511c0100",
+      "agent_id": "1000003",
+      "secret": "hs4CXo6rxBE_9a1CRt861VH3SeTVOoDJTD-tzsK6Bvs",
+      "user_id": "YuLingZhi",
+      "token": "cLtI1i0tAG6iB7LJkpT",
+      "encoding_aes_key": "q83ezpTykPQfzNzdfxQJFYCrdYZrImi2aTivK8FjUDB",
+      "callback_port": 8788,
+      "callback_host": "0.0.0.0",
+      "stream_mode": false,
+      "poll_interval": 5,
+      "allow_from": [],
+      "group_policy": "mention",
+      "group_allow_from": []
+    }
+  ],
+  "simulator_channels": [
+    {
+      "name": "simulator1",
+      "host": "localhost",
+      "port": 19999
+    }
+  ],
+  "log_level": "INFO",
+  "filter_thinking": true,
+  "feishu_channels": [
+    {
+      "name": "feishu1",
+      "app_id": "cli_a935de9dab799bcb",
+      "app_secret": "pcXWuk0m26w4aqXa5W4NyeHxtDeuMiX2",
+      "verification_token": "f8a0EUHM6ilMxn7oZFs1reUwx1bSEaow",
+      "encrypt_key": "",
+      "allow_from": [],
+      "notify_user_id": "ou_a39f9ed16166684cfd40f10a6b6cef39",
+      "tmux_session": "feishu1+iflow"
+    }
+  ]
+}

@@ -165,18 +165,20 @@ def start(
     config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径"),
     all_channels: bool = typer.Option(False, "--all", "-a", help="启动所有渠道"),
     channel: Optional[str] = typer.Option(None, "--channel", help="启动的特定渠道（使用 ls 列出所有渠道）"),
-    foreground: bool = typer.Option(False, "--foreground", "-f", help="前台运行（默认后台运行）")
+    foreground: bool = typer.Option(False, "--foreground", "-f", help="前台模式：启动后进入 tmux 会话")
 ):
     """启动服务
 
     默认后台启动第一个启用的渠道，使用 -a 启动所有渠道
+    使用 -f 进入 tmux 前台模式（启动后自动进入 tmux 会话）
 
     示例：
       ./manage.py start              后台启动默认渠道（第一个启用的渠道）
       ./manage.py start -a           后台启动所有渠道
-      ./manage.py start -f           前台启动默认渠道
+      ./manage.py start -f           前台模式：启动并进入 tmux 会话
       ./manage.py start --channel ls 列出所有可用渠道
-      ./manage.py start --channel wechat_bot1  启动指定渠道
+      ./manage.py start --channel feishu1  启动指定渠道
+      ./manage.py start -f --channel feishu1  前台模式启动指定渠道
     """
     print_header("启动服务")
 
@@ -272,6 +274,14 @@ def start(
     # 构建启动命令
     cmd = ["python3", "-m", "src.bot"] + cmd_args
 
+    # 确定目标渠道名（用于前台模式进入 tmux）
+    if all_channels:
+        target_channel_for_tmux = None  # 多渠道不自动进入
+    elif channel:
+        target_channel_for_tmux = channel
+    else:
+        target_channel_for_tmux = get_default_channel(config)
+
     if not foreground:
         # 后台运行（默认）
         log_file = Path("logs/bot.log")
@@ -286,10 +296,50 @@ def start(
         print_info("查看日志: ./manage.py logs")
         print_info("查看状态: ./manage.py status")
     else:
-        # 前台运行
-        print_info("前台运行，按 Ctrl+C 停止")
+        # 前台模式：后台启动服务，然后进入 tmux 会话
+        log_file = Path("logs/bot.log")
+        log_file.parent.mkdir(exist_ok=True)
+
+        # 后台启动服务
+        full_cmd = f"nohup python3 -m src.bot {' '.join(cmd_args)} > logs/bot.log 2>&1 &"
+        subprocess.run(full_cmd, shell=True)
+
+        if all_channels:
+            # 启动所有渠道，不自动进入 tmux
+            print_success("所有渠道已在后台启动")
+            print_info("查看日志: ./manage.py logs")
+            print_info("进入会话: ./manage.py tmux attach <会话名>")
+            return
+
+        # 等待 tmux 会话创建
+        tmux_session = f"{target_channel_for_tmux}+iflow"
+        print_info(f"等待 tmux 会话创建: {tmux_session}")
+
+        import time
+        max_wait = 30  # 最多等待 30 秒
+        for i in range(max_wait):
+            result = subprocess.run(
+                f"tmux has-session -t {tmux_session} 2>/dev/null",
+                shell=True, capture_output=True
+            )
+            if result.returncode == 0:
+                print_success(f"tmux 会话已创建")
+                break
+            time.sleep(1)
+            if i % 5 == 0:
+                print_info(f"等待中... ({i+1}秒)")
+        else:
+            print_error(f"tmux 会话创建超时 ({max_wait}秒)")
+            print_info("查看日志: ./manage.py logs")
+            raise typer.Exit(1)
+
+        # 进入 tmux 会话
+        print_info("正在进入 tmux 会话...")
         print()
-        subprocess.run(["python3", "-m", "src.bot"] + cmd_args)
+        print_info("提示: 按 Ctrl+B 然后按 D 退出会话（服务继续运行）")
+        print()
+        import os
+        os.system(f"tmux attach-session -t {tmux_session}")
 
 
 @app.command()
@@ -478,18 +528,18 @@ def restart(
     config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径"),
     all_channels: bool = typer.Option(False, "--all", "-a", help="重启所有渠道"),
     channel: Optional[str] = typer.Option(None, "--channel", help="重启的特定渠道（使用 ls 列出所有渠道）"),
-    foreground: bool = typer.Option(False, "--foreground", "-f", help="前台运行（默认后台运行）")
+    foreground: bool = typer.Option(False, "--foreground", "-f", help="前台模式：重启后进入 tmux 会话")
 ):
     """重启服务
 
-    默认后台重启默认渠道，使用 -f 前台运行
+    默认后台重启默认渠道，使用 -f 进入 tmux 前台模式
 
     示例：
       ./manage.py restart             后台重启默认渠道
       ./manage.py restart -a          后台重启所有渠道
-      ./manage.py restart -f          前台重启默认渠道
+      ./manage.py restart -f          前台模式：重启并进入 tmux 会话
       ./manage.py restart --channel ls 列出所有可用渠道
-      ./manage.py restart --channel wechat_bot1  重启指定渠道
+      ./manage.py restart --channel feishu1  重启指定渠道
     """
     print_header("重启服务")
 
@@ -631,10 +681,52 @@ def restart(
         print_info("查看日志: ./manage.py logs")
         print_info("查看状态: ./manage.py status")
     else:
-        # 前台运行
-        print_info("前台运行，按 Ctrl+C 停止")
+        # 前台模式：后台启动服务，然后进入 tmux 会话
+        log_file = Path("logs/bot.log")
+        log_file.parent.mkdir(exist_ok=True)
+
+        # 后台启动服务
+        if target_channel == "all":
+            full_cmd = f"nohup python3 -m src.bot {config} > logs/bot.log 2>&1 &"
+        else:
+            full_cmd = f"nohup python3 -m src.bot {config} --channel {target_channel} > logs/bot.log 2>&1 &"
+        subprocess.run(full_cmd, shell=True)
+
+        if target_channel == "all":
+            # 启动所有渠道，不自动进入 tmux
+            print_success("所有渠道已在后台重启")
+            print_info("查看日志: ./manage.py logs")
+            print_info("进入会话: ./manage.py tmux attach <会话名>")
+            return
+
+        # 等待 tmux 会话创建
+        tmux_session = f"{target_channel}+iflow"
+        print_info(f"等待 tmux 会话创建: {tmux_session}")
+
+        max_wait = 30  # 最多等待 30 秒
+        for i in range(max_wait):
+            result = subprocess.run(
+                f"tmux has-session -t {tmux_session} 2>/dev/null",
+                shell=True, capture_output=True
+            )
+            if result.returncode == 0:
+                print_success(f"tmux 会话已创建")
+                break
+            time.sleep(1)
+            if i % 5 == 0:
+                print_info(f"等待中... ({i+1}秒)")
+        else:
+            print_error(f"tmux 会话创建超时 ({max_wait}秒)")
+            print_info("查看日志: ./manage.py logs")
+            raise typer.Exit(1)
+
+        # 进入 tmux 会话
+        print_info("正在进入 tmux 会话...")
         print()
-        subprocess.run(cmd)
+        print_info("提示: 按 Ctrl+B 然后按 D 退出会话（服务继续运行）")
+        print()
+        import os
+        os.system(f"tmux attach-session -t {tmux_session}")
 
 
 @app.command()
@@ -1396,6 +1488,8 @@ def help_all():
 
     print("  channel   渠道管理命令（动态管理服务渠道）")
 
+    print("  tmux      Tmux 会话管理命令（查看、进入、关闭会话）")
+
     print()
 
     print("常用示例:")
@@ -1408,7 +1502,7 @@ def help_all():
 
     print("    ./manage.py start -a                # 后台启动所有渠道")
 
-    print("    ./manage.py start -f                # 前台启动默认渠道")
+    print("    ./manage.py start -f                # 前台模式：启动并进入 tmux 会话")
 
     print("    ./manage.py stop                    # 停止默认渠道")
 
@@ -1418,7 +1512,7 @@ def help_all():
 
     print("    ./manage.py restart -a              # 后台重启所有渠道")
 
-    print("    ./manage.py restart -f              # 前台重启默认渠道")
+    print("    ./manage.py restart -f              # 前台重启并进入 tmux 会话")
 
     print()
 
@@ -1456,6 +1550,22 @@ def help_all():
 
     print()
 
+    print("  Tmux 管理:")
+
+    print("    ./manage.py tmux list               # 列出所有 tmux 会话")
+
+    print("    ./manage.py tmux status             # 查看项目会话状态")
+
+    print("    ./manage.py tmux attach feishu1+iflow  # 进入会话")
+
+    print("    ./manage.py tmux view feishu1+iflow    # 查看会话内容")
+
+    print("    ./manage.py tmux kill feishu1+iflow    # 关闭指定会话")
+
+    print("    ./manage.py tmux kill-all              # 关闭所有项目会话")
+
+    print()
+
     print("获取详细帮助:")
 
     print()
@@ -1477,8 +1587,458 @@ def help_all():
     print("  例如: ./manage.py start --help")
 
 
-# 添加组管理子命令组
+# 创建 tmux 管理子命令组
+tmux_app = typer.Typer(help="Tmux 会话管理命令")
+
+
+def get_all_tmux_sessions() -> list:
+    """获取系统中所有 tmux 会话
+    
+    Returns:
+        list: 会话信息列表，每项包含 name, windows, created, attached
+    """
+    result = subprocess.run(
+        "tmux list-sessions -F '#{session_name}|#{session_windows}|#{session_created}|#{session_attached}' 2>/dev/null",
+        shell=True, capture_output=True, text=True
+    )
+    
+    sessions = []
+    if result.returncode == 0 and result.stdout.strip():
+        for line in result.stdout.strip().split('\n'):
+            if line:
+                parts = line.split('|')
+                try:
+                    created_ts = int(parts[2]) if len(parts) > 2 else 0
+                    created_str = ""
+                    if created_ts > 0:
+                        from datetime import datetime
+                        created_str = datetime.fromtimestamp(created_ts).strftime("%Y-%m-%d %H:%M")
+                    
+                    sessions.append({
+                        'name': parts[0],
+                        'windows': int(parts[1]) if len(parts) > 1 else 1,
+                        'created': created_str,
+                        'attached': int(parts[3]) if len(parts) > 3 else 0
+                    })
+                except (ValueError, IndexError):
+                    sessions.append({
+                        'name': parts[0] if parts else 'unknown',
+                        'windows': 1,
+                        'created': '',
+                        'attached': 0
+                    })
+    return sessions
+
+
+def get_project_tmux_sessions(config_path: str) -> list:
+    """获取项目相关的 tmux 会话名列表"""
+    config = load_config(config_path)
+    sessions = []
+    
+    # 飞书渠道
+    for fs in config.get('feishu_channels', []):
+        sessions.append(f"{fs['name']}+iflow")
+    
+    # 企业微信渠道
+    for bot in config.get('bots', []):
+        sessions.append(f"{bot['name']}+iflow")
+    
+    # 模拟器渠道
+    for sim in config.get('simulator_channels', []):
+        sessions.append(f"{sim['name']}+iflow")
+    
+    return sessions
+
+
+def resolve_session_name(session_ref: str, config_path: str = "config.json") -> str:
+    """解析会话引用（序号或会话名）
+    
+    Args:
+        session_ref: 会话序号（如 '1', '2'）或会话名（如 'feishu1+iflow'）
+        config_path: 配置文件路径
+        
+    Returns:
+        实际的会话名
+        
+    Raises:
+        typer.Exit: 如果序号无效
+    """
+    # 如果不是纯数字，直接返回（认为是会话名）
+    if not session_ref.isdigit():
+        return session_ref
+    
+    # 获取所有会话并编号
+    all_sessions = get_all_tmux_sessions()
+    project_sessions = get_project_tmux_sessions(config_path)
+    
+    # 合并并编号：先项目会话，再其他会话
+    indexed_sessions = []
+    
+    # 项目会话（包括运行中和未运行的）
+    project_running = []
+    project_not_running = []
+    for s in all_sessions:
+        if s['name'] in project_sessions:
+            project_running.append(s['name'])
+    
+    for s in project_sessions:
+        if s not in project_running:
+            project_not_running.append(s)
+    
+    # 编号：运行中的项目会话 + 未运行的项目会话 + 其他会话
+    for s in project_running:
+        indexed_sessions.append(s)
+    for s in project_not_running:
+        indexed_sessions.append(s)
+    for s in all_sessions:
+        if s['name'] not in project_sessions:
+            indexed_sessions.append(s['name'])
+    
+    # 解析序号
+    idx = int(session_ref)
+    if idx < 1 or idx > len(indexed_sessions):
+        print_error(f"无效的会话序号: {idx}")
+        print_info(f"可用序号: 1-{len(indexed_sessions)}")
+        raise typer.Exit(1)
+    
+    return indexed_sessions[idx - 1]
+
+
+@tmux_app.command("list")
+def tmux_list(
+    config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径")
+):
+    """列出所有 tmux 会话
+    
+    示例：./manage.py tmux list
+    """
+    print_header("Tmux 会话列表")
+    
+    # 获取所有会话
+    all_sessions = get_all_tmux_sessions()
+    project_sessions = get_project_tmux_sessions(config)
+    
+    if not all_sessions:
+        print_warning("没有运行中的 tmux 会话")
+        print()
+        print_info("启动服务后会自动创建 tmux 会话: ./manage.py start")
+        return
+    
+    # 分类：项目会话和其他会话
+    project_running = []
+    other_running = []
+    
+    for session in all_sessions:
+        if session['name'] in project_sessions:
+            project_running.append(session)
+        else:
+            other_running.append(session)
+    
+    # 计算总序号
+    idx = 0
+    
+    # 显示项目会话
+    print()
+    print(f"{COLOR_CYAN}项目会话:{COLOR_RESET}")
+    print(f"  {'序号':<6} {'会话名':<25} {'状态':<12} {'窗口数':<8} {'创建时间':<18}")
+    print(f"  {'-'*72}")
+    
+    if project_running:
+        for session in project_running:
+            idx += 1
+            status = f"{COLOR_GREEN}✅ 运行中{COLOR_RESET}"
+            attached = " (已附加)" if session['attached'] > 0 else ""
+            print(f"  {idx:<6} {session['name']:<25} {status:<12} {session['windows']:<8} {session['created']:<18}{attached}")
+    
+    # 显示配置中但未运行的会话
+    project_not_running = [s for s in project_sessions if s not in [x['name'] for x in project_running]]
+    for session_name in project_not_running:
+        idx += 1
+        status = f"{COLOR_YELLOW}⚪ 未运行{COLOR_RESET}"
+        print(f"  {idx:<6} {session_name:<25} {status:<12} {'-':<8} {'-':<18}")
+    
+    # 显示其他会话
+    if other_running:
+        print()
+        print(f"{COLOR_CYAN}其他会话:{COLOR_RESET}")
+        print(f"  {'序号':<6} {'会话名':<25} {'状态':<12} {'窗口数':<8} {'创建时间':<18}")
+        print(f"  {'-'*72}")
+        
+        for session in other_running:
+            idx += 1
+            status = f"{COLOR_GREEN}✅ 运行中{COLOR_RESET}"
+            attached = " (已附加)" if session['attached'] > 0 else ""
+            print(f"  {idx:<6} {session['name']:<25} {status:<12} {session['windows']:<8} {session['created']:<18}{attached}")
+    
+    print()
+    print_info("操作提示:")
+    print("  ./manage.py tmux attach <序号|会话名>   # 进入会话")
+    print("  ./manage.py tmux view <序号|会话名>     # 查看会话内容")
+    print("  ./manage.py tmux kill <序号|会话名>     # 关闭会话")
+
+
+@tmux_app.command("status")
+def tmux_status(
+    config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径")
+):
+    """查看项目相关会话状态
+    
+    示例：./manage.py tmux status
+    """
+    print_header("项目 Tmux 会话状态")
+    
+    project_sessions = get_project_tmux_sessions(config)
+    all_sessions = get_all_tmux_sessions()
+    
+    # 创建会话名到会话信息的映射
+    session_map = {s['name']: s for s in all_sessions}
+    
+    print()
+    print(f"  {'序号':<6} {'会话名':<25} {'状态':<12} {'窗口数':<8} {'创建时间':<18}")
+    print(f"  {'-'*72}")
+    
+    idx = 0
+    for session_name in project_sessions:
+        idx += 1
+        if session_name in session_map:
+            session = session_map[session_name]
+            status = f"{COLOR_GREEN}✅ 运行中{COLOR_RESET}"
+            attached = " (已附加)" if session['attached'] > 0 else ""
+            print(f"  {idx:<6} {session_name:<25} {status:<12} {session['windows']:<8} {session['created']:<18}{attached}")
+        else:
+            status = f"{COLOR_YELLOW}⚪ 未运行{COLOR_RESET}"
+            print(f"  {idx:<6} {session_name:<25} {status:<12} {'-':<8} {'-':<18}")
+    
+    print()
+    print_info("操作提示:")
+    print("  ./manage.py tmux attach <序号|会话名>   # 进入会话")
+    print("  ./manage.py tmux kill <序号|会话名>     # 关闭会话")
+
+
+@tmux_app.command("kill")
+def tmux_kill(
+    session_name: str = typer.Argument(..., help="会话名或序号"),
+    force: bool = typer.Option(False, "--force", "-f", help="强制关闭"),
+    config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径")
+):
+    """关闭指定 tmux 会话
+    
+    示例：
+      ./manage.py tmux kill 1              # 通过序号关闭会话
+      ./manage.py tmux kill feishu1+iflow  # 通过会话名关闭
+      ./manage.py tmux kill 1 -f           # 强制关闭
+    """
+    # 解析会话名（支持序号）
+    session_name = resolve_session_name(session_name, config)
+    
+    print_header(f"关闭 Tmux 会话: {session_name}")
+    
+    # 检查会话是否存在
+    result = subprocess.run(
+        f"tmux has-session -t {session_name} 2>/dev/null",
+        shell=True, capture_output=True
+    )
+    
+    if result.returncode != 0:
+        print_warning(f"会话不存在或已关闭: {session_name}")
+        return
+    
+    # 关闭会话
+    kill_cmd = f"tmux kill-session -t {session_name}"
+    if force:
+        # 先发送 SIGTERM 给会话中的所有进程
+        subprocess.run(f"tmux send-keys -t {session_name} C-c 2>/dev/null", shell=True)
+        import time
+        time.sleep(1)
+    
+    result = subprocess.run(kill_cmd, shell=True, capture_output=True)
+    
+    if result.returncode == 0:
+        print_success(f"会话已关闭: {session_name}")
+    else:
+        print_error(f"关闭会话失败: {session_name}")
+
+
+@tmux_app.command("kill-all")
+def tmux_kill_all(
+    config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径"),
+    all_sessions: bool = typer.Option(False, "--all", "-a", help="关闭所有会话（包括非项目会话）"),
+    force: bool = typer.Option(False, "--force", "-f", help="强制关闭")
+):
+    """关闭所有项目相关或全部 tmux 会话
+    
+    示例：
+      ./manage.py tmux kill-all              # 关闭所有项目相关会话
+      ./manage.py tmux kill-all --all        # 关闭所有 tmux 会话（危险！）
+      ./manage.py tmux kill-all -f           # 强制关闭所有项目相关会话
+    """
+    if all_sessions:
+        print_header("关闭所有 Tmux 会话")
+        print_warning("⚠️  这将关闭所有 tmux 会话，包括非项目会话！")
+        print()
+        
+        # 获取所有会话
+        sessions = get_all_tmux_sessions()
+        
+        if not sessions:
+            print_warning("没有运行中的 tmux 会话")
+            return
+        
+        print_info(f"即将关闭 {len(sessions)} 个会话:")
+        for session in sessions:
+            print(f"  - {session['name']}")
+        
+        print()
+        confirm = typer.confirm("确认关闭所有会话？", default=False)
+        
+        if not confirm:
+            print_info("操作已取消")
+            return
+    else:
+        print_header("关闭所有项目 Tmux 会话")
+        
+        project_sessions = get_project_tmux_sessions(config)
+        all_sessions_list = get_all_tmux_sessions()
+        session_map = {s['name']: s for s in all_sessions_list}
+        
+        # 只关闭运行中的项目会话
+        running_sessions = [s for s in project_sessions if s in session_map]
+        
+        if not running_sessions:
+            print_warning("没有运行中的项目 tmux 会话")
+            return
+        
+        print_info(f"即将关闭 {len(running_sessions)} 个项目会话:")
+        for session_name in running_sessions:
+            print(f"  - {session_name}")
+        
+        print()
+        confirm = typer.confirm("确认关闭所有项目会话？", default=False)
+        
+        if not confirm:
+            print_info("操作已取消")
+            return
+        
+        project_sessions = running_sessions
+    
+    # 关闭会话
+    success_count = 0
+    fail_count = 0
+    
+    for session_name in project_sessions if not all_sessions else [s['name'] for s in sessions]:
+        if force:
+            subprocess.run(f"tmux send-keys -t {session_name} C-c 2>/dev/null", shell=True)
+        
+        result = subprocess.run(
+            f"tmux kill-session -t {session_name} 2>/dev/null",
+            shell=True, capture_output=True
+        )
+        
+        if result.returncode == 0:
+            print_success(f"已关闭: {session_name}")
+            success_count += 1
+        else:
+            print_error(f"关闭失败: {session_name}")
+            fail_count += 1
+    
+    print()
+    print_info(f"总计: {success_count} 成功, {fail_count} 失败")
+
+
+@tmux_app.command("attach")
+def tmux_attach(
+    session_name: str = typer.Argument(..., help="会话名或序号"),
+    config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径")
+):
+    """进入 tmux 会话进行交互
+    
+    示例：
+      ./manage.py tmux attach 1              # 通过序号进入会话
+      ./manage.py tmux attach feishu1+iflow  # 通过会话名进入
+    
+    提示：
+      - 按 Ctrl+B 然后按 D 退出会话（会话继续运行）
+      - 按 Ctrl+B 然后按 [ 进入复制模式，按 q 退出
+      - 按 Ctrl+C 可能会停止 iflow 进程
+    """
+    # 解析会话名（支持序号）
+    session_name = resolve_session_name(session_name, config)
+    
+    # 检查会话是否存在
+    result = subprocess.run(
+        f"tmux has-session -t {session_name} 2>/dev/null",
+        shell=True, capture_output=True
+    )
+    
+    if result.returncode != 0:
+        print_error(f"会话不存在: {session_name}")
+        print_info("使用 ./manage.py tmux list 查看可用会话")
+        raise typer.Exit(1)
+    
+    print_header(f"进入 Tmux 会话: {session_name}")
+    print()
+    print_info("提示:")
+    print("  - 按 Ctrl+B 然后按 D 退出会话（会话继续运行）")
+    print("  - 按 Ctrl+B 然后按 [ 进入复制模式，按 q 退出")
+    print("  - 按 Ctrl+C 可能会停止 iflow 进程")
+    print()
+    print_info("正在附加到会话...")
+    print()
+    
+    # 使用 os.system 直接附加（需要交互式终端）
+    import os
+    os.system(f"tmux attach-session -t {session_name}")
+
+
+@tmux_app.command("view")
+def tmux_view(
+    session_name: str = typer.Argument(..., help="会话名或序号"),
+    lines: int = typer.Option(50, "--lines", "-n", help="显示行数"),
+    config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径")
+):
+    """查看 tmux 会话内容（只读，不进入会话）
+    
+    示例：
+      ./manage.py tmux view 1              # 通过序号查看最近 50 行
+      ./manage.py tmux view 1 -n 100       # 通过序号查看最近 100 行
+      ./manage.py tmux view feishu1+iflow  # 通过会话名查看
+    """
+    # 解析会话名（支持序号）
+    session_name = resolve_session_name(session_name, config)
+    
+    # 检查会话是否存在
+    result = subprocess.run(
+        f"tmux has-session -t {session_name} 2>/dev/null",
+        shell=True, capture_output=True
+    )
+    
+    if result.returncode != 0:
+        print_error(f"会话不存在: {session_name}")
+        print_info("使用 ./manage.py tmux list 查看可用会话")
+        raise typer.Exit(1)
+    
+    # 使用 capture-pane 捕获会话输出
+    result = subprocess.run(
+        f"tmux capture-pane -t {session_name} -p -S -{lines} 2>/dev/null",
+        shell=True, capture_output=True, text=True
+    )
+    
+    if result.returncode != 0:
+        print_error(f"无法获取会话内容: {session_name}")
+        raise typer.Exit(1)
+    
+    print_header(f"Tmux 会话内容: {session_name}")
+    print_info(f"显示最近 {lines} 行")
+    print()
+    print(result.stdout)
+    print()
+    print_info("操作提示:")
+    print("  ./manage.py tmux attach feishu1+iflow  # 进入会话交互")
+
+
+# 添加子命令组
 app.add_typer(channel_app, name="channel")
+app.add_typer(tmux_app, name="tmux")
 
 
 if __name__ == "__main__":
