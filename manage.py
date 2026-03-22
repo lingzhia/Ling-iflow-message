@@ -74,6 +74,15 @@ def get_channel_info(config_path: str) -> dict:
     config = load_config(config_path)
     channels = {}
     
+    # 从 feishu_channels 中获取飞书渠道（优先）
+    feishu_channels = config.get('feishu_channels', [])
+    for fs in feishu_channels:
+        channels[fs['name']] = {
+            'type': 'feishu',
+            'name': fs['name'],
+            'tmux_session': f"{fs['name']}+iflow"
+        }
+    
     # 从 bots 中获取企业微信渠道
     bots = config.get('bots', [])
     for bot in bots:
@@ -102,12 +111,19 @@ def get_available_channels(config_path: str) -> list:
 
 
 def get_default_channel(config_path: str) -> str:
-    """获取默认渠道名称（返回第一个渠道）"""
+    """获取默认渠道名称（优先返回飞书渠道，否则返回第一个渠道）"""
+    config = load_config(config_path)
+    
+    # 优先使用飞书渠道作为默认
+    feishu_channels = config.get('feishu_channels', [])
+    if feishu_channels:
+        return feishu_channels[0]['name']
+    
+    # 否则返回第一个渠道
     channel_info = get_channel_info(config_path)
-    # 直接返回第一个渠道
     if channel_info:
         return list(channel_info.keys())[0]
-    return "wechat_bot1"
+    return "feishu1"
 
 
 def get_tmux_session_by_channel(channel_name: str, config_path: str) -> Optional[str]:
@@ -174,6 +190,14 @@ def start(
         print()
         print(f"  {'渠道名':<20} {'类型':<10} {'状态':<10} {'tmux会话':<25}")
         print(f"  {'-'*65}")
+
+        # 显示飞书渠道
+        if config_data.get('feishu_channels'):
+            for fs in config_data['feishu_channels']:
+                channel_name = fs['name']
+                tmux_session = f"{fs['name']}+iflow"
+                type_icon = "🚀飞书"
+                print(f"  {channel_name:<20} {type_icon:<10} 可用       {tmux_session:<25}")
 
         # 显示企业微信渠道
         if config_data.get('bots'):
@@ -311,6 +335,14 @@ def stop(
         print()
         print(f"  {'渠道名':<20} {'类型':<10} {'状态':<10} {'tmux会话':<25}")
         print(f"  {'-'*65}")
+
+        # 显示飞书渠道
+        if config_data.get('feishu_channels'):
+            for fs in config_data['feishu_channels']:
+                channel_name = fs['name']
+                tmux_session = f"{fs['name']}+iflow"
+                type_icon = "🚀飞书"
+                print(f"  {channel_name:<20} {type_icon:<10} 可用       {tmux_session:<25}")
 
         # 显示企业微信渠道
         if config_data.get('bots'):
@@ -486,6 +518,14 @@ def restart(
         print()
         print(f"  {'渠道名':<20} {'类型':<10} {'状态':<10} {'tmux会话':<25}")
         print(f"  {'-'*65}")
+
+        # 显示飞书渠道
+        if config_data.get('feishu_channels'):
+            for fs in config_data['feishu_channels']:
+                channel_name = fs['name']
+                tmux_session = f"{fs['name']}+iflow"
+                type_icon = "🚀飞书"
+                print(f"  {channel_name:<20} {type_icon:<10} 可用       {tmux_session:<25}")
 
         # 显示企业微信渠道
         if config_data.get('bots'):
@@ -717,6 +757,21 @@ def status(config: str = typer.Option("config.json", "--config", "-c", help="配
     print(f"  {'渠道名':<20} {'类型':<10} {'状态':<10} {'tmux会话':<25}")
     print(f"  {'-'*65}")
 
+    # 显示飞书渠道
+    if config_data.get('feishu_channels'):
+        for fs in config_data['feishu_channels']:
+            channel_name = fs['name']
+            tmux_session = f"{fs['name']}+iflow"
+            is_running = channel_name in running_channels
+
+            if is_running:
+                status_icon = f"{COLOR_GREEN}已启动{COLOR_RESET}"
+            else:
+                status_icon = f"{COLOR_YELLOW}未启动{COLOR_RESET}"
+
+            type_icon = "🚀飞书"
+            print(f"  {channel_name:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
+
     # 显示企业微信渠道
     if config_data.get('bots'):
         for bot in config_data['bots']:
@@ -890,6 +945,15 @@ def list_channels(config: str = typer.Option("config.json", "--config", "-c", he
     print(f"  {'渠道名':<20} {'类型':<10} {'状态':<10} {'tmux会话':<25}")
     print(f"  {'-'*65}")
 
+    # 显示飞书渠道
+    if config_data.get('feishu_channels'):
+        for fs in config_data['feishu_channels']:
+            channel_name = fs['name']
+            tmux_session = f"{fs['name']}+iflow"
+
+            type_icon = "🚀飞书"
+            print(f"  {channel_name:<20} {type_icon:<10} 可用       {tmux_session:<25}")
+
     # 显示企业微信渠道
     if config_data.get('bots'):
         for bot in config_data['bots']:
@@ -960,6 +1024,17 @@ def status(
         print_info("可用渠道:")
         print(f"  {'渠道名':<20} {'类型':<10} {'状态':<10} {'tmux会话':<25}")
         print(f"  {'-'*65}")
+
+        # 显示飞书渠道
+        if config_data.get('feishu_channels'):
+            for fs in config_data['feishu_channels']:
+                channel_name_temp = fs['name']
+                tmux_session = f"{fs['name']}+iflow"
+
+                status_icon = f"{COLOR_YELLOW}未启动{COLOR_RESET}"
+
+                type_icon = "🚀飞书"
+                print(f"  {channel_name_temp:<20} {type_icon:<10} {status_icon:<10} {tmux_session:<25}")
 
         # 显示企业微信渠道
         if config_data.get('bots'):

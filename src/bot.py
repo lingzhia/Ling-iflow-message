@@ -13,6 +13,11 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
+# 前向声明，避免循环导入
+if False:
+    from .modules.channel import WeChatChannel, FeishuChannel, SimulatorChannel
+    from .modules.iflow import IFlowModule
+
 from .core import MessageBus, Message, ModuleManager
 
 
@@ -41,6 +46,7 @@ class LingIflowBot:
         self.bus: Optional[MessageBus] = None
         self.manager: Optional[ModuleManager] = None
         self.wechat_modules: Dict[str, WeChatChannel] = {}
+        self.feishu_modules: Dict[str, FeishuChannel] = {}
         self.simulator_modules: Dict[str, SimulatorChannel] = {}
         self.iflow_modules: Dict[str, IFlowModule] = {}
         
@@ -111,13 +117,26 @@ class LingIflowBot:
             logger.info("设置 MessageBus 的 ModuleManager 引用...")
             self.bus.module_manager = self.manager
             
-            # 4. 创建所有企业微信渠道模块
-            await self._create_wechat_modules()
+            # 4. 根据配置创建模块
+            # 检查是否有飞书配置
+            has_feishu = len(self.config.get("feishu_channels", [])) > 0
+            has_wechat = len(self.config.get("bots", [])) > 0
+            has_simulator = len(self.config.get("simulator_channels", [])) > 0
             
-            # 5. 创建所有模拟器渠道模块
-            await self._create_simulator_modules()
+            # 如果没有任何配置，默认创建企业微信模块
+            if not has_feishu and not has_wechat and not has_simulator:
+                has_wechat = True
             
-            # 6. 为每个渠道创建对应的 iflow 模块和绑定关系
+            if has_wechat:
+                await self._create_wechat_modules()
+            
+            if has_feishu:
+                await self._create_feishu_modules()
+            
+            if has_simulator:
+                await self._create_simulator_modules()
+            
+            # 7. 为每个渠道创建对应的 iflow 模块和绑定关系
             await self._setup_channels()
             
             logger.info("所有组件初始化完成")
@@ -151,6 +170,33 @@ class LingIflowBot:
             except Exception as e:
                 logger.error(f"创建企业微信模块失败 {bot_name}: {e}")
     
+
+    async def _create_feishu_modules(self) -> None:
+        """创建所有飞书渠道模块"""
+        feishu_config = self.config.get("feishu_channels", [])
+        logger.info(f"创建 {len(feishu_config)} 个飞书模块...")
+        
+        for fs_config in feishu_config:
+            if not fs_config.get("enabled", True):
+                continue
+            
+            fs_name = fs_config.get("name")
+            
+            try:
+                module_id = f"feishu_{fs_name}"
+                feishu = await self.manager.create_module(
+                    module_type="feishu",
+                    module_id=module_id,
+                    config=fs_config
+                )
+                feishu.set_manager(self.manager)
+                feishu.set_bot(self)
+                self.feishu_modules[fs_name] = feishu
+                await self.manager.register_module(module_id)
+                logger.info(f"创建飞书模块：{module_id}")
+            except Exception as e:
+                logger.error(f"创建飞书模块失败 {fs_name}: {e}")
+
     async def _create_simulator_modules(self) -> None:
         """创建所有模拟器渠道模块"""
         simulator_config = self.config.get("simulator_channels", [])
@@ -181,6 +227,12 @@ class LingIflowBot:
             if isinstance(bot_config, dict):
                 bot_name = bot_config.get("name")
                 await self._setup_channel_iflow(bot_name, bot_config)
+        
+        # 设置飞书渠道的 iflow 模块
+        for fs_config in self.config.get("feishu_channels", []):
+            if isinstance(fs_config, dict) and fs_config.get("enabled", True):
+                fs_name = fs_config.get("name")
+                await self._setup_channel_iflow(fs_name, fs_config)
         
         # 设置模拟器渠道的 iflow 模块
         for sim_config in self.config.get("simulator_channels", []):
@@ -219,6 +271,11 @@ class LingIflowBot:
                 self.bus.bind(wechat_module_id, iflow_module_id)
                 self.bus.bind(iflow_module_id, wechat_module_id)
                 logger.info(f"绑定: {wechat_module_id} <-> {iflow_module_id}")
+            elif channel_name in self.feishu_modules:
+                feishu_module_id = f"feishu_{channel_name}"
+                self.bus.bind(feishu_module_id, iflow_module_id)
+                self.bus.bind(iflow_module_id, feishu_module_id)
+                logger.info(f"绑定: {feishu_module_id} <-> {iflow_module_id}")
             elif channel_name in self.simulator_modules:
                 simulator_module_id = f"simulator_{channel_name}"
                 self.bus.bind(simulator_module_id, iflow_module_id)
@@ -240,6 +297,10 @@ class LingIflowBot:
                 # 启动企业微信模块
                 wechat_module_id = f"wechat_{self.active_channel}"
                 await self.manager.start_module(wechat_module_id)
+            elif self.active_channel in self.feishu_modules:
+                # 启动飞书模块
+                feishu_module_id = f"feishu_{self.active_channel}"
+                await self.manager.start_module(feishu_module_id)
             elif self.active_channel in self.simulator_modules:
                 # 启动模拟器模块
                 simulator_module_id = f"simulator_{self.active_channel}"
@@ -256,6 +317,11 @@ class LingIflowBot:
             for bot_name in self.wechat_modules.keys():
                 wechat_module_id = f"wechat_{bot_name}"
                 await self.manager.start_module(wechat_module_id)
+            
+            # 启动所有飞书模块
+            for fs_name in self.feishu_modules.keys():
+                feishu_module_id = f"feishu_{fs_name}"
+                await self.manager.start_module(feishu_module_id)
             
             # 启动所有模拟器模块
             for sim_name in self.simulator_modules.keys():
@@ -337,7 +403,7 @@ class LingIflowBot:
         """启动指定的渠道
         
         Args:
-            channel_name: 渠道名称 (wechat_bot1, simulator1)
+            channel_name: 渠道名称 (wechat_bot1, feishu1, simulator1)
             
         Returns:
             每个模块的启动结果
@@ -361,6 +427,24 @@ class LingIflowBot:
                         wechat.set_manager(self.manager)
                         wechat.set_bot(self)
                         self.wechat_modules[channel_name] = wechat
+                        await self.manager.register_module(module_id)
+                        break
+            
+            # 检查并创建飞书模块（如果不存在）
+            if channel_name not in self.feishu_modules:
+                # 尝试从配置中查找飞书配置
+                for fs_config in self.config.get("feishu_channels", []):
+                    if fs_config.get("name") == channel_name and fs_config.get("enabled", True):
+                        module_id = f"feishu_{channel_name}"
+                        logger.info(f"动态创建飞书模块: {module_id}")
+                        feishu = await self.manager.create_module(
+                            module_type="feishu",
+                            module_id=module_id,
+                            config=fs_config
+                        )
+                        feishu.set_manager(self.manager)
+                        feishu.set_bot(self)
+                        self.feishu_modules[channel_name] = feishu
                         await self.manager.register_module(module_id)
                         break
             
@@ -388,6 +472,12 @@ class LingIflowBot:
                 result = await self.manager.start_module(wechat_module_id)
                 results[wechat_module_id] = result.success
             
+            # 启动飞书模块
+            elif channel_name in self.feishu_modules:
+                feishu_module_id = f"feishu_{channel_name}"
+                result = await self.manager.start_module(feishu_module_id)
+                results[feishu_module_id] = result.success
+            
             # 启动模拟器模块
             elif channel_name in self.simulator_modules:
                 simulator_module_id = f"simulator_{channel_name}"
@@ -404,6 +494,11 @@ class LingIflowBot:
                     if bot_config.get("name") == channel_name:
                         channel_config = bot_config
                         break
+                if not channel_config:
+                    for fs_config in self.config.get("feishu_channels", []):
+                        if fs_config.get("name") == channel_name:
+                            channel_config = fs_config
+                            break
                 if not channel_config:
                     for sim_config in self.config.get("simulator_channels", []):
                         if sim_config.get("name") == channel_name:
@@ -448,6 +543,12 @@ class LingIflowBot:
                 wechat_module_id = f"wechat_{channel_name}"
                 result = await self.manager.stop_module(wechat_module_id)
                 results[wechat_module_id] = result.success
+            
+            # 停止飞书模块
+            elif channel_name in self.feishu_modules:
+                feishu_module_id = f"feishu_{channel_name}"
+                result = await self.manager.stop_module(feishu_module_id)
+                results[feishu_module_id] = result.success
             
             # 停止模拟器模块
             elif channel_name in self.simulator_modules:
@@ -504,6 +605,11 @@ class LingIflowBot:
             wechat_module_id = f"wechat_{channel_name}"
             channel_status["modules"][wechat_module_id] = self.manager.get_module_status(wechat_module_id)
         
+        # 获取飞书模块状态
+        elif channel_name in self.feishu_modules:
+            feishu_module_id = f"feishu_{channel_name}"
+            channel_status["modules"][feishu_module_id] = self.manager.get_module_status(feishu_module_id)
+        
         # 获取模拟器模块状态
         elif channel_name in self.simulator_modules:
             simulator_module_id = f"simulator_{channel_name}"
@@ -528,6 +634,10 @@ class LingIflowBot:
         for channel_name in self.wechat_modules.keys():
             all_status[channel_name] = self.get_channel_status(channel_name)
         
+        # 获取所有飞书渠道状态
+        for channel_name in self.feishu_modules.keys():
+            all_status[channel_name] = self.get_channel_status(channel_name)
+        
         # 获取所有模拟器渠道状态
         for channel_name in self.simulator_modules.keys():
             all_status[channel_name] = self.get_channel_status(channel_name)
@@ -540,7 +650,7 @@ class LingIflowBot:
         Returns:
             渠道名列表
         """
-        channels = list(self.wechat_modules.keys()) + list(self.simulator_modules.keys())
+        channels = list(self.wechat_modules.keys()) + list(self.feishu_modules.keys()) + list(self.simulator_modules.keys())
         return channels
     
     def get_channel_info(self, channel_name: str) -> Optional[Dict[str, Any]]:
@@ -557,6 +667,12 @@ class LingIflowBot:
         for bot in bots:
             if bot.get("name") == channel_name:
                 return bot
+        
+        # 从 feishu_channels 配置中查找
+        feishu_channels = self.config.get("feishu_channels", [])
+        for fs in feishu_channels:
+            if fs.get("name") == channel_name:
+                return fs
         
         # 从 simulator_channels 配置中查找
         simulators = self.config.get("simulator_channels", [])

@@ -211,6 +211,9 @@ class ModuleManager:
         elif module_type == "simulator":
             from ..modules.channel import SimulatorChannel
             module = SimulatorChannel(module_id=module_id, config=config)
+        elif module_type == "feishu":
+            from ..modules.channel import FeishuChannel
+            module = FeishuChannel(module_id=module_id, config=config)
         elif module_type == "command":
             from ..modules.command import CommandHandler
             module = CommandHandler(message_bus=self.message_bus)

@@ -6,5 +6,6 @@ Channel - 渠道模块
 
 from .wechat import WeChatChannel
 from .simulator import SimulatorChannel
+from .feishu import FeishuChannel
 
-__all__ = ["WeChatChannel", "SimulatorChannel"]
+__all__ = ["WeChatChannel", "SimulatorChannel", "FeishuChannel"]
