@@ -689,13 +689,18 @@ class CommandHandler:
             if not iflow_modules:
                 return "❌ 没有可用的 iflow 模块"
             
-            # 遍历找到有 tmux 会话的模块
+            # 遍历找到 tmux 会话真实存在的模块
             module_id = None
             for mid in iflow_modules:
                 mod = self.bus.modules.get(mid)
-                if mod and hasattr(mod, 'controller') and mod.controller and mod.controller.tmux_session:
-                    module_id = mid
-                    break
+                if mod and hasattr(mod, 'controller') and mod.controller:
+                    ctrl = mod.controller
+                    if ctrl.tmux_session and hasattr(ctrl, 'check_tmux_session'):
+                        # 检查 tmux 会话是否真的存在
+                        tmux_exists = await ctrl.check_tmux_session()
+                        if tmux_exists:
+                            module_id = mid
+                            break
             
             if not module_id:
                 return f"❌ 没有可用的 tmux 会话（检查了 {len(iflow_modules)} 个 iflow 模块）"
@@ -716,12 +721,6 @@ class CommandHandler:
         tmux_session = controller.tmux_session
         if not tmux_session:
             return f"❌ 模块 {module_id} 没有 tmux 会话"
-        
-        # 检查 tmux 会话是否真的存在
-        if hasattr(controller, 'check_tmux_session'):
-            tmux_exists = await controller.check_tmux_session()
-            if not tmux_exists:
-                return f"❌ tmux 会话 {tmux_session} 不存在或已关闭"
         
         try:
             # 捕获 tmux 输出（最后 50 行）
