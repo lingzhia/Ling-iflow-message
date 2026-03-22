@@ -79,6 +79,9 @@ class IFlowModule(BaseModule):
         # 创建控制器（会话名称延迟分配）
         self.controller = IFlowController(self._tmux_session_param)
         self.monitor = IFlowMonitor(self.controller)
+        
+        # 设置 controller 对 module 的引用，让 monitor 可以访问 message_store
+        self.controller.module = self
 
         # 创建会话管理器
         self.session_manager = SessionManager(self.workspace)

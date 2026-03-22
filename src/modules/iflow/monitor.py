@@ -107,6 +107,7 @@ class IFlowMonitor:
         
         # 无来源消息缓冲区（用户直接在 iflow 中输入消息时使用）
         self._no_source_buffer: List[str] = []  # 缓冲的回复内容列表
+        self._no_source_request_content: str = ""  # 原始请求消息内容
         
         # 结束判断（连续3次扫描）
         self._missing_generating_count: int = 0  # "生成中"消失的次数
@@ -624,17 +625,19 @@ class IFlowMonitor:
                     if matched_record.source:
                         # 有明确来源：流式发送（逐条）
                         self._send_mode = "STREAM_MODE"
-                        logger.debug(f"[IFlowMonitor] 请求消息有明确来源 ({matched_record.source})，使用流式发送")
+                        logger.info(f"[IFlowMonitor] 请求消息有明确来源 ({matched_record.source})，使用流式发送")
                     else:
                         # 无明确来源：缓冲发送（整合）
                         self._send_mode = "BUFFER_MODE"
                         matched_record.requires_buffering = True
-                        logger.debug(f"[IFlowMonitor] 请求消息无明确来源，使用缓冲发送")
+                        self._no_source_request_content = matched_record.content  # 存储原始请求内容
+                        logger.info(f"[IFlowMonitor] 请求消息无明确来源，使用缓冲发送，原始请求: {matched_record.content[:50]}")
                 else:
                     # 未找到匹配的消息记录（可能是手动输入）
                     self._send_mode = "BUFFER_MODE"
                     self._current_request_record = None
-                    logger.debug(f"[IFlowMonitor] 请求消息未匹配到记录，使用缓冲发送")
+                    self._no_source_request_content = received_message  # 存储原始请求内容
+                    logger.info(f"[IFlowMonitor] 请求消息未匹配到记录，使用缓冲发送，原始请求: {received_message[:50]}")
         
         # 不过滤内容，扫描整个输出提取消息
         # 这样可以确保所有消息都被正确提取
@@ -749,6 +752,8 @@ class IFlowMonitor:
         Args:
             message_data: 消息数据字典
         """
+        logger.info(f"[IFlowMonitor] _send_message: _send_mode={self._send_mode}, content={message_data.get('content', '')[:30]}")
+        
         marker_symbol = message_data.get('marker_type', '')  # 标记符号（支持任意符号）
         marker_only = message_data.get('marker_only', '')  # 标记行字符串（用于快速定位）
         full_content = message_data.get('content', '')
@@ -851,26 +856,51 @@ class IFlowMonitor:
         整合所有缓冲的 ✦ 消息为一条，发送到消息总线。
         
         支持两种情况：
-        1. 有来源：从 MessageStore 获取缓冲消息
-        2. 无来源：从 _no_source_buffer 获取缓冲消息（用户直接在 iflow 中输入）
+        1. 有来源：从 MessageStore 获取缓冲消息，直接发送
+        2. 无来源：从 MessageStore 获取缓冲消息，按用户要求格式发送
         """
-        # 情况1：有来源的消息
-        if self._current_request_record and self._current_request_record.requires_buffering:
-            if not hasattr(self.controller, 'module') or not self.controller.module:
-                logger.warning("[IFlowMonitor] 无法访问消息库")
+        # 检查是否有缓冲的消息
+        if not self._current_request_record or not self._current_request_record.requires_buffering:
+            # 检查无来源缓冲区
+            if not self._no_source_buffer:
+                logger.debug("[IFlowMonitor] 不需要刷新缓冲区")
                 return
             
-            message_store = self.controller.module.message_store
-            buffered_replies = message_store.get_buffered_replies(self._current_request_record.message_id)
+            # 处理无来源缓冲区（备用逻辑）
+            merged_replies = '\n'.join(self._no_source_buffer)
+            formatted_content = f"未知来源消息回复结束，原请求消息内容是{self._no_source_request_content}，回复内容是：{merged_replies}"
             
-            if not buffered_replies:
-                logger.debug("[IFlowMonitor] 没有缓冲的消息（有来源）")
-                return
+            message = OutboundMessage(
+                type=MessageType.REPLY,
+                content=formatted_content,
+                receiver="",
+                scope="all",
+                timestamp=datetime.now(),
+                metadata={'merged': True, 'reply_count': len(self._no_source_buffer), 'send_mode': 'buffer', 'has_source': False, 'original_request': self._no_source_request_content}
+            )
             
-            # 整合所有 ✦ 消息为一条
+            await self._notify_subscribers(message)
+            logger.info(f"[IFlowMonitor] 已发送整合后的消息（{len(self._no_source_buffer)} 条回复，无来源，广播模式）")
+            
+            self._no_source_buffer.clear()
+            self._no_source_request_content = ""
+            return
+        
+        if not hasattr(self.controller, 'module') or not self.controller.module:
+            logger.warning("[IFlowMonitor] 无法访问消息库")
+            return
+        
+        message_store = self.controller.module.message_store
+        buffered_replies = message_store.get_buffered_replies(self._current_request_record.message_id)
+        
+        if not buffered_replies:
+            logger.debug("[IFlowMonitor] 没有缓冲的消息")
+            return
+        
+        # 根据 source 是否为空决定消息格式
+        if self._current_request_record.source:
+            # 有来源：直接整合发送
             merged_content = '\n'.join(buffered_replies)
-            
-            # 创建并发送整合后的消息
             message = OutboundMessage(
                 type=MessageType.REPLY,
                 content=merged_content,
@@ -879,36 +909,29 @@ class IFlowMonitor:
                 timestamp=datetime.now(),
                 metadata={'merged': True, 'reply_count': len(buffered_replies), 'send_mode': 'buffer', 'has_source': True}
             )
-            
             await self._notify_subscribers(message)
             logger.info(f"[IFlowMonitor] 已发送整合后的消息（{len(buffered_replies)} 条回复，有来源）")
+        else:
+            # 无来源：按用户要求格式发送
+            merged_replies = '\n'.join(buffered_replies)
+            original_request = self._current_request_record.content
+            formatted_content = f"未知来源消息回复结束，原请求消息内容是{original_request}，回复内容是：{merged_replies}"
             
-            # 清空缓冲区
-            message_store.buffered_replies.clear()
-            return
-        
-        # 情况2：无来源的消息（用户直接在 iflow 中输入）
-        if self._no_source_buffer:
-            merged_content = '\n'.join(self._no_source_buffer)
-            
-            # 创建并发送整合后的消息（receiver 为空字符串，表示广播）
             message = OutboundMessage(
                 type=MessageType.REPLY,
-                content=merged_content,
-                receiver="",  # 空字符串表示无特定接收方，消息总线将广播
+                content=formatted_content,
+                receiver="",
                 scope="all",
                 timestamp=datetime.now(),
-                metadata={'merged': True, 'reply_count': len(self._no_source_buffer), 'send_mode': 'buffer', 'has_source': False}
+                metadata={'merged': True, 'reply_count': len(buffered_replies), 'send_mode': 'buffer', 'has_source': False, 'original_request': original_request}
             )
-            
             await self._notify_subscribers(message)
-            logger.info(f"[IFlowMonitor] 已发送整合后的消息（{len(self._no_source_buffer)} 条回复，无来源，广播模式）")
-            
-            # 清空缓冲区
-            self._no_source_buffer.clear()
-            return
+            logger.info(f"[IFlowMonitor] 已发送整合后的消息（{len(buffered_replies)} 条回复，无来源，广播模式）")
         
-        logger.debug("[IFlowMonitor] 不需要刷新缓冲区")
+        # 清空缓冲区（在 MessageRecord 中）
+        if self._current_request_record:
+            self._current_request_record.buffered_replies.clear()
+        return
     
     def _locate_last_sent_message(self, messages: List[Dict]) -> Optional[int]:
         """定位已记录的最新消息
