@@ -30,6 +30,7 @@ IFlowModule 交互式体验工具
     --config PATH        配置文件路径（默认 config.json）
     --message TEXT       命令行模式：发送消息后退出
     --scope MODE         scope 模式：all 或 reply_only（默认）
+    --source NAME        消息来源（默认 "tool"，设为空字符串 "" 表示无来源）
     --tmux-session NAME  tmux 会话名称（默认 "iflow"）
     --clean              清理残留的 tmux 会话（默认不复用）
     --keep-alive         保持 tmux 会话（默认）
@@ -103,6 +104,29 @@ class MockMessageBus:
     def bind(self, from_module, to_module, bidirectional=False):
         """绑定（简化版，不需要路由逻辑）"""
         pass
+
+    async def broadcast_to_bindings(self, message: Message, sender_id: str) -> int:
+        """广播消息给绑定的渠道（模拟）
+        
+        对于工具测试，广播消息通过回调处理，显示在工具界面。
+        
+        Args:
+            message: 消息对象
+            sender_id: 发送模块 ID
+            
+        Returns:
+            成功发送的数量（模拟返回 1）
+        """
+        logger.info(f"[MockMessageBus] 📢 广播消息: {message.id}")
+        
+        # 通过回调处理广播消息
+        if self._message_callback:
+            try:
+                await self._message_callback(message)
+                return 1
+            except Exception as e:
+                logger.error(f"[MockMessageBus] 广播消息回调错误: {e}", exc_info=True)
+        return 0
 
     async def route(self, message: Message):
         """路由消息
@@ -814,6 +838,7 @@ async def main():
     config_path = "config.json"
     command_line_message = None
     scope = "reply_only"
+    source = "tool"  # 默认来源
     clean = False
     keep_alive = True  # 默认保持会话
     tmux_session = "iflow"  # 默认 tmux 会话名称
@@ -834,6 +859,9 @@ async def main():
             i += 1
         elif arg == '--scope' and i + 1 < len(args):
             scope = args[i + 1]
+            i += 1
+        elif arg == '--source' and i + 1 < len(args):
+            source = args[i + 1]
             i += 1
         elif arg == '--tmux-session' and i + 1 < len(args):
             tmux_session = args[i + 1]
@@ -856,6 +884,7 @@ async def main():
         if command_line_message:
             # 命令行模式：发送消息后退出
             tool.current_scope = scope
+            tool.current_source = source  # 设置来源
             await tool.send_message(command_line_message)
             completed = await tool.wait_for_complete()
             
