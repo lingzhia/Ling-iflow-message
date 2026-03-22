@@ -2,48 +2,49 @@
 """
 IFlowModule 交互式体验工具
 
-模拟消息总线与 IFlowModule 交互：
-- 创建模拟消息总线
-- 通过钩子拦截 IFlowModule 返回的消息
-- 发送的消息格式与消息总线完全一致
-- 接收的消息格式与 IFlowModule 返回给消息总线的完全一致
+功能：
+- tmux 会话管理：创建、停止、重启、切换、快照
+- 消息交互：发送消息、查看状态
+- 支持 JSON 输出，方便 AI 调用
 
 使用方法：
-    # 交互模式
-    python tools/iflow_interactive_tool.py [选项]
+    # Tmux 管理
+    python tools/iflow_interactive_tool.py tmux create <name> [options]
+    python tools/iflow_interactive_tool.py tmux stop <name>
+    python tools/iflow_interactive_tool.py tmux restart <name> [options]
+    python tools/iflow_interactive_tool.py tmux list
+    python tools/iflow_interactive_tool.py tmux snapshot <name> [--lines N]
+    python tools/iflow_interactive_tool.py tmux switch <name>
 
-    # 命令行模式（默认保持会话）
+    # 消息交互
+    python tools/iflow_interactive_tool.py send <message> [options]
+    python tools/iflow_interactive_tool.py status [--json]
+
+    # 交互模式
+    python tools/iflow_interactive_tool.py interactive [options]
+
+    # 兼容旧命令（保持向后兼容）
     python tools/iflow_interactive_tool.py --message "你好" [选项]
 
-    # 命令行模式（执行后销毁会话）
-    python tools/iflow_interactive_tool.py --message "你好" --cleanup
-
-    # 连续执行（复用会话）
-    python tools/iflow_interactive_tool.py --message "第一条消息"
-    python tools/iflow_interactive_tool.py --message "第二条消息"
-    python tools/iflow_interactive_tool.py --message "第三条消息"
-
-    # 指定正在运行的 tmux 会话
-    python tools/iflow_interactive_tool.py --tmux-session mysession --message "你好"
-
 选项：
-    --config PATH        配置文件路径（默认 config.json）
-    --message TEXT       命令行模式：发送消息后退出
-    --scope MODE         scope 模式：all 或 reply_only（默认）
-    --source NAME        消息来源（默认 "tool"，设为空字符串 "" 表示无来源）
-    --tmux-session NAME  tmux 会话名称（默认 "iflow"）
-    --clean              清理残留的 tmux 会话（默认不复用）
-    --keep-alive         保持 tmux 会话（默认）
-    --cleanup            销毁 tmux 会话（结束时）
-    --no-cleanup         保留 tmux 会话（结束时）
+    --workspace DIR     工作目录（默认 ~/.iflow）
+    --model NAME        模型名称（默认 kimi-k2.5）
+    --mode MODE         运行模式：smart（智能）/ yolo（默认 smart）
+    --json              JSON 格式输出
+    --scope MODE        scope 模式：all / reply_only（默认）
+    --source NAME       消息来源（默认 "tool"）
+    --timeout SECONDS   超时时间（默认 300）
+    --lines N           快照行数（默认 50）
 """
 
 import sys
 import os
 import asyncio
 import json
+import argparse
+import subprocess
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 # 添加项目根目录到 sys.path
@@ -53,7 +54,6 @@ sys.path.insert(0, str(project_root))
 from src.modules.iflow import IFlowModule
 from src.modules.iflow.monitor import IFlowState
 from src.core.message import Message, MessageContent, MessageType as CoreMessageType
-from src.core.base import BaseModule
 
 # 设置日志配置
 import logging
@@ -71,316 +71,451 @@ file_formatter = logging.Formatter(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-# 文件处理器（记录所有日志）
+# 文件处理器
 file_handler = logging.FileHandler(log_file, encoding='utf-8')
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(file_formatter)
 
-# 控制台处理器（只显示 WARNING 和 ERROR）
+# 控制台处理器（静默模式）
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.WARNING)
-console_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
-console_handler.setFormatter(console_formatter)
+console_handler.setLevel(logging.ERROR)
 
 # 配置根日志
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.DEBUG)
+root_logger.handlers.clear()
 root_logger.addHandler(file_handler)
 root_logger.addHandler(console_handler)
 
 # 工具专用日志
 logger = logging.getLogger("iflow_tool")
 logger.setLevel(logging.DEBUG)
-logger.info(f"日志文件: {log_file.absolute()}")
 
 
+# ==================== 退出码定义 ====================
+EXIT_SUCCESS = 0
+EXIT_ERROR = 1
+EXIT_ARGS_ERROR = 2
+EXIT_IFLOW_NOT_READY = 3
+EXIT_TIMEOUT = 4
+EXIT_TMUX_NOT_FOUND = 5
+EXIT_TMUX_EXISTS = 6
+
+
+# ==================== JSON 输出工具 ====================
+def output_json(data: Dict[str, Any], success: bool = True, command: str = ""):
+    """输出 JSON 格式结果"""
+    result = {
+        "success": success,
+        "timestamp": datetime.now().isoformat(),
+    }
+    if command:
+        result["command"] = command
+    if not success and "error" not in data:
+        result["error"] = data
+    else:
+        result["data"] = data
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def output_error(code: str, message: str, command: str = "", exit_code: int = EXIT_ERROR):
+    """输出错误信息"""
+    output_json({"code": code, "message": message}, success=False, command=command)
+    return exit_code
+
+
+# ==================== Tmux 控制器 ====================
+class TmuxController:
+    """Tmux 会话控制器"""
+    
+    def __init__(self):
+        self._sessions_cache: Dict[str, Dict] = {}
+    
+    async def list_sessions(self) -> List[Dict[str, Any]]:
+        """列出所有 tmux 会话"""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "tmux", "list-sessions", "-F", 
+                "#{session_name}|#{session_created}|#{session_attached}|#{session_windows}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            
+            if proc.returncode != 0:
+                return []
+            
+            sessions = []
+            for line in stdout.decode().strip().split('\n'):
+                if not line:
+                    continue
+                parts = line.split('|')
+                if len(parts) >= 4:
+                    sessions.append({
+                        "name": parts[0],
+                        "created": int(parts[1]) if parts[1].isdigit() else 0,
+                        "attached": parts[2] == "1",
+                        "windows": int(parts[3]) if parts[3].isdigit() else 0
+                    })
+            return sessions
+        except Exception as e:
+            logger.error(f"列出 tmux 会话失败: {e}")
+            return []
+    
+    async def session_exists(self, name: str) -> bool:
+        """检查会话是否存在"""
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "has-session", "-t", name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        await proc.communicate()
+        return proc.returncode == 0
+    
+    async def create_session(self, name: str, workspace: str = None, 
+                            model: str = None, mode: str = "smart") -> Dict[str, Any]:
+        """创建 tmux 会话并启动 iflow
+        
+        Args:
+            name: 会话名称
+            workspace: 工作目录
+            model: 模型名称
+            mode: 运行模式（smart/yolo）
+            
+        Returns:
+            创建结果
+        """
+        # 检查会话是否已存在
+        if await self.session_exists(name):
+            return {"success": False, "error": "session_exists", "message": f"会话 {name} 已存在"}
+        
+        # 工作目录
+        if workspace:
+            workspace = str(Path(workspace).expanduser().absolute())
+        else:
+            workspace = str(Path.home() / ".iflow")
+        
+        # 确保 iflow 工作目录存在
+        Path(workspace).mkdir(parents=True, exist_ok=True)
+        
+        try:
+            # 创建 tmux 会话
+            proc = await asyncio.create_subprocess_exec(
+                "tmux", "new-session", "-d", "-s", name, "-c", workspace,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            
+            if proc.returncode != 0:
+                return {"success": False, "error": "tmux_create_failed", 
+                        "message": f"创建 tmux 会话失败: {stderr.decode()}"}
+            
+            # 构建 iflow 命令
+            iflow_cmd = ["iflow"]
+            if model:
+                iflow_cmd.extend(["--model", model])
+            if mode == "yolo":
+                iflow_cmd.append("--yolo")
+            
+            # 在 tmux 中启动 iflow
+            proc = await asyncio.create_subprocess_exec(
+                "tmux", "send-keys", "-t", name, " ".join(iflow_cmd), "C-m",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await proc.communicate()
+            
+            # 等待 iflow 启动
+            await asyncio.sleep(3)
+            
+            return {
+                "success": True,
+                "session": name,
+                "workspace": workspace,
+                "model": model,
+                "mode": mode,
+                "message": f"会话 {name} 创建成功，iflow 已启动"
+            }
+            
+        except Exception as e:
+            return {"success": False, "error": "exception", "message": str(e)}
+    
+    async def stop_session(self, name: str) -> Dict[str, Any]:
+        """停止 tmux 会话"""
+        if not await self.session_exists(name):
+            return {"success": False, "error": "not_found", "message": f"会话 {name} 不存在"}
+        
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "tmux", "kill-session", "-t", name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            
+            if proc.returncode != 0:
+                return {"success": False, "error": "kill_failed", 
+                        "message": f"停止会话失败: {stderr.decode()}"}
+            
+            return {"success": True, "session": name, "message": f"会话 {name} 已停止"}
+            
+        except Exception as e:
+            return {"success": False, "error": "exception", "message": str(e)}
+    
+    async def restart_session(self, name: str, model: str = None, 
+                              mode: str = None) -> Dict[str, Any]:
+        """重启 tmux 会话中的 iflow
+        
+        注意：重启 iflow 进程，不是重启 tmux 会话
+        """
+        if not await self.session_exists(name):
+            return {"success": False, "error": "not_found", "message": f"会话 {name} 不存在"}
+        
+        try:
+            # 发送 Ctrl+C 停止 iflow
+            proc = await asyncio.create_subprocess_exec(
+                "tmux", "send-keys", "-t", name, "C-c",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await proc.communicate()
+            await asyncio.sleep(1)
+            
+            # 构建 iflow 命令
+            iflow_cmd = ["iflow"]
+            if model:
+                iflow_cmd.extend(["--model", model])
+            if mode == "yolo":
+                iflow_cmd.append("--yolo")
+            
+            # 启动 iflow
+            proc = await asyncio.create_subprocess_exec(
+                "tmux", "send-keys", "-t", name, " ".join(iflow_cmd), "C-m",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await proc.communicate()
+            
+            # 等待 iflow 启动
+            await asyncio.sleep(3)
+            
+            return {
+                "success": True, 
+                "session": name,
+                "model": model,
+                "mode": mode,
+                "message": f"会话 {name} 中的 iflow 已重启"
+            }
+            
+        except Exception as e:
+            return {"success": False, "error": "exception", "message": str(e)}
+    
+    async def get_snapshot(self, name: str, lines: int = 50) -> Dict[str, Any]:
+        """获取 tmux 会话快照"""
+        if not await self.session_exists(name):
+            return {"success": False, "error": "not_found", "message": f"会话 {name} 不存在"}
+        
+        try:
+            # 获取 tmux 输出
+            proc = await asyncio.create_subprocess_exec(
+                "tmux", "capture-pane", "-t", name, "-p", "-S", f"-{lines}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            
+            if proc.returncode != 0:
+                return {"success": False, "error": "capture_failed", 
+                        "message": f"获取快照失败: {stderr.decode()}"}
+            
+            content = stdout.decode()
+            content_lines = content.strip().split('\n')
+            
+            return {
+                "success": True,
+                "session": name,
+                "lines": content_lines[-lines:] if len(content_lines) > lines else content_lines,
+                "total_lines": len(content_lines)
+            }
+            
+        except Exception as e:
+            return {"success": False, "error": "exception", "message": str(e)}
+    
+    async def check_iflow_running(self, name: str) -> Dict[str, Any]:
+        """检查 iflow 是否在运行"""
+        if not await self.session_exists(name):
+            return {"running": False, "reason": "session_not_found"}
+        
+        try:
+            # 获取进程列表
+            proc = await asyncio.create_subprocess_exec(
+                "tmux", "list-panes", "-t", name, "-F", "#{pane_pid}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            
+            if proc.returncode != 0:
+                return {"running": False, "reason": "no_panes"}
+            
+            pane_pids = stdout.decode().strip().split('\n')
+            
+            # 检查是否有 iflow 进程
+            for pane_pid in pane_pids:
+                if not pane_pid:
+                    continue
+                try:
+                    # 查找子进程中的 iflow
+                    proc = await asyncio.create_subprocess_exec(
+                        "pgrep", "-P", pane_pid, "-f", "iflow",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    stdout, _ = await proc.communicate()
+                    if stdout.decode().strip():
+                        return {"running": True, "pid": stdout.decode().strip()}
+                except:
+                    pass
+            
+            return {"running": False, "reason": "iflow_not_found"}
+            
+        except Exception as e:
+            return {"running": False, "reason": str(e)}
+
+
+# ==================== Mock 消息总线 ====================
 class MockMessageBus:
-    """模拟消息总线（用于测试）"""
-
+    """模拟消息总线"""
+    
     def __init__(self):
         self._iflow_module = None
-        self._message_callback = None  # 消息回调（用于接收来自 iflow 的消息）
+        self._message_callback = None
 
     def bind(self, from_module, to_module, bidirectional=False):
-        """绑定（简化版，不需要路由逻辑）"""
         pass
 
     async def broadcast_to_bindings(self, message: Message, sender_id: str) -> int:
-        """广播消息给绑定的渠道（模拟）
-        
-        对于工具测试，广播消息通过回调处理，显示在工具界面。
-        
-        Args:
-            message: 消息对象
-            sender_id: 发送模块 ID
-            
-        Returns:
-            成功发送的数量（模拟返回 1）
-        """
-        logger.info(f"[MockMessageBus] 📢 广播消息: {message.id}")
-        
-        # 通过回调处理广播消息
         if self._message_callback:
             try:
                 await self._message_callback(message)
                 return 1
             except Exception as e:
-                logger.error(f"[MockMessageBus] 广播消息回调错误: {e}", exc_info=True)
+                logger.error(f"广播消息回调错误: {e}")
         return 0
 
     async def route(self, message: Message):
-        """路由消息
-        
-        注意：避免将来自 IFlowModule 的消息发送回 IFlowModule，防止循环
-        """
         if not self._iflow_module:
             return
 
-        # 检查消息来源
         is_from_iflow = (message.from_module == self._iflow_module.module_id)
 
         if is_from_iflow:
-            # 来自 iflow 的消息，通过回调处理
-            # 注意：新模块已有完善的去重机制（字符串定位+哈希定位）
-            # 工具不再需要额外的去重逻辑
             if self._message_callback:
                 try:
                     await self._message_callback(message)
                 except Exception as e:
-                    logger.error(f"[MockMessageBus] 消息回调错误: {e}", exc_info=True)
+                    logger.error(f"消息回调错误: {e}")
         else:
-            # 来自其他模块的消息，发送到 iflow
             await self._iflow_module.receive(message)
 
     def set_iflow_module(self, module):
-        """设置 IFlowModule"""
         self._iflow_module = module
 
     def set_message_callback(self, callback):
-        """设置消息回调（用于接收来自 iflow 的消息）"""
         self._message_callback = callback
 
 
+# ==================== 交互工具主类 ====================
 class IFlowInteractiveTool:
-    """IFlowModule 交互式体验工具
+    """IFlowModule 交互式体验工具"""
     
-    模拟消息总线与 IFlowModule 交互。
-    """
-
-    def __init__(self, config_path: str = "config.json", clean: bool = False, keep_alive: bool = True, tmux_session: str = "iflow"):
-        """初始化工具
-
-        Args:
-            config_path: 配置文件路径
-            clean: 是否清理残留的 tmux 会话
-            keep_alive: 是否保持 tmux 会话（默认 True）
-            tmux_session: tmux 会话名称（默认 "iflow"）
-        """
-        self.config_path = config_path
-        self.config = self._load_config(config_path)
+    def __init__(self, tmux_session: str = "iflow"):
+        self.tmux_session_name = tmux_session
+        self.tmux_controller = TmuxController()
         self.mock_bus = MockMessageBus()
         self.module: Optional[IFlowModule] = None
-        self.clean = clean  # 是否清理残留的 tmux 会话
-        self.keep_alive = keep_alive  # 是否保持 tmux 会话
-        self.tmux_session_name = tmux_session  # tmux 会话名称
-
+        
         # 当前身份和模式
         self.current_source: str = "tool"
-        self.current_scope: str = "reply_only"  # 默认只显示回复消息
-
+        self.current_scope: str = "reply_only"
+        
         # 消息历史
         self.message_history: List[dict] = []
         
         # 中断标志
         self._interrupt_event = asyncio.Event()
+        
+        # JSON 输出模式
+        self.json_output: bool = False
     
-    def _load_config(self, config_path: str) -> dict:
-        """加载配置文件"""
-        config_file = Path(config_path)
+    async def connect(self, tmux_session: str = None) -> bool:
+        """连接到指定的 tmux 会话
         
-        if config_file.exists():
-            try:
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                logger.info(f"已加载配置文件: {config_file}")
-                return config
-            except Exception as e:
-                logger.warning(f"加载配置文件失败: {e}，使用默认配置")
-        else:
-            logger.info(f"配置文件不存在: {config_file}，使用默认配置")
+        Args:
+            tmux_session: 会话名称（None 则使用默认）
+            
+        Returns:
+            是否连接成功
+        """
+        if tmux_session:
+            self.tmux_session_name = tmux_session
         
-        return {
-            "iflow": {
-                "model": "kimi-k2.5",
-                "workspace": "~/.iflow",
-                "auto_restart": True,
-                "log_interactions": True,
-                "log_dir": "logs/interactions"
-            }
-        }
-    
-    async def start(self):
-        """启动工具"""
-        print("=" * 60)
-        print("IFlowModule 交互式体验工具")
-        print("=" * 60)
-
-        print(f"\n正在创建 IFlowModule 实例...")
-
-        # 工具负责从配置文件读取参数，然后传递给 IFlowModule
-        # 使用指定的tmux会话名称
-        tmux_session = self.tmux_session_name
-        model = self.config.get("model", "kimi-k2.5")
-        workspace = self.config.get("workspace", "~/.iflow")
-        auto_restart = self.config.get("auto_restart", True)
-        log_interactions = self.config.get("log_interactions", True)
-        log_dir = self.config.get("log_dir", "logs/interactions")
-
-        print(f"  tmux 会话: {tmux_session}")
-
-        # 检查并清理残留的 tmux 会话（仅在 clean=True 时）
-        if self.clean and tmux_session:
-            proc = await asyncio.create_subprocess_exec(
-                "tmux", "has-session", "-t", tmux_session,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            await proc.communicate()
-            if proc.returncode == 0:
-                print(f"  检测到残留的 tmux 会话: {tmux_session}")
-                proc = await asyncio.create_subprocess_exec(
-                    "tmux", "kill-session", "-t", tmux_session,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                await proc.communicate()
-                await asyncio.sleep(1.0)
-                print(f"  已清理残留的 tmux 会话")
-
-        # 检查 iflow 是否已经在运行
-        from src.modules.iflow.controller import IFlowController
-        temp_controller = IFlowController(tmux_session)
-        iflow_running = await temp_controller.check_iflow_running()
+        # 检查会话是否存在
+        if not await self.tmux_controller.session_exists(self.tmux_session_name):
+            logger.error(f"会话 {self.tmux_session_name} 不存在")
+            return False
         
-        if iflow_running and self.keep_alive:
-            print(f"  检测到 iflow 已在运行（会话: {tmux_session}）")
-            print(f"  将复用现有 iflow 实例，保持会话上下文")
+        # 检查 iflow 是否运行
+        status = await self.tmux_controller.check_iflow_running(self.tmux_session_name)
+        if not status.get("running"):
+            logger.error(f"iflow 未在会话 {self.tmux_session_name} 中运行")
+            return False
         
-        # 创建模块实例
+        # 创建 IFlowModule 实例（复用现有会话）
         self.module = IFlowModule(
-            tmux_session=tmux_session,
-            model=model,
-            workspace=workspace,
-            auto_restart=auto_restart,
-            log_interactions=log_interactions,
-            log_dir=log_dir
+            tmux_session=self.tmux_session_name,
+            auto_restart=False,
+            log_interactions=True,
+            log_dir="logs/interactions"
         )
         
-        # 设置模拟消息总线
+        # 设置消息总线
         self.module.set_message_bus(self.mock_bus)
         self.mock_bus.set_iflow_module(self.module)
-        
-        # 设置消息回调（用于接收来自 iflow 的消息）
         self.mock_bus.set_message_callback(self._on_iflow_message)
-        
-        # 设置钩子（拦截返回的消息）
         self.module.set_message_sent_hook(self._on_iflow_message)
         
-        # 同步 scope 到 IFlowModule 的 reply_mode（方案5）
-        # 这样 IFlowModule 才会根据工具的 scope 来正确过滤消息
+        # 同步 scope
         if self.current_scope == "all":
             self.module.set_reply_mode("all_messages")
         else:
             self.module.set_reply_mode("reply_only")
         
-        print(f"  模块 ID: {self.module.module_id}")
-        print(f"  tmux 会话: {self.module.tmux_session or '(启动时分配)'}")
-        
         # 启动模块
-        print("\n正在启动模块...")
         try:
             await self.module.start()
-            print(f"\n✅ 模块已启动")
-            print(f"   module_id: {self.module.module_id}")
-            print(f"   tmux_session: {self.module.tmux_session}")
-            
-            # 等待 iflow 完全就绪
-            print("正在等待 iflow 完全就绪...")
-            ready = await self.module.wait_for_ready(timeout=60)
+            # 等待就绪
+            ready = await self.module.wait_for_ready(timeout=30)
             if not ready:
-                print("⚠️ 警告：iflow 未在预期时间内完全就绪")
-            else:
-                print("✅ iflow 已完全就绪，可以发送消息")
-            
-            # 等待监控器稳定（监控器启动后需要时间稳定状态）
-            print("正在等待监控器稳定...")
-            await asyncio.sleep(3.0)
-            print("✅ 监控器已稳定")
-            
-            # 提示用户新的消息处理机制
-            print("\n💡 提示：新模块使用延迟记录原则")
-            print("   - 只有2条或更多消息时才开始记录和发送")
-            print("   - 第一条消息不会立即发送，等待第二条消息出现")
-            print("   - 新模块使用字符串定位+哈希定位去重")
+                logger.warning("iflow 未就绪")
+            await asyncio.sleep(2)
+            return True
         except Exception as e:
-            print(f"\n❌ 启动失败: {e}")
-            raise
-        
-        print("=" * 60)
+            logger.error(f"连接失败: {e}")
+            return False
     
-    async def stop(self, keep_alive: Optional[bool] = None):
-        """停止工具
-        
-        Args:
-            keep_alive: 是否保持 tmux 会话（None 表示使用实例变量）
-        """
-        # 确定是否保持会话
-        should_keep_alive = keep_alive if keep_alive is not None else self.keep_alive
-        
+    async def disconnect(self):
+        """断开连接（保持 tmux 会话）"""
         if self.module:
-            if should_keep_alive:
-                # 保持会话，只停止监控器（不销毁 tmux 和 iflow）
-                print("\n正在停止模块（保持 tmux 和 iflow 进程）...")
-                
-                # 停止监控器
-                await self.module.monitor.stop()
-                
-                # 停止模块但不销毁会话
-                self.module._running = False
-                
-                print("✅ 模块已停止（tmux 和 iflow 进程已保留）")
-                print(f"   下次启动将复用现有 iflow 会话（{self.module.tmux_session}）")
-            else:
-                # 销毁会话
-                print("\n正在停止模块...")
-                await self.module.stop()
-                print("✅ 模块已停止（tmux 会话已销毁）")
+            await self.module.monitor.stop()
+            self.module._running = False
+            self.module = None
     
     async def _on_iflow_message(self, message: Message):
-        """接收 IFlowModule 返回的消息（通过钩子）"""
-        logger.debug(f"[Tool] 收到消息: id={message.id}")
+        """接收消息回调"""
+        message_type = message.metadata.get('reply_type', 'unknown')
         
-        # 添加完整内容日志（方案2）
-        logger.debug(f"[Tool] 消息详情:")
-        logger.debug(f"  完整内容 ({len(message.content.text)} 字符): {message.content.text}")
-        logger.debug(f"  content.type: {message.content.type}")
-        logger.debug(f"  metadata: {message.metadata}")
-        
-        # 修复消息类型识别逻辑（方案3）：优先使用 metadata.reply_type
-        message_type = message.metadata.get('reply_type', None)
-        
-        # 如果 metadata.reply_type 不存在，再尝试从 content.type 获取
-        if message_type is None:
-            if hasattr(message.content, 'type'):
-                message_type = message.content.type.value if hasattr(message.content.type, 'value') else str(message.content.type)
-        
-        # 如果还是 unknown，尝试从 metadata.get('type') 获取
-        if message_type is None or message_type == 'unknown':
-            message_type = message.metadata.get('type', 'unknown')
-        
-        logger.debug(f"[Tool] 消息类型: {message_type}")
-        
-        # 记录历史
         self.message_history.append({
             "timestamp": datetime.now().isoformat(),
             "type": message_type,
@@ -388,64 +523,37 @@ class IFlowInteractiveTool:
             "metadata": message.metadata
         })
         
-        # 显示消息（优化界面格式）
-        if message_type == 'complete':
-            print("\n" + "=" * 60)
-            print("✅ 交互完成")
-            print("=" * 60)
-            print(f"{message.content.text}")
-            print("=" * 60)
-        elif message_type == 'reply':
-            print("\n" + "─" * 60)
-            print("📤 iflow 回复:")
-            print("─" * 60)
-            print(f"{message.content.text}")
-            print("─" * 60)
-        else:
-            # 其他类型（思考消息、其他消息），根据 scope 决定是否显示
-            if self.current_scope == "all":
-                print("\n" + "─" * 60)
-                print(f"💭 iflow {message_type}:")
-                print("─" * 60)
-                print(f"{message.content.text}")
-                print("─" * 60)
-            else:
-                # reply_only 模式，不显示思考消息
-                logger.debug(f"[Tool] 跳过非回复消息 (type={message_type}, scope={self.current_scope})")
+        # 非 JSON 模式下打印消息
+        if not self.json_output:
+            if message_type == 'complete':
+                print(f"\n✅ {message.content.text}")
+            elif message_type == 'reply':
+                print(f"\n📤 {message.content.text}")
+            elif self.current_scope == "all":
+                print(f"\n💭 [{message_type}] {message.content.text}")
     
-    async def send_message(self, content: str):
-        """发送消息到 IFlowModule（模拟消息总线）"""
-        if not self.module:
-            print("❌ 模块未启动")
-            return
+    async def send_message(self, content: str, timeout: float = 300) -> Dict[str, Any]:
+        """发送消息并等待回复
         
-        # 检查 iflow 是否就绪（带重试机制，解决竞态条件问题）
-        max_retries = 3
-        retry_delay = 1.0
-        
-        for attempt in range(max_retries):
-            is_ready = await self.module.controller.check_iflow_ready()
-            if is_ready:
-                break
+        Args:
+            content: 消息内容
+            timeout: 超时时间
             
-            if attempt < max_retries - 1:
-                print(f"  iflow 未就绪，等待 {retry_delay} 秒后重试... ({attempt + 1}/{max_retries})")
-                await asyncio.sleep(retry_delay)
-            else:
-                print("❌ iflow 未就绪，无法发送消息")
-                print("   提示：可能是监控器启动导致的短暂状态变化，请稍后再试")
-                return
+        Returns:
+            发送结果
+        """
+        if not self.module:
+            return {"success": False, "error": "not_connected", "message": "未连接到 tmux 会话"}
         
-        print(f"发送消息: {content}")
+        # 检查就绪状态
+        is_ready = await self.module.controller.check_iflow_ready()
+        if not is_ready:
+            return {"success": False, "error": "iflow_not_ready", "message": "iflow 未就绪"}
         
-        # 优化用户消息显示
-        print("\n" + "─" * 60)
-        print("📤 用户消息:")
-        print("─" * 60)
-        print(f"{content}")
-        print("─" * 60)
+        # 清空历史
+        self.message_history.clear()
         
-        # 创建 Message（模拟消息总线）
+        # 创建消息
         msg = Message(
             id=Message.generate_id(),
             type=CoreMessageType.TEXT,
@@ -454,466 +562,597 @@ class IFlowInteractiveTool:
             metadata={"scope": self.current_scope}
         )
         
-        print(f"  调用 mock_bus.route()...")
+        # 发送消息
         await self.mock_bus.route(msg)
-        print(f"  mock_bus.route() 完成")
         
-        # 等待一下，让消息处理完成
-        await asyncio.sleep(1)
+        # 等待回复完成
+        completed = await self._wait_for_complete(timeout)
+        
+        if not completed:
+            return {"success": False, "error": "timeout", "message": "等待回复超时"}
+        
+        # 收集回复
+        replies = []
+        for msg in self.message_history:
+            if msg["type"] == "reply":
+                replies.append({"type": "reply", "content": msg["content"]})
+            elif msg["type"] == "complete":
+                replies.append({"type": "complete", "content": msg["content"]})
+        
+        return {
+            "success": True,
+            "replies": replies,
+            "reply_count": len([r for r in replies if r["type"] == "reply"]),
+            "duration": self.module.generating_duration if self.module else 0
+        }
     
-    async def wait_for_complete(self, timeout: float = 600.0) -> bool:
-        """等待回复完成（基于状态的智能等待）
-        
-        Args:
-            timeout: 全局超时时间（秒），默认 10 分钟
-        
-        Returns:
-            是否正常完成（True: 完成，False: 被中断或超时）
-        """
+    async def _wait_for_complete(self, timeout: float = 300) -> bool:
+        """等待回复完成"""
         if not self.module:
             return False
         
-        # 清空中断标志
         self._interrupt_event.clear()
-        
-        print(f"等待回复完成（全局超时: {timeout}秒，按 Ctrl+C 中断）...")
-        
-        # 轮询状态
         elapsed = 0.0
         check_interval = 1.0
         
-        # 等待至少收到一条消息
+        # 等待消息
         while elapsed < timeout and len(self.message_history) == 0:
             if self._interrupt_event.is_set():
-                print(f"\n   ⚠️ 等待已被中断")
                 return False
-            
             await asyncio.sleep(check_interval)
             elapsed += check_interval
-            
-            if int(elapsed) % 5 == 0 and elapsed > 0:
-                print(f"   等待回复... {int(elapsed)}秒", end='\r', flush=True)
         
-        # 如果没有收到消息，返回 False
         if len(self.message_history) == 0:
-            print(f"\n   ⚠️ 未收到任何消息")
             return False
         
-        print(f"\n   ✅ 收到 {len(self.message_history)} 条消息")
-        logger.info(f"[Tool] 收到 {len(self.message_history)} 条消息，进入状态检查循环")
-        
-        # 基于状态的智能等待
-        start_time = elapsed
-        last_message_count = len(self.message_history)
-        stable_count = 0  # 稳定计数器
-        
+        # 等待状态变为 IDLE
+        stable_count = 0
         while elapsed < timeout:
-            # 检查是否被中断
             if self._interrupt_event.is_set():
-                print(f"\n   ⚠️ 等待已被中断")
                 return False
             
             await asyncio.sleep(check_interval)
             elapsed += check_interval
             
             current_state = self.module.state
-            generating_duration = self.module.generating_duration
             message_count = len(self.message_history)
             
-            # 记录状态检查日志
-            logger.info(f"[Tool] 状态检查: elapsed={elapsed:.1f}s, state={current_state.value}, IDLE={current_state == IFlowState.IDLE}, messages={message_count}")
+            if current_state == IFlowState.IDLE:
+                await asyncio.sleep(2)
+                if self.module.state == IFlowState.IDLE:
+                    return True
             
-            # 每秒显示进度（优化显示逻辑）
-            if int(elapsed) % 5 == 0 or message_count > last_message_count:
-                if current_state == IFlowState.GENERATING:
-                    print(f"   生成中... 已持续 {generating_duration}秒，{message_count} 条消息 (总耗时 {int(elapsed)}秒)", 
-                          end='\r', flush=True)
-                else:
-                    print(f"   等待稳定... {int(elapsed)}秒", end='\r', flush=True)
-            
-            # 更新消息计数和稳定计数
-            if message_count == last_message_count:
+            # 稳定检查
+            if message_count == len(self.message_history):
                 stable_count += 1
             else:
                 stable_count = 0
-                last_message_count = message_count
             
-            # 核心改进：基于状态判断
-            if current_state == IFlowState.IDLE:
-                # 状态已变为 IDLE，额外等待 2 秒确保稳定
-                print(f"\n   检测到状态变为 IDLE，等待 2 秒确认...")
-                logger.info(f"[Tool] 检测到 IDLE 状态，等待 2 秒确认...")
-                await asyncio.sleep(2)
-                
-                # 再次确认状态
-                final_state = self.module.state
-                logger.info(f"[Tool] 状态确认: final_state={final_state.value}, expected=IDLE")
-                
-                if final_state == IFlowState.IDLE:
-                    print(f"\n✅ 生成完成 (总耗时 {elapsed:.1f}秒，生成持续 {generating_duration}秒)")
-                    print(f"   共收到 {len(self.message_history)} 条消息")
-                    logger.info(f"[Tool] 等待完成，返回 True")
-                    return True
-                else:
-                    # 状态又变回 GENERATING，继续等待
-                    print(f"\n   状态再次变为生成中，继续等待...")
-                    logger.warning(f"[Tool] 状态回退: IDLE -> {final_state.value}")
-                    stable_count = 0
-            
-            # 强制完成检查：如果状态稳定为IDLE且30秒没有新消息，强制完成
-            if stable_count >= 30 and current_state == IFlowState.IDLE and message_count > 0:
-                logger.warning(f"[Tool] 消息历史已稳定30秒且状态为IDLE，强制完成")
-                print(f"\n⚠️ 消息历史已稳定且状态为IDLE，强制完成")
-                print(f"✅ 生成完成 (总耗时 {elapsed:.1f}秒)")
+            if stable_count >= 30 and current_state == IFlowState.IDLE:
                 return True
-            
-            # 提示：如果生成时间超过 5 分钟，显示提示
-            if generating_duration > 300 and int(elapsed) % 60 == 0:
-                print(f"\n   💡 提示：生成已持续 {generating_duration}秒，请耐心等待...", end='', flush=True)
         
-        # 全局超时
-        final_state = self.module.state
-        final_duration = self.module.generating_duration
-        logger.warning(f"[Tool] ⚠️ 全局超时 ({timeout}秒)")
-        logger.warning(f"[Tool] 最终状态: {final_state.value}, 生成持续: {final_duration}秒, 消息数: {len(self.message_history)}")
-        print(f"\n   ⚠️ 全局超时 ({timeout}秒)")
-        print(f"   最终状态: {final_state.value}")
-        print(f"   生成持续: {final_duration}秒")
-        print(f"   收到消息: {len(self.message_history)} 条")
         return False
     
-    async def interactive_loop(self):
-        """交互式循环"""
-        print("\n" + "=" * 60)
-        print("交互模式")
-        print("=" * 60)
-        self._print_help()
-
-        try:
-            import prompt_toolkit
-            from prompt_toolkit import PromptSession
-            from prompt_toolkit.history import InMemoryHistory
-            from prompt_toolkit.completion import WordCompleter
-
-            # 使用 prompt_toolkit 提供更好的交互体验
-            commands = ['/help', '/source', '/scope', '/status', '/history', '/spam', 'quit', 'exit', 'q']
-            completer = WordCompleter(commands, ignore_case=True)
-            history = InMemoryHistory()
-            
-            session = PromptSession(
-                history=history,
-                completer=completer
-            )
-
-            while True:
-                try:
-                    user_input = await session.prompt_async(f"\n💬 你: ")
-
-                    if not user_input:
-                        continue
-
-                    # 命令处理
-                    if user_input.startswith('/'):
-                        await self._handle_command(user_input)
-                        continue
-
-                    if user_input.lower() in ['quit', 'exit', 'q']:
-                        break
-
-                    # 发送消息
-                    await self.send_message(user_input)
-                    completed = await self.wait_for_complete()
-
-                    # 如果未完成（被中断），清空等待提示
-                    if not completed:
-                        print("   提示：等待已被中断，可以继续输入新消息")
-
-                except KeyboardInterrupt:
-                    # 检查是否在等待过程中
-                    if self.module and self.module.state == IFlowState.GENERATING:
-                        # 在等待过程中中断，设置中断标志并继续循环
-                        self._interrupt_event.set()
-                        print("\n⚠️ 等待已中断，可以继续输入新消息")
-                        # 继续循环，等待用户输入
-                    else:
-                        # 不在等待过程中，退出
-                        print("\n退出...")
-                        break
-                except EOFError:
-                    break
-
-        except ImportError:
-            # prompt_toolkit 不可用，使用简单的 input()
-            print("提示：安装 prompt_toolkit 可以获得更好的交互体验")
-            print("      pip install prompt-toolkit\n")
-
-            while True:
-                try:
-                    prompt_text = f"\n💬 你: "
-                    user_input = input(prompt_text).strip()
-
-                    if not user_input:
-                        continue
-
-                    # 命令处理
-                    if user_input.startswith('/'):
-                        await self._handle_command(user_input)
-                        continue
-
-                    if user_input.lower() in ['quit', 'exit', 'q']:
-                        break
-
-                    # 发送消息
-                    await self.send_message(user_input)
-                    completed = await self.wait_for_complete()
-
-                    # 如果未完成（被中断），清空等待提示
-                    if not completed:
-                        print("   提示：等待已被中断，可以继续输入新消息")
-
-                except KeyboardInterrupt:
-                    # 检查是否在等待过程中
-                    if self.module and self.module.state == IFlowState.GENERATING:
-                        # 在等待过程中中断，设置中断标志并继续循环
-                        self._interrupt_event.set()
-                        print("\n⚠️ 等待已中断，可以继续输入新消息")
-                        # 继续循环，等待用户输入
-                    else:
-                        # 不在等待过程中，退出
-                        print("\n退出...")
-                        break
-                except EOFError:
-                    break
-    
-    async def _handle_command(self, command: str):
-        """处理命令"""
-        parts = command.split(maxsplit=1)
-        cmd = parts[0].lower()
-        arg = parts[1] if len(parts) > 1 else None
+    async def get_status(self) -> Dict[str, Any]:
+        """获取状态"""
+        result = {
+            "tmux_session": self.tmux_session_name,
+            "connected": self.module is not None,
+        }
         
-        if cmd == '/help':
-            self._print_help()
-        
-        elif cmd == '/source':
-            if arg:
-                self.current_source = arg
-                print(f"✅ 已切换身份: {arg}")
-            else:
-                print(f"当前身份: {self.current_source}")
-        
-        elif cmd == '/scope':
-            if arg in ['all', 'reply_only']:
-                self.current_scope = arg
-                print(f"✅ 已切换模式: {arg}")
-            else:
-                print(f"当前模式: {self.current_scope}")
-                print("可用: all, reply_only")
-        
-        elif cmd == '/status':
-            await self._show_status()
-        
-        elif cmd == '/history':
-            self._show_history()
-        
-        elif cmd == '/spam':
-            await self._spam_test(int(arg) if arg else 3)
-        
+        if self.module:
+            status = await self.module.get_status()
+            result["iflow_state"] = status.get("iflow_state")
+            result["iflow_running"] = status.get("iflow_state") != "unknown"
+            result["generating_duration"] = status.get("generating_duration", 0)
+            result["monitor_stats"] = status.get("monitor_stats", {})
+            result["message_store"] = status.get("message_store", {})
         else:
-            print(f"未知命令: {cmd}")
-    
-    def _print_help(self):
-        """打印帮助"""
-        print("命令:")
-        print("  直接输入文字     - 发送消息")
-        print("  /source <name>   - 切换身份（模拟不同来源）")
-        print("  /scope <mode>    - 切换模式: all(全部) / reply_only(仅回复)")
-        print("  /status          - 查看状态")
-        print("  /history         - 查看消息历史")
-        print("  /spam [n]        - 连续发送 n 条消息测试拒绝机制")
-        print("  /help            - 显示帮助")
-        print("  quit/exit        - 退出")
-        print("-" * 40)
-        print(f"当前: source={self.current_source}, scope={self.current_scope}")
-        print("注意：新模块使用延迟记录原则，可能不会立即收到消息")
-    
-    async def _show_status(self):
-        """显示状态"""
-        if not self.module:
-            print("模块未启动")
-            return
+            # 检查 tmux 会话状态
+            if await self.tmux_controller.session_exists(self.tmux_session_name):
+                iflow_status = await self.tmux_controller.check_iflow_running(self.tmux_session_name)
+                result["tmux_exists"] = True
+                result["iflow_running"] = iflow_status.get("running", False)
+            else:
+                result["tmux_exists"] = False
+                result["iflow_running"] = False
         
-        status = await self.module.get_status()
-        
-        print(f"\n📊 模块状态:")
-        print(f"   module_id: {status['module_id']}")
-        print(f"   running: {status['running']}")
-        print(f"   tmux_session: {status['tmux_session']}")
-        print(f"   model: {status['model']}")
-        print(f"   iflow_state: {status['iflow_state']}")
-        print(f"   generating_duration: {status['generating_duration']}秒")
-        
-        monitor = status.get('monitor_stats', {})
-        print(f"   监控统计:")
-        print(f"     - 检查次数: {monitor.get('check_count', 0)}")
-        print(f"     - 提取消息: {monitor.get('messages_extracted', 0)}")
-        print(f"     - 状态变化: {monitor.get('state_changes', 0)}")
-        
-        store = status.get('message_store', {})
-        print(f"   消息库:")
-        print(f"     - 总计: {store.get('total', 0)}")
-        print(f"     - 处理中: {store.get('processing', 0)}")
-        
-        logger_stats = status.get('logger_stats', {})
-        print(f"   交互记录: {logger_stats.get('total_interactions', 0)} 条")
-    
-    def _show_history(self):
-        """显示消息历史"""
-        if not self.message_history:
-            print("\n📝 暂无消息历史")
-            return
-        
-        print(f"\n📝 消息历史 ({len(self.message_history)} 条):")
-        print("-" * 40)
-        
-        for msg in self.message_history[-20:]:
-            timestamp = msg['timestamp'][11:19]  # 只取时间部分
-            msg_type = msg['type']
-            content = msg['content'][:40] + '...' if len(msg['content']) > 40 else msg['content']
-            print(f"  [{timestamp}] [{msg_type}] {content}")
-        
-        print("-" * 40)
-    
-    async def _spam_test(self, count: int):
-        """连续发送测试拒绝机制"""
-        print(f"\n🧪 连续发送 {count} 条消息测试拒绝机制...")
-        print("   说明: 第一条消息成功后，后续消息应被拒绝（生成中状态）")
-        
-        results = []
-        
-        # 第一条消息
-        print(f"\n  发送第 1 条消息...")
-        msg = Message(
-            id=Message.generate_id(),
-            type=CoreMessageType.TEXT,
-            content=MessageContent(type=CoreMessageType.TEXT, text=f"请帮我数到 {count * 10}"),
-            from_module=self.current_source,
-            metadata={"scope": self.current_scope}
-        )
-        await self.mock_bus.route(msg)
-        results.append(("send", "✅"))
-        
-        if self.module.state == IFlowState.GENERATING:
-            # 等待进入生成状态
-            await asyncio.sleep(1)
-            
-            # 快速发送后续消息（应该被拒绝）
-            for i in range(1, count):
-                print(f"  发送第 {i+1} 条消息...")
-                msg = Message(
-                    id=Message.generate_id(),
-                    type=CoreMessageType.TEXT,
-                    content=MessageContent(type=CoreMessageType.TEXT, text=f"测试消息 {i+1}"),
-                    from_module=self.current_source,
-                    metadata={"scope": self.current_scope}
-                )
-                await self.mock_bus.route(msg)
-                
-                current_state = self.module.state.value
-                print(f"    结果: 消息已发送 (状态: {current_state})")
-                
-                await asyncio.sleep(0.3)
-            
-            # 等待生成完成
-            print("\n  等待生成完成...")
-            await self.wait_for_complete(timeout=60)
-        
-        print(f"\n📊 测试结果:")
-        print(f"   总计: {count} 条")
-        print(f"   第一条: 成功")
-        print(f"   后续: 已发送（等待 iflow 处理）")
+        return result
 
 
-async def main():
-    """主函数"""
-    config_path = "config.json"
-    command_line_message = None
-    scope = "reply_only"
-    source = "tool"  # 默认来源
-    clean = False
-    keep_alive = True  # 默认保持会话
-    tmux_session = "iflow"  # 默认 tmux 会话名称
+# ==================== 命令处理 ====================
+async def cmd_tmux_create(args):
+    """处理 tmux create 命令"""
+    controller = TmuxController()
+    result = await controller.create_session(
+        name=args.name,
+        workspace=args.workspace,
+        model=args.model,
+        mode=args.mode
+    )
+    
+    if args.json:
+        output_json(result, success=result.get("success", False), command="tmux create")
+    else:
+        if result.get("success"):
+            print(f"✅ {result['message']}")
+            print(f"   会话名称: {result['session']}")
+            print(f"   工作目录: {result['workspace']}")
+            if result.get('model'):
+                print(f"   模型: {result['model']}")
+            if result.get('mode'):
+                print(f"   模式: {result['mode']}")
+        else:
+            print(f"❌ {result['message']}")
+    
+    return EXIT_SUCCESS if result.get("success") else EXIT_ERROR
 
-    # 解析命令行参数
-    args = sys.argv[1:]
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        if arg in ['-h', '--help']:
-            print(__doc__)
-            sys.exit(0)
-        elif arg == '--config' and i + 1 < len(args):
-            config_path = args[i + 1]
-            i += 1
-        elif arg == '--message' and i + 1 < len(args):
-            command_line_message = args[i + 1]
-            i += 1
-        elif arg == '--scope' and i + 1 < len(args):
-            scope = args[i + 1]
-            i += 1
-        elif arg == '--source' and i + 1 < len(args):
-            source = args[i + 1]
-            i += 1
-        elif arg == '--tmux-session' and i + 1 < len(args):
-            tmux_session = args[i + 1]
-            i += 1
-        elif arg == '--clean':
-            clean = True
-        elif arg == '--keep-alive':
-            keep_alive = True
-        elif arg == '--cleanup':
-            keep_alive = False  # 结束时销毁会话
-        elif arg == '--no-cleanup':
-            keep_alive = True  # 结束时保留会话
-        i += 1
 
-    tool = IFlowInteractiveTool(config_path, clean=clean, keep_alive=keep_alive, tmux_session=tmux_session)
+async def cmd_tmux_stop(args):
+    """处理 tmux stop 命令"""
+    controller = TmuxController()
+    result = await controller.stop_session(args.name)
+    
+    if args.json:
+        output_json(result, success=result.get("success", False), command="tmux stop")
+    else:
+        if result.get("success"):
+            print(f"✅ {result['message']}")
+        else:
+            print(f"❌ {result['message']}")
+    
+    return EXIT_SUCCESS if result.get("success") else EXIT_TMUX_NOT_FOUND
+
+
+async def cmd_tmux_restart(args):
+    """处理 tmux restart 命令"""
+    controller = TmuxController()
+    result = await controller.restart_session(
+        name=args.name,
+        model=args.model,
+        mode=args.mode
+    )
+    
+    if args.json:
+        output_json(result, success=result.get("success", False), command="tmux restart")
+    else:
+        if result.get("success"):
+            print(f"✅ {result['message']}")
+        else:
+            print(f"❌ {result['message']}")
+    
+    return EXIT_SUCCESS if result.get("success") else EXIT_TMUX_NOT_FOUND
+
+
+async def cmd_tmux_list(args):
+    """处理 tmux list 命令"""
+    controller = TmuxController()
+    sessions = await controller.list_sessions()
+    
+    if args.json:
+        output_json({"sessions": sessions, "count": len(sessions)}, command="tmux list")
+    else:
+        if not sessions:
+            print("没有活动的 tmux 会话")
+        else:
+            print(f"活动的 tmux 会话 ({len(sessions)} 个):")
+            print("-" * 50)
+            for s in sessions:
+                attached = " [attached]" if s["attached"] else ""
+                print(f"  {s['name']}: {s['windows']} 个窗口{attached}")
+    
+    return EXIT_SUCCESS
+
+
+async def cmd_tmux_snapshot(args):
+    """处理 tmux snapshot 命令"""
+    controller = TmuxController()
+    result = await controller.get_snapshot(args.name, args.lines or 50)
+    
+    if args.json:
+        output_json(result, success=result.get("success", False), command="tmux snapshot")
+    else:
+        if result.get("success"):
+            print(f"会话 {args.name} 快照 (最近 {len(result['lines'])} 行):")
+            print("-" * 50)
+            for line in result["lines"]:
+                print(line)
+        else:
+            print(f"❌ {result['message']}")
+    
+    return EXIT_SUCCESS if result.get("success") else EXIT_TMUX_NOT_FOUND
+
+
+async def cmd_tmux_switch(args):
+    """处理 tmux switch 命令"""
+    controller = TmuxController()
+    
+    if not await controller.session_exists(args.name):
+        if args.json:
+            output_error("not_found", f"会话 {args.name} 不存在", "tmux switch")
+        else:
+            print(f"❌ 会话 {args.name} 不存在")
+        return EXIT_TMUX_NOT_FOUND
+    
+    # 检查 iflow 是否运行
+    status = await controller.check_iflow_running(args.name)
+    
+    if args.json:
+        output_json({
+            "session": args.name,
+            "iflow_running": status.get("running", False)
+        }, command="tmux switch")
+    else:
+        print(f"✅ 当前会话: {args.name}")
+        if status.get("running"):
+            print(f"   iflow 状态: 运行中")
+        else:
+            print(f"   iflow 状态: 未运行")
+    
+    return EXIT_SUCCESS
+
+
+async def cmd_send(args):
+    """处理 send 命令"""
+    tool = IFlowInteractiveTool(tmux_session=args.tmux_session)
+    tool.json_output = args.json
+    tool.current_scope = args.scope or "reply_only"
+    tool.current_source = args.source or "tool"
+    
+    # 连接
+    connected = await tool.connect()
+    if not connected:
+        if args.json:
+            output_error("connect_failed", f"无法连接到会话 {args.tmux_session}", "send")
+        else:
+            print(f"❌ 无法连接到会话 {args.tmux_session}")
+        return EXIT_TMUX_NOT_FOUND
+    
+    try:
+        # 发送消息
+        result = await tool.send_message(args.message, timeout=args.timeout or 300)
+        
+        if args.json:
+            output_json(result, success=result.get("success", False), command="send")
+        else:
+            if result.get("success"):
+                print(f"\n✅ 消息发送成功，收到 {result['reply_count']} 条回复")
+            else:
+                print(f"\n❌ {result['message']}")
+        
+        return EXIT_SUCCESS if result.get("success") else EXIT_TIMEOUT
+        
+    finally:
+        await tool.disconnect()
+
+
+async def cmd_status(args):
+    """处理 status 命令"""
+    tool = IFlowInteractiveTool(tmux_session=args.tmux_session)
+    
+    status = await tool.get_status()
+    
+    if args.json:
+        output_json(status, command="status")
+    else:
+        print(f"状态信息:")
+        print(f"  tmux 会话: {status.get('tmux_session')}")
+        print(f"  tmux 存在: {'是' if status.get('tmux_exists', True) else '否'}")
+        print(f"  iflow 运行: {'是' if status.get('iflow_running') else '否'}")
+        if status.get('iflow_state'):
+            print(f"  iflow 状态: {status['iflow_state']}")
+        if status.get('generating_duration', 0) > 0:
+            print(f"  生成时长: {status['generating_duration']}秒")
+    
+    return EXIT_SUCCESS
+
+
+async def cmd_interactive(args):
+    """交互模式"""
+    tool = IFlowInteractiveTool(tmux_session=args.tmux_session)
+    tool.current_scope = args.scope or "reply_only"
+    tool.current_source = args.source or "tool"
+    
+    # 连接
+    print(f"正在连接到会话 {args.tmux_session}...")
+    connected = await tool.connect()
+    if not connected:
+        print(f"❌ 无法连接到会话 {args.tmux_session}")
+        return EXIT_TMUX_NOT_FOUND
+    
+    try:
+        print("✅ 连接成功")
+        await tool.interactive_loop()
+        return EXIT_SUCCESS
+    finally:
+        await tool.disconnect()
+
+
+# ==================== 参数解析 ====================
+def create_parser():
+    """创建命令行参数解析器"""
+    parser = argparse.ArgumentParser(
+        description="IFlowModule 交互式体验工具",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    # 全局选项
+    parser.add_argument("--json", action="store_true", help="JSON 格式输出")
+    parser.add_argument("--tmux-session", default="iflow", help="tmux 会话名称 (默认: iflow)")
+    
+    # 子命令
+    subparsers = parser.add_subparsers(dest="command", help="命令")
+    
+    # tmux 子命令
+    tmux_parser = subparsers.add_parser("tmux", help="Tmux 会话管理")
+    tmux_subparsers = tmux_parser.add_subparsers(dest="tmux_command", help="Tmux 命令")
+    
+    # tmux create
+    create_parser = tmux_subparsers.add_parser("create", help="创建 tmux 会话")
+    create_parser.add_argument("name", help="会话名称")
+    create_parser.add_argument("--workspace", "-w", help="工作目录")
+    create_parser.add_argument("--model", "-m", help="模型名称")
+    create_parser.add_argument("--mode", choices=["smart", "yolo"], default="smart", help="运行模式")
+    create_parser.set_defaults(func=cmd_tmux_create)
+    
+    # tmux stop
+    stop_parser = tmux_subparsers.add_parser("stop", help="停止 tmux 会话")
+    stop_parser.add_argument("name", help="会话名称")
+    stop_parser.set_defaults(func=cmd_tmux_stop)
+    
+    # tmux restart
+    restart_parser = tmux_subparsers.add_parser("restart", help="重启 tmux 会话中的 iflow")
+    restart_parser.add_argument("name", help="会话名称")
+    restart_parser.add_argument("--model", "-m", help="模型名称")
+    restart_parser.add_argument("--mode", choices=["smart", "yolo"], help="运行模式")
+    restart_parser.set_defaults(func=cmd_tmux_restart)
+    
+    # tmux list
+    list_parser = tmux_subparsers.add_parser("list", help="列出所有 tmux 会话")
+    list_parser.set_defaults(func=cmd_tmux_list)
+    
+    # tmux snapshot
+    snapshot_parser = tmux_subparsers.add_parser("snapshot", help="查看 tmux 会话快照")
+    snapshot_parser.add_argument("name", help="会话名称")
+    snapshot_parser.add_argument("--lines", "-n", type=int, default=50, help="显示行数")
+    snapshot_parser.set_defaults(func=cmd_tmux_snapshot)
+    
+    # tmux switch
+    switch_parser = tmux_subparsers.add_parser("switch", help="切换 tmux 会话")
+    switch_parser.add_argument("name", help="会话名称")
+    switch_parser.set_defaults(func=cmd_tmux_switch)
+    
+    # send 命令
+    send_parser = subparsers.add_parser("send", help="发送消息")
+    send_parser.add_argument("message", help="消息内容")
+    send_parser.add_argument("--scope", choices=["all", "reply_only"], default="reply_only", help="scope 模式")
+    send_parser.add_argument("--source", default="tool", help="消息来源")
+    send_parser.add_argument("--timeout", type=float, default=300, help="超时时间（秒）")
+    send_parser.set_defaults(func=cmd_send)
+    
+    # status 命令
+    status_parser = subparsers.add_parser("status", help="查看状态")
+    status_parser.set_defaults(func=cmd_status)
+    
+    # interactive 命令
+    interactive_parser = subparsers.add_parser("interactive", help="进入交互模式")
+    interactive_parser.add_argument("--scope", choices=["all", "reply_only"], default="reply_only")
+    interactive_parser.add_argument("--source", default="tool")
+    interactive_parser.set_defaults(func=cmd_interactive)
+    
+    # 兼容旧命令行参数
+    parser.add_argument("--message", "-M", help="发送消息（兼容旧命令）")
+    parser.add_argument("--scope", dest="scope_legacy", help="scope 模式（兼容旧命令）")
+    parser.add_argument("--source", dest="source_legacy", help="消息来源（兼容旧命令）")
+    parser.add_argument("--clean", action="store_true", help="清理残留会话")
+    parser.add_argument("--keep-alive", action="store_true", default=True, help="保持会话")
+    parser.add_argument("--cleanup", action="store_true", help="结束时销毁会话")
+    
+    return parser
+
+
+# ==================== 交互循环 ====================
+async def interactive_loop(self):
+    """交互式循环"""
+    print("\n" + "=" * 60)
+    print("交互模式")
+    print("=" * 60)
+    self._print_help()
 
     try:
-        await tool.start()
+        import prompt_toolkit
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.history import InMemoryHistory
+        from prompt_toolkit.completion import WordCompleter
+
+        commands = ['/help', '/source', '/scope', '/status', '/history', '/tmux', 'quit', 'exit', 'q']
+        completer = WordCompleter(commands, ignore_case=True)
+        history = InMemoryHistory()
         
-        if command_line_message:
-            # 命令行模式：发送消息后退出
-            tool.current_scope = scope
-            tool.current_source = source  # 设置来源
-            await tool.send_message(command_line_message)
-            completed = await tool.wait_for_complete()
+        session = PromptSession(history=history, completer=completer)
+
+        while True:
+            try:
+                user_input = await session.prompt_async(f"\n💬 你: ")
+
+                if not user_input:
+                    continue
+
+                if user_input.startswith('/'):
+                    await self._handle_command(user_input)
+                    continue
+
+                if user_input.lower() in ['quit', 'exit', 'q']:
+                    break
+
+                await self.send_message(user_input)
+                await self._wait_for_complete()
+
+            except KeyboardInterrupt:
+                self._interrupt_event.set()
+                print("\n⚠️ 等待已中断")
+            except EOFError:
+                break
+
+    except ImportError:
+        print("提示：安装 prompt_toolkit 可获得更好的交互体验")
+
+        while True:
+            try:
+                user_input = input(f"\n💬 你: ").strip()
+
+                if not user_input:
+                    continue
+
+                if user_input.startswith('/'):
+                    await self._handle_command(user_input)
+                    continue
+
+                if user_input.lower() in ['quit', 'exit', 'q']:
+                    break
+
+                await self.send_message(user_input)
+                await self._wait_for_complete()
+
+            except KeyboardInterrupt:
+                self._interrupt_event.set()
+                print("\n⚠️ 等待已中断")
+            except EOFError:
+                break
+
+
+async def _handle_command(self, command: str):
+    """处理交互命令"""
+    parts = command.split(maxsplit=1)
+    cmd = parts[0].lower()
+    arg = parts[1] if len(parts) > 1 else None
+    
+    if cmd == '/help':
+        self._print_help()
+    elif cmd == '/source':
+        if arg:
+            self.current_source = arg
+            print(f"✅ 已切换身份: {arg}")
+        else:
+            print(f"当前身份: {self.current_source}")
+    elif cmd == '/scope':
+        if arg in ['all', 'reply_only']:
+            self.current_scope = arg
+            if self.module:
+                self.module.set_reply_mode("all_messages" if arg == "all" else "reply_only")
+            print(f"✅ 已切换模式: {arg}")
+        else:
+            print(f"当前模式: {self.current_scope}")
+    elif cmd == '/status':
+        status = await self.get_status()
+        print(f"\n📊 状态:")
+        for k, v in status.items():
+            print(f"   {k}: {v}")
+    elif cmd == '/history':
+        if not self.message_history:
+            print("\n📝 暂无消息历史")
+        else:
+            print(f"\n📝 消息历史 ({len(self.message_history)} 条):")
+            for msg in self.message_history[-10:]:
+                print(f"  [{msg['type']}] {msg['content'][:50]}...")
+    elif cmd == '/tmux':
+        # tmux 子命令
+        if arg:
+            sub_parts = arg.split(maxsplit=1)
+            sub_cmd = sub_parts[0]
+            sub_arg = sub_parts[1] if len(sub_parts) > 1 else None
             
-            if not completed:
-                print("⚠️ 等待被中断或超时")
-            
-            # 显示历史
-            print("\n" + "=" * 60)
-            tool._show_history()
-            print("=" * 60)
-            
-            # 提示会话状态
-            if tool.keep_alive:
-                print(f"\n💡 提示：tmux 会话已保留，下次执行将继续使用该会话")
+            if sub_cmd == 'list':
+                sessions = await self.tmux_controller.list_sessions()
+                print(f"\n活动的 tmux 会话 ({len(sessions)} 个):")
+                for s in sessions:
+                    print(f"  {s['name']}: {s['windows']} 个窗口")
+            elif sub_cmd == 'snapshot':
+                name = sub_arg or self.tmux_session_name
+                result = await self.tmux_controller.get_snapshot(name, 30)
+                if result.get("success"):
+                    print(f"\n会话 {name} 快照:")
+                    for line in result["lines"][-20:]:
+                        print(f"  {line}")
+                else:
+                    print(f"❌ {result['message']}")
             else:
-                print(f"\n💡 提示：tmux 会话将被销毁")
+                print(f"未知 tmux 子命令: {sub_cmd}")
+                print("可用: list, snapshot")
         else:
-            # 交互模式：进入交互式循环
-            await tool.interactive_loop()
-    except Exception as e:
-        logger.error(f"运行错误: {e}", exc_info=True)
-        sys.exit(1)
-    finally:
-        # 根据配置决定是否停止
-        if not tool.keep_alive:
-            await tool.stop(keep_alive=False)
-        else:
-            await tool.stop(keep_alive=True)
+            print("用法: /tmux <list|snapshot> [args]")
+    else:
+        print(f"未知命令: {cmd}")
+
+
+def _print_help(self):
+    """打印帮助"""
+    print("命令:")
+    print("  直接输入文字     - 发送消息")
+    print("  /source <name>   - 切换身份")
+    print("  /scope <mode>    - 切换模式: all / reply_only")
+    print("  /status          - 查看状态")
+    print("  /history         - 查看消息历史")
+    print("  /tmux list       - 列出 tmux 会话")
+    print("  /tmux snapshot   - 查看当前快照")
+    print("  /help            - 显示帮助")
+    print("  quit/exit        - 退出")
+    print("-" * 40)
+    print(f"当前: source={self.current_source}, scope={self.current_scope}")
+
+
+# 绑定方法到类
+IFlowInteractiveTool.interactive_loop = interactive_loop
+IFlowInteractiveTool._handle_command = _handle_command
+IFlowInteractiveTool._print_help = _print_help
+
+
+# ==================== 主函数 ====================
+async def main():
+    """主函数"""
+    parser = create_parser()
+    args = parser.parse_args()
+    
+    # 处理兼容旧命令
+    if args.message and not args.command:
+        # 旧命令模式：--message "xxx"
+        tool = IFlowInteractiveTool(tmux_session=args.tmux_session)
+        tool.current_scope = args.scope_legacy or "reply_only"
+        tool.current_source = args.source_legacy or "tool"
+        tool.json_output = args.json
+        
+        connected = await tool.connect()
+        if not connected:
+            if args.json:
+                output_error("connect_failed", f"无法连接到会话 {args.tmux_session}", "send")
+            else:
+                print(f"❌ 无法连接到会话 {args.tmux_session}")
+            return EXIT_TMUX_NOT_FOUND
+        
+        try:
+            result = await tool.send_message(args.message)
+            if args.json:
+                output_json(result, success=result.get("success", False), command="send")
+            elif result.get("success"):
+                print(f"\n✅ 消息发送成功")
+            else:
+                print(f"\n❌ {result['message']}")
+            return EXIT_SUCCESS if result.get("success") else EXIT_TIMEOUT
+        finally:
+            await tool.disconnect()
+    
+    # 处理子命令
+    if hasattr(args, 'func') and args.func:
+        return await args.func(args)
+    
+    # 无命令，显示帮助
+    if not args.command:
+        parser.print_help()
+        return EXIT_SUCCESS
+    
+    return EXIT_SUCCESS
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    exit_code = asyncio.run(main())
+    sys.exit(exit_code)
