@@ -41,9 +41,16 @@ pip install -e ".[dev]"
 pip install -e ".[wechat]"
 ```
 
-**完整安装（包含开发和微信功能）：**
+**飞书功能安装（包含飞书相关依赖）：**
 ```bash
-pip install -e ".[dev,wechat]"
+pip install -e ".[feishu]"
+```
+
+**完整安装（包含所有功能）：**
+```bash
+pip install -e ".[all]"
+# 或
+pip install -e ".[dev,wechat,feishu]"
 ```
 
 ### 3. 验证安装
@@ -287,6 +294,40 @@ ling-iflow start --help
 }
 ```
 
+### 飞书配置
+
+```json
+{
+  "feishu_channels": [
+    {
+      "name": "feishu1",                    // 渠道名称（唯一）
+      "app_id": "cli_xxxxxxxxxxxxx",        // 飞书应用 ID
+      "app_secret": "xxxxxxxxxxxxxxxxxxxx", // 飞书应用密钥
+      "verification_token": "xxxxxxxxxxxx", // 事件订阅验证 Token
+      "encrypt_key": "",                    // 消息加密密钥（可选）
+      "allow_from": [],                     // 用户白名单
+      "notify_user_id": "ou_xxxxx",         // 通知接收用户 ID
+      "tmux_session": "feishu1+iflow"       // tmux 会话名称
+    }
+  ]
+}
+```
+
+**飞书配置项说明：**
+
+| 配置项 | 说明 | 必填 |
+|-------|------|------|
+| name | 渠道名称 | ✅ |
+| app_id | 飞书应用 ID | ✅ |
+| app_secret | 飞书应用密钥 | ✅ |
+| verification_token | 事件订阅验证 Token | ✅ |
+| encrypt_key | 消息加密密钥 | ❌ |
+| allow_from | 用户白名单 | ❌ |
+| notify_user_id | 启动/停止通知接收用户 | ❌ |
+| tmux_session | 关联的 iflow 会话 | ✅ |
+
+**详细配置步骤**：参见 [飞书渠道设计方案](design-v2/20-飞书渠道设计方案.md)
+
 ### 全局配置
 
 ```json
@@ -476,6 +517,10 @@ rm -rf ~/.ling-iflow
 4. 查看项目文档：`README.md` 和 `design-v2/` 目录
 
 ## 更新日志
+
+### v0.2.0 (2026-03-22)
+- ✅ 新增飞书渠道支持
+- ✅ 使用 WebSocket 长连接，无需公网 IP
 
 ### v0.1.0 (2026-03-17)
 - ✅ 实现渠道架构简化方案

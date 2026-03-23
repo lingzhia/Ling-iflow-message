@@ -241,16 +241,8 @@ class IFlowMonitor:
             # 检测生成状态
             is_generating = self._detect_generating(output)
             
-            # 超时保护：如果 generating 状态持续超过 5 分钟，强制变回 idle
-            if self._state == IFlowState.GENERATING:
-                duration = self.generating_duration
-                if duration > 300:  # 5 分钟
-                    logger.warning(f"[IFlowMonitor] Generating 状态持续超过 5 分钟（{duration}s），强制变回 idle")
-                    self._state = IFlowState.IDLE
-                    self._generating_start_time = None
-                    self._generating_state_started = False
-                    self._interaction_complete = False
-                    logger.info(f"[IFlowMonitor] State changed: {IFlowState.GENERATING.value} -> {IFlowState.IDLE.value} (timeout)")
+            # 注：移除固定超时限制，只要状态一直是生成中就一直等待
+            # 状态变化由 _detect_completion() 检测"生成中"消失来判断
             
             # 提取所有消息（只在GENERATING状态下提取）
             current_messages = []
