@@ -55,15 +55,48 @@ def print_info(message: str):
     print(f"{COLOR_CYAN}ℹ️  {message}{COLOR_RESET}")
 
 
+def get_project_root() -> Path:
+    """获取项目根目录（manage.py 所在目录）"""
+    return Path(__file__).parent.resolve()
+
+
+def resolve_config_path(config_path: str) -> Path:
+    """解析配置文件路径
+    
+    优先级：
+    1. 用户指定的绝对路径
+    2. 用户指定的相对路径（相对于当前工作目录）
+    3. 项目根目录下的 config.json
+    """
+    path = Path(config_path)
+    
+    # 绝对路径直接返回
+    if path.is_absolute():
+        return path
+    
+    # 相对路径：先检查当前工作目录
+    cwd_path = Path.cwd() / config_path
+    if cwd_path.exists():
+        return cwd_path
+    
+    # 再检查项目根目录
+    project_path = get_project_root() / config_path
+    if project_path.exists():
+        return project_path
+    
+    # 都不存在，返回当前工作目录下的路径（用于错误提示）
+    return cwd_path
+
+
 def load_config(config_path: str) -> dict:
     """加载配置文件"""
-    config_file = Path(config_path)
-    if not config_file.exists():
+    resolved_path = resolve_config_path(config_path)
+    if not resolved_path.exists():
         return {}
     
     import json
     try:
-        with open(config_file, 'r', encoding='utf-8') as f:
+        with open(resolved_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception:
         return {}
@@ -229,9 +262,12 @@ def start(
         return
 
     # 检查配置文件
-    config_path = Path(config)
-    if not config_path.exists():
+    resolved_config = resolve_config_path(config)
+    if not resolved_config.exists():
         print_error(f"配置文件不存在: {config}")
+        print_info(f"查找路径: {resolved_config}")
+        print_info(f"当前工作目录: {Path.cwd()}")
+        print_info(f"项目根目录: {get_project_root()}")
         print_info("使用示例: ./manage.py start -c config.json")
         raise typer.Exit(1)
 

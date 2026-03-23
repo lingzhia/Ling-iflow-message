@@ -66,6 +66,33 @@ class LingIflowBot:
         self.control_socket_path = "/tmp/ling-iflow.sock"
         self.control_server_task: Optional[asyncio.Task] = None
     
+    def _resolve_config_path(self) -> Path:
+        """解析配置文件路径
+        
+        优先级：
+        1. 用户指定的绝对路径
+        2. 用户指定的相对路径（相对于当前工作目录）
+        3. 项目根目录下的 config.json
+        """
+        path = Path(self.config_path)
+        
+        # 绝对路径直接返回
+        if path.is_absolute():
+            return path
+        
+        # 相对路径：先检查当前工作目录
+        cwd_path = Path.cwd() / self.config_path
+        if cwd_path.exists():
+            return cwd_path
+        
+        # 再检查项目根目录（src/bot.py 的上级目录）
+        project_path = Path(__file__).parent.parent / self.config_path
+        if project_path.exists():
+            return project_path
+        
+        # 都不存在，返回当前工作目录下的路径（用于错误提示）
+        return cwd_path
+
     def load_config(self) -> bool:
         """加载配置文件
         
@@ -73,10 +100,15 @@ class LingIflowBot:
             是否加载成功
         """
         try:
-            config_file = Path(self.config_path)
+            config_file = self._resolve_config_path()
             if not config_file.exists():
                 logger.error(f"配置文件不存在: {self.config_path}")
+                logger.error(f"查找路径: {config_file}")
+                logger.error(f"当前工作目录: {Path.cwd()}")
                 return False
+            
+            # 更新配置文件路径为解析后的绝对路径
+            self.config_path = str(config_file)
             
             with open(config_file, 'r', encoding='utf-8') as f:
                 self.config = json.load(f)
