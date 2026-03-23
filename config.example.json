@@ -1,4 +1,6 @@
 {
+  "_comment_workspace": "工作目录，留空则使用启动命令时所在的目录。优先级：本配置 > 环境变量 LING_IFLOW_WORKSPACE > 当前工作目录",
+  "workspace": "",
   "bots": [
     {
       "name": "wecom1",

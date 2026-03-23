@@ -7,6 +7,7 @@ Ling-iflow 主程序入口
 
 import asyncio
 import json
+import os
 import signal
 import sys
 import logging
@@ -42,6 +43,10 @@ class LingIflowBot:
         self.config: Dict = {}
         self.active_channel = active_channel
         
+        # 工作目录：优先级：配置文件 > 环境变量 > 当前工作目录
+        # 默认使用当前工作目录，会在 load_config 后更新
+        self.workspace = os.environ.get("LING_IFLOW_WORKSPACE", os.getcwd())
+        
         # 核心组件
         self.bus: Optional[MessageBus] = None
         self.manager: Optional[ModuleManager] = None
@@ -76,7 +81,14 @@ class LingIflowBot:
             with open(config_file, 'r', encoding='utf-8') as f:
                 self.config = json.load(f)
             
+            # 更新 workspace（配置文件优先级最高，但需要非空）
+            config_workspace = self.config.get("workspace", "")
+            if config_workspace:
+                self.workspace = config_workspace
+                logger.info(f"从配置文件设置工作目录: {self.workspace}")
+            
             logger.info(f"配置加载成功: {self.config_path}")
+            logger.info(f"iflow 工作目录: {self.workspace}")
             return True
             
         except Exception as e:
@@ -256,7 +268,8 @@ class LingIflowBot:
                 module_id=iflow_module_id,
                 config={
                     "tmux_session": tmux_session,
-                    "model": "glm-4.7"  # 默认模型
+                    "model": "glm-4.7",  # 默认模型
+                    "workspace": self.workspace  # 使用工作目录
                 }
             )
             # 设置 manager 引用
