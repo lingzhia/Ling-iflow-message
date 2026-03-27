@@ -132,6 +132,7 @@ class MessageStore:
         """
         if not self._current_message_id:
             return None
+
         return self._records.get(self._current_message_id)
     
     def get_current_source(self) -> str:
@@ -152,11 +153,15 @@ class MessageStore:
         current = self.get_current_message()
         return current.scope if current else "reply_only"
     
+    # 消息内容匹配前缀长度
+    _MATCH_PREFIX_LEN = 20
+
     def find_by_content(self, content: str) -> Optional[MessageRecord]:
         """根据内容查找消息记录
         
         查找规则：
-        - 精确匹配消息内容
+        - 短消息（<=20字符）：精确匹配
+        - 长消息（>20字符）：前20字符匹配
         - 只匹配状态为 PROCESSING 的消息
         - 时间窗口：5分钟内（避免误匹配）
         
@@ -168,19 +173,32 @@ class MessageStore:
         """
         import time
         
-        for record in self._records.values():
-            # 1. 精确匹配
-            if record.content == content:
-                # 2. 状态过滤（只匹配 PROCESSING）
-                if record.status == MessageStatus.PROCESSING:
-                    # 3. 时间窗口（5分钟内）
-                    if record.processing_at and (time.time() - record.processing_at.timestamp()) < 300:
-                        logger.debug(f"[MessageStore] 找到匹配记录: {record.message_id}, source={record.source}")
-                        return record
+        # 计算匹配前缀长度
+        prefix_len = min(len(content), self._MATCH_PREFIX_LEN)
+        content_prefix = content[:prefix_len]
         
-        logger.debug(f"[MessageStore] 未找到匹配记录: {content}")
+        for record in self._records.values():
+            # 1. 根据消息长度选择匹配策略
+            if len(record.content) <= self._MATCH_PREFIX_LEN:
+                # 短消息：精确匹配
+                match_content = record.content == content
+            else:
+                # 长消息：前20字符匹配
+                match_content = record.content[:self._MATCH_PREFIX_LEN] == content_prefix
+            
+            if not match_content:
+                continue
+            
+            # 2. 状态过滤（只匹配 PROCESSING）
+            if record.status == MessageStatus.PROCESSING:
+                # 3. 时间窗口（5分钟内）
+                if record.processing_at and (time.time() - record.processing_at.timestamp()) < 300:
+                    logger.debug(f"[MessageStore] 找到匹配记录: {record.message_id}, source={record.source}, prefix_len={prefix_len}")
+                    return record
+        
+        logger.debug(f"[MessageStore] 未找到匹配记录: {content[:50]}")
         return None
-    
+
     def add_buffered_reply(self, message_id: str, reply_content: str) -> bool:
         """添加缓冲的回复
         
@@ -226,6 +244,7 @@ class MessageStore:
         """
         if not self._records:
             return None
+
         
         # 按创建时间倒序排列，返回最近的处理中或已完成消息
         sorted_records = sorted(
@@ -239,6 +258,7 @@ class MessageStore:
                 return record
         
         return None
+
     
     def increment_reply_count(self, message_id: str = None) -> None:
         """增加回复计数
@@ -262,6 +282,7 @@ class MessageStore:
         """
         if not self._current_message_id:
             return None
+
         
         record = self._records.get(self._current_message_id)
         if record:
