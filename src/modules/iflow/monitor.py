@@ -104,6 +104,7 @@ class IFlowMonitor:
         # 发送模式控制（消息来源差异化处理）
         self._send_mode: str = "STREAM_MODE"  # 发送模式：STREAM_MODE 或 BUFFER_MODE
         self._current_request_record: Optional[Any] = None  # 当前请求的记录（Any 类型避免循环导入）
+        self._request_matched: bool = False  # 是否已完成请求匹配（避免每次扫描重复匹配）
         
         # 无来源消息缓冲区（用户直接在 iflow 中输入消息时使用）
         self._no_source_buffer: List[str] = []  # 缓冲的回复内容列表
@@ -328,6 +329,9 @@ class IFlowMonitor:
                         old_state = self._state
                         self._state = IFlowState.IDLE
                         self.stats["state_changes"] += 1
+                        
+                        # 重置请求匹配标志，为下一次对话做准备
+                        self._request_matched = False
                         
                         # 计算生成持续时间
                         logger.debug(f"[IFlowMonitor] _generating_start_time: {self._generating_start_time}")
@@ -604,14 +608,16 @@ class IFlowMonitor:
             self._last_received_line = received_line
             logger.debug(f"[IFlowMonitor] 找到接收消息: {received_message[:50]}..., 行号: {received_line}")
             
-            # 消息来源差异化处理：匹配 MessageStore，判断发送模式
-            if received_message and hasattr(self.controller, 'module') and self.controller.module:
+            # 消息来源差异化处理：只在第一次匹配时判断发送模式
+            # 避免每次扫描都重复匹配 MessageStore
+            if not self._request_matched and received_message and hasattr(self.controller, 'module') and self.controller.module:
                 message_store = self.controller.module.message_store
                 matched_record = message_store.find_by_content(received_message)
                 
                 if matched_record:
                     # 找到匹配的消息记录
                     self._current_request_record = matched_record
+                    self._request_matched = True  # 标记已完成匹配
                     
                     # 判断是否有明确来源
                     if matched_record.source:
@@ -629,6 +635,7 @@ class IFlowMonitor:
                     self._send_mode = "BUFFER_MODE"
                     self._current_request_record = None
                     self._no_source_request_content = received_message  # 存储原始请求内容
+                    self._request_matched = True  # 标记已完成匹配
                     logger.info(f"[IFlowMonitor] 请求消息未匹配到记录，使用缓冲发送，原始请求: {received_message[:50]}")
         
         # 不过滤内容，扫描整个输出提取消息
