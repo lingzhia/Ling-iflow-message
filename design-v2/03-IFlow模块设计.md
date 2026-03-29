@@ -179,11 +179,11 @@ tmux new-session -d -s <session_name> 'iflow --model <model>'
 ```
 1. 发送 C-c 清除当前输入框
    tmux send-keys -t <session> C-c
-   等待 0.1 秒
+   等待 0.2 秒
 
 2. 发送消息内容（使用 -l 选项逐字发送）
    tmux send-keys -t <session> -l <message>
-   等待 0.1 秒
+   等待 1.0 秒
 
 3. 发送回车键
    tmux send-keys -t <session> C-m
@@ -282,7 +282,7 @@ def _detect_generating(self, output: str) -> bool:
 
 | 模式 | 触发条件 | 提取行数 | 检测频率 |
 |------|---------|---------|---------|
-| 轻量级 | IDLE 状态 | 50 行 | 0.5 秒 |
+| 轻量级 | IDLE 状态 | **20 行** | 0.5 秒 |
 | 完整 | GENERATING 状态 | 1000 行 | 0.5 秒 |
 
 **性能提升**：
@@ -1569,7 +1569,7 @@ while monitoring:
 - 资源消耗：正常
 
 **效果**：
-- 未在生成中时，性能提升约 **20 倍**（50 行 vs 1000 行）
+- 未在生成中时，性能提升约 **50 倍**（20 行 vs 1000 行）
 - 减少不必要的字符串处理和内存分配
 
 ---
