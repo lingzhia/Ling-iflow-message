@@ -50,3 +50,8 @@ wechat_messages.log
 
 # 临时目录
 tmp/
+
+# 运行时文件
+nohup.out
+.pytest_cache/
+.pids/
