@@ -819,10 +819,11 @@ class IFlowMonitor:
         )
         
         # 通知订阅者
+        logger.debug(f"[IFlowMonitor] [_send_immediately] 调用 _notify_subscribers, subscriber_count={len(self._subscribers)}")
         await self._notify_subscribers(message)
         self.stats["messages_extracted"] += 1
         
-        logger.info(f"[IFlowMonitor] 流式发送消息: {full_content[:50]}, receiver={receiver}")
+        logger.info(f"[IFlowMonitor] [_send_immediately] 流式发送完成: {full_content[:50]}, receiver={receiver}")
     
     async def _buffer_message(self, message_data: Dict) -> None:
         """缓冲消息（缓冲模式）

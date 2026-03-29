@@ -504,10 +504,14 @@ class IFlowModule(BaseModule):
         Args:
             message: 出站消息
         """
+        logger.info(f"[{self.module_id}] [_on_monitor_message] 收到消息: type={message.type.value}, content={message.content[:80]}...")
+        
         # 获取当前消息的来源和范围
         source = self.message_store.get_current_source()
         scope = self.message_store.get_current_scope()
         current_id = self.message_store._current_message_id
+        
+        logger.debug(f"[{self.module_id}] [_on_monitor_message] current_id={current_id}, source={source}, scope={scope}")
         
         # 如果当前没有处理中的消息（状态变化太快被清空），尝试从最近记录获取
         if not current_id:
@@ -523,7 +527,7 @@ class IFlowModule(BaseModule):
         # 关键修复：使用 reply_mode 而不是 scope 来过滤消息
         # scope 只用于记录消息的来源范围，reply_mode 用于控制发送行为
         if not self.should_send_message(message):
-            logger.debug(f"[{self.module_id}] 过滤消息 (reply_mode={self.reply_mode}, type={message.type.value})")
+            logger.debug(f"[{self.module_id}] [_on_monitor_message] 过滤消息 (reply_mode={self.reply_mode}, type={message.type.value})")
             return
         
         # 使用 reply_mode 进行过滤（不再使用 scope）
@@ -531,7 +535,7 @@ class IFlowModule(BaseModule):
         # scope 是消息级别属性，用于记录消息的来源范围
         effective_scope = "reply_only" if self.reply_mode == "reply_only" else "all"
         if effective_scope == "reply_only" and message.type != MessageType.REPLY:
-            logger.debug(f"[{self.module_id}] 过滤非回复消息 (reply_mode={self.reply_mode}, effective_scope={effective_scope})")
+            logger.debug(f"[{self.module_id}] [_on_monitor_message] 过滤非回复消息 (reply_mode={self.reply_mode}, effective_scope={effective_scope})")
             return
         
         # 设置接收方和范围
@@ -541,7 +545,10 @@ class IFlowModule(BaseModule):
         message.scope = scope
         
         # 增加回复计数
+        count_before = self.message_store.get_reply_count(current_id) if current_id else 0
         self.message_store.increment_reply_count(current_id)
+        count_after = self.message_store.get_reply_count(current_id) if current_id else 0
+        logger.debug(f"[{self.module_id}] [_on_monitor_message] 回复计数: {count_before} -> {count_after}")
         
         # 记录接收
         if self.logger:
@@ -552,6 +559,8 @@ class IFlowModule(BaseModule):
         current_record = self.message_store.get_current_message()
         chat_id = current_record.metadata.get("chat_id", "") if current_record else ""
         is_group = current_record.metadata.get("is_group", False) if current_record else False
+        
+        logger.info(f"[{self.module_id}] [_on_monitor_message] 准备发送: chat_id={chat_id}, is_group={is_group}")
         
         # 创建消息
         msg = Message(
@@ -612,10 +621,10 @@ class IFlowModule(BaseModule):
 
         if new_state == IFlowState.IDLE and old_state == IFlowState.GENERATING:
             # 生成完成
-            logger.debug(f"[{self.module_id}] 检测到生成完成，调用 complete_current()")
+            logger.info(f"[{self.module_id}] [COMPLETION] 检测到生成完成，准备调用 complete_current()")
             logger.debug(f"[{self.module_id}] 当前消息 ID: {self.message_store._current_message_id}")
             completed = self.message_store.complete_current()
-            logger.debug(f"[{self.module_id}] complete_current() 返回: {completed}")
+            logger.info(f"[{self.module_id}] [COMPLETION] complete_current() 返回: reply_count={completed.reply_count if completed else None}, source={completed.source if completed else None}")
 
             if completed and completed.source:
                 # 只有有来源的消息才发送完成通知

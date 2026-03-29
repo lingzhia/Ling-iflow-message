@@ -729,6 +729,8 @@ class FeishuChannel(BaseModule):
                 message.chat_id
             )
             
+            logger.info(f"[{self.module_id}] [_on_receive] 收到消息: msg_id={message.id[:8]}, content={content[:80]}..., receive_id={receive_id}")
+            
             if not content:
                 logger.warning(f"[{self.module_id}] 消息内容为空")
                 return
@@ -736,13 +738,14 @@ class FeishuChannel(BaseModule):
             # 如果有接收者 ID，直接发送
             if receive_id:
                 receive_id_type = "chat_id" if receive_id.startswith("oc_") else "open_id"
+                logger.info(f"[{self.module_id}] [_on_receive] 准备发送到飞书: receive_id={receive_id}, type={receive_id_type}")
                 success = await self.send_message(content, receive_id, receive_id_type)
                 if success:
-                    logger.info(f"[{self.module_id}] 消息已发送到飞书：{receive_id}")
+                    logger.info(f"[{self.module_id}] [_on_receive] ✅ 消息已发送到飞书：{receive_id}")
                 else:
-                    logger.error(f"[{self.module_id}] 消息发送失败")
+                    logger.error(f"[{self.module_id}] [_on_receive] ❌ 消息发送失败")
             else:
-                logger.warning(f"[{self.module_id}] 未指定接收者 ID，无法发送消息")
+                logger.warning(f"[{self.module_id}] [_on_receive] 未指定接收者 ID，无法发送消息")
                 
         except Exception as e:
             logger.error(f"[{self.module_id}] 处理消息失败：{e}", exc_info=True)
