@@ -617,8 +617,9 @@ class IFlowModule(BaseModule):
             completed = self.message_store.complete_current()
             logger.debug(f"[{self.module_id}] complete_current() 返回: {completed}")
 
-            if completed:
-                # 发送完成通知
+            if completed and completed.source:
+                # 只有有来源的消息才发送完成通知
+                # 无来源消息由 _flush_buffered_messages 发送，不需要此通知
                 # 使用 metadata 中的 chat_id 作为接收方，而不是 source（模块 ID）
                 receiver = completed.metadata.get("chat_id", "")
                 complete_message = OutboundMessage(
