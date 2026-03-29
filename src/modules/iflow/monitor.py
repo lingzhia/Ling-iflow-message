@@ -866,21 +866,24 @@ class IFlowMonitor:
                 logger.debug("[IFlowMonitor] 不需要刷新缓冲区")
                 return
             
-            # 处理无来源缓冲区（备用逻辑）
-            merged_replies = '\n'.join(self._no_source_buffer)
-            formatted_content = f"未知来源消息回复结束！\n原请求消息内容是：{self._no_source_request_content}\n回复内容如下：\n{merged_replies}"
+            # 处理无来源缓冲区：每条消息作为独立代码块发送
+            for i, reply_content in enumerate(self._no_source_buffer):
+                # 每条消息单独作为代码块发送
+                formatted_content = f"回复 {i+1}/{len(self._no_source_buffer)}：\n\n```\n{reply_content}\n```"
+                
+                message = OutboundMessage(
+                    type=MessageType.REPLY,
+                    content=formatted_content,
+                    receiver="",
+                    scope="all",
+                    timestamp=datetime.now(),
+                    metadata={'merged': False, 'reply_index': i+1, 'reply_count': len(self._no_source_buffer), 'send_mode': 'buffer', 'has_source': False, 'original_request': self._no_source_request_content}
+                )
+                
+                await self._notify_subscribers(message)
+                logger.info(f"[IFlowMonitor] 已发送无来源消息 {i+1}/{len(self._no_source_buffer)}")
             
-            message = OutboundMessage(
-                type=MessageType.REPLY,
-                content=formatted_content,
-                receiver="",
-                scope="all",
-                timestamp=datetime.now(),
-                metadata={'merged': True, 'reply_count': len(self._no_source_buffer), 'send_mode': 'buffer', 'has_source': False, 'original_request': self._no_source_request_content}
-            )
-            
-            await self._notify_subscribers(message)
-            logger.info(f"[IFlowMonitor] 已发送整合后的消息（{len(self._no_source_buffer)} 条回复，无来源，广播模式）")
+            logger.info(f"[IFlowMonitor] 已发送 {len(self._no_source_buffer)} 条无来源消息（广播模式，每条独立代码块）")
             
             self._no_source_buffer.clear()
             self._no_source_request_content = ""
@@ -914,20 +917,24 @@ class IFlowMonitor:
             await self._notify_subscribers(message)
             logger.info(f"[IFlowMonitor] 已发送整合后的消息（{len(buffered_replies)} 条回复，有来源）")
         else:
-            # 无来源：按用户要求格式发送
-            merged_replies = '\n'.join(buffered_replies)
+            # 无来源：每条消息作为独立代码块发送
             original_request = self._current_request_record.content
-            formatted_content = f"未知来源消息回复结束！\n原请求消息内容是：{original_request}\n回复内容如下：\n{merged_replies}"
+            for i, reply_content in enumerate(buffered_replies):
+                formatted_content = f"回复 {i+1}/{len(buffered_replies)}：\n\n```\n{reply_content}\n```"
+                
+                message = OutboundMessage(
+                    type=MessageType.REPLY,
+                    content=formatted_content,
+                    receiver="",
+                    scope="all",
+                    timestamp=datetime.now(),
+                    metadata={'merged': False, 'reply_index': i+1, 'reply_count': len(buffered_replies), 'send_mode': 'buffer', 'has_source': False, 'original_request': original_request}
+                )
+                
+                await self._notify_subscribers(message)
+                logger.info(f"[IFlowMonitor] 已发送无来源消息 {i+1}/{len(buffered_replies)}")
             
-            message = OutboundMessage(
-                type=MessageType.REPLY,
-                content=formatted_content,
-                receiver="",
-                scope="all",
-                timestamp=datetime.now(),
-                metadata={'merged': True, 'reply_count': len(buffered_replies), 'send_mode': 'buffer', 'has_source': False, 'original_request': original_request}
-            )
-            await self._notify_subscribers(message)
+            logger.info(f"[IFlowMonitor] 已发送 {len(buffered_replies)} 条无来源消息（广播模式，每条独立代码块）")
             logger.info(f"[IFlowMonitor] 已发送整合后的消息（{len(buffered_replies)} 条回复，无来源，广播模式）")
         
         # 清空缓冲区（在 MessageRecord 中）
