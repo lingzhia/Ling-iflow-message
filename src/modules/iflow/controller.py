@@ -488,6 +488,57 @@ class IFlowController:
             logger.error(f"[IFlowController] Error capturing output: {e}")
             return ""
     
+
+    async def capture_sent_message(self) -> Optional[str]:
+        """从 tmux 输出中捕获已发送的消息
+        
+        用于交互记录：从 tmux 读取实际发送给 iflow 的消息，
+        而不是使用传入的原始内容。这样可以确保日志准确反映
+        tmux 中实际发生的内容。
+        
+        发送给我的 iflow 的消息特征：
+        - 以 `>` 开头的行
+        - 例如：`> 用户的消息内容`
+        
+        Returns:
+            发送的消息内容，如果没有找到则返回 None
+        """
+        try:
+            # 捕获最近 50 行（应该足够包含最新发送的消息）
+            output = await self.capture_output(lines=50)
+            if not output:
+                return None
+            
+            lines = output.split('\n')
+            
+            # 从下往上扫描，找到最后一个用户发送的消息（以 > 开头）
+            for i in range(len(lines) - 1, -1, -1):
+                line_stripped = lines[i].strip()
+                
+                if line_stripped.startswith('>'):
+                    # 提取消息内容（去掉 `>` 前缀）
+                    message_content = line_stripped[1:].strip()
+                    
+                    # 跳过空消息
+                    if not message_content:
+                        continue
+                    
+                    # 跳过 iflow 提示符
+                    iflow_prompt_keywords = ['输入消息', '@文件路径']
+                    is_prompt = any(keyword in message_content for keyword in iflow_prompt_keywords)
+                    if is_prompt:
+                        continue
+                    
+                    logger.debug(f"[IFlowController] 从 tmux 捕获到发送的消息: {message_content[:50]}...")
+                    return message_content
+            
+            logger.warning(f"[IFlowController] 无法从 tmux 捕获发送的消息")
+            return None
+            
+        except Exception as e:
+            logger.error(f"[IFlowController] 捕获发送消息时出错: {e}")
+            return None
+
     def get_last_sent_message(self) -> Optional[str]:
         """获取最后发送的消息
         

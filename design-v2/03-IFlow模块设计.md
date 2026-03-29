@@ -442,6 +442,10 @@ class MessageStore:
 
 记录所有交互信息，持久化存储。
 
+**重要**：交互记录中的**所有消息内容均从 tmux 读取**，而不是使用模块收到的原始内容。这样可以确保日志准确反映 tmux 中实际发生的内容，包括：
+- 发送的消息（从 tmux 中以 `>` 开头的行读取）
+- 接收的回复（从 tmux 中以 ✦/✻ 标记的行读取）
+
 #### 日志格式
 
 ```json
@@ -467,7 +471,7 @@ class MessageStore:
 #### 日志位置
 
 - 默认目录：`logs/interactions/`
-- 文件命名：`interactions-YYYYMMDD.jsonl`
+- 文件命名：`iflow_<渠道名>_<YYYYMMDD>_<HHMMSS>.json`
 
 ---
 

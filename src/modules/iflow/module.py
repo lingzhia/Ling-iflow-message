@@ -301,12 +301,19 @@ class IFlowModule(BaseModule):
         # 更新状态为处理中
         self.message_store.update_status(message_id, MessageStatus.PROCESSING)
         
-        # 记录发送
-        if self.logger:
-            self.logger.log_sent(content)
-        
         # 注入到 iflow
         success = await self.controller.send_message(content)
+        
+        # 从 tmux 捕获实际发送的消息（用于交互记录）
+        # 这样可以确保日志准确反映 tmux 中实际发生的内容
+        if success and self.logger:
+            sent_content = await self.controller.capture_sent_message()
+            if sent_content:
+                self.logger.log_sent(sent_content)
+            else:
+                # 降级：使用原始内容（不应该发生）
+                logger.warning(f"[{self.module_id}] 无法从 tmux 捕获发送的消息，使用原始内容")
+                self.logger.log_sent(content)
         
         if success:
             logger.info(f"[{self.module_id}] 消息已注入 (id={message_id}, source={source})")
