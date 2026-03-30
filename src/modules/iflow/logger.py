@@ -143,6 +143,10 @@ class InteractionLogger:
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             logger.info(f"[{self.module_id}] 交互记录已保存: {filepath}")
+
+            # 清理旧文件，只保留最近 10 个
+            self._cleanup_old_files()
+
             return filepath
         except Exception as e:
             logger.error(f"[{self.module_id}] 保存交互记录失败: {e}")
@@ -153,6 +157,23 @@ class InteractionLogger:
         self._session_log = []
         self._session_start = None
         logger.debug(f"[{self.module_id}] 交互记录会话已清空")
+
+    def _cleanup_old_files(self, keep_count: int = 10) -> None:
+        """清理旧的交互记录文件，只保留最近 N 个"""
+        try:
+            pattern = f"{self.module_id}_*.json"
+            files = sorted(
+                [f for f in self.log_dir.glob(pattern) if f.is_file()],
+                key=lambda f: f.stat().st_mtime,
+                reverse=True
+            )
+
+            if len(files) > keep_count:
+                for f in files[keep_count:]:
+                    f.unlink()
+                    logger.debug(f"[{self.module_id}] 删除旧交互记录: {f.name}")
+        except Exception as e:
+            logger.warning(f"[{self.module_id}] 清理旧交互记录失败: {e}")
     
     def set_enabled(self, enabled: bool) -> None:
         """设置是否启用
