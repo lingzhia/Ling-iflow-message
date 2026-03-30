@@ -11,6 +11,7 @@ import os
 import signal
 import sys
 import logging
+from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
@@ -130,13 +131,41 @@ class LingIflowBot:
     def setup_logging(self) -> None:
         """设置日志"""
         log_level = self.config.get("log_level", "INFO")
-        logging.basicConfig(
-            level=getattr(logging, log_level, logging.INFO),
-            format='%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
-            handlers=[
-                logging.StreamHandler(sys.stdout)
-            ]
+        
+        # 获取 logger 等级
+        level = getattr(logging, log_level, logging.INFO)
+        
+        # 设置根 logger
+        root_logger = logging.getLogger()
+        root_logger.setLevel(level)
+        
+        # 清除现有 handlers
+        root_logger.handlers.clear()
+        
+        # 控制台 handler
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(level)
+        console_handler.setFormatter(logging.Formatter(
+            '%(asctime)s [%(levelname)s] [%(name)s] %(message)s'
+        ))
+        root_logger.addHandler(console_handler)
+        
+        # 文件 handler - 按大小轮转，保留 5 个备份，单文件最大 10MB
+        log_dir = Path("logs")
+        log_dir.mkdir(exist_ok=True)
+        log_file = log_dir / "bot.log"
+        
+        file_handler = RotatingFileHandler(
+            log_file,
+            maxBytes=10 * 1024 * 1024,  # 10MB
+            backupCount=5,
+            encoding='utf-8'
         )
+        file_handler.setLevel(level)
+        file_handler.setFormatter(logging.Formatter(
+            '%(asctime)s [%(levelname)s] [%(name)s] %(message)s'
+        ))
+        root_logger.addHandler(file_handler)
         
         # 设置第三方库日志级别
         logging.getLogger("httpx").setLevel(logging.WARNING)
