@@ -72,7 +72,7 @@ file_formatter = logging.Formatter(
 )
 
 # 文件处理器
-file_handler = logging.FileHandler(log_file, encoding='utf-8')
+file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(file_formatter)
 
