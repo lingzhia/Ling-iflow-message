@@ -867,26 +867,30 @@ class IFlowMonitor:
                 logger.debug("[IFlowMonitor] 不需要刷新缓冲区")
                 return
             
-            # 处理无来源缓冲区：每条消息作为独立代码块发送
-            for i, reply_content in enumerate(self._no_source_buffer):
-                # 每条消息单独作为代码块发送
-                formatted_content = f"回复 {i+1}/{len(self._no_source_buffer)}：\n\n```\n{reply_content}\n```"
-                
-                message = OutboundMessage(
-                    type=MessageType.REPLY,
-                    content=formatted_content,
-                    receiver="",
-                    scope="all",
-                    timestamp=datetime.now(),
-                    metadata={'merged': False, 'reply_index': i+1, 'reply_count': len(self._no_source_buffer), 'send_mode': 'buffer', 'has_source': False, 'original_request': self._no_source_request_content}
-                )
-                
-                await self._notify_subscribers(message)
-                logger.info(f"[IFlowMonitor] 已发送无来源消息 {i+1}/{len(self._no_source_buffer)}")
-            
-            logger.info(f"[IFlowMonitor] 已发送 {len(self._no_source_buffer)} 条无来源消息（广播模式，每条独立代码块）")
-            
-            self._no_source_buffer.clear()
+            # 处理无来源缓冲区：整合所有回复，添加说明前缀
+            merged_reply = '\n'.join(self._no_source_buffer)
+            # 添加说明前缀（按照 design-v2/21-消息来源差异化处理方案.md）
+            formatted_content = f"""未知来源消息回复结束！
+原请求消息内容是：{self._no_source_request_content}
+回复内容如下：
+
+```
+{merged_reply}
+```"""
+
+            message = OutboundMessage(
+                type=MessageType.REPLY,
+                content=formatted_content,
+                receiver="",
+                scope="all",
+                timestamp=datetime.now(),
+                metadata={'merged': True, 'reply_count': len(self._no_source_buffer), 'send_mode': 'buffer', 'has_source': False, 'original_request': self._no_source_request_content}
+            )
+
+            await self._notify_subscribers(message)
+            logger.info(f"[IFlowMonitor] 已发送无来源消息（广播模式，整合 {len(self._no_source_buffer)} 条回复）")
+
+            logger.info(f"[IFlowMonitor] 无来源消息发送完成，原请求：{self._no_source_request_content[:50]}...")
             self._no_source_request_content = ""
             return
         
