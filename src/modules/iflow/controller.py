@@ -305,14 +305,15 @@ class IFlowController:
             logger.error(f"[IFlowController] Error sending message: {e}")
             return False
     
-    async def start_iflow(self, model: str = "glm-4.7") -> bool:
+    async def start_iflow(self, model: str = "glm-4.7", continue_last: bool = True) -> bool:
         """在 tmux 会话中启动 iflow CLI
-        
+
         如果会话名称未指定，自动分配。
-        
+
         Args:
             model: iflow 模型
-            
+            continue_last: 是否继续上一次对话（添加 -c 参数）
+
         Returns:
             是否启动成功
         """
@@ -338,8 +339,14 @@ class IFlowController:
         try:
             # 参考旧版本：直接在创建 tmux 会话时启动 iflow
             # 使用 shell=True 来解析命令
+            # 添加 -c 参数继续上一次对话
+            if continue_last:
+                cmd = f"tmux new-session -d -s {self.tmux_session} 'iflow --model {model} --yolo -c'"
+            else:
+                cmd = f"tmux new-session -d -s {self.tmux_session} 'iflow --model {model} --yolo'"
+            
             result = await asyncio.create_subprocess_shell(
-                f"tmux new-session -d -s {self.tmux_session} 'iflow --model {model} --yolo'",
+                cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )

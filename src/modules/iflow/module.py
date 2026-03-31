@@ -53,7 +53,7 @@ class IFlowModule(BaseModule):
         workspace: str = "~/.iflow",
         auto_restart: bool = True,
         log_interactions: bool = True,
-        log_dir: str = "logs/interactions"
+        log_dir: Optional[str] = None
     ):
         """初始化 iflow 模块
 
@@ -64,7 +64,7 @@ class IFlowModule(BaseModule):
             workspace: iflow 工作目录
             auto_restart: iflow 异常时是否自动重启
             log_interactions: 是否记录交互
-            log_dir: 交互日志目录
+            log_dir: 交互日志目录（相对路径，相对于项目根目录）
         """
         self._temp_module_id = module_id
         super().__init__(module_id or "iflow_placeholder")
@@ -147,9 +147,9 @@ class IFlowModule(BaseModule):
         # 开始交互记录会话
         if self.logger:
             self.logger.start_session()
-        
-        # 创建 tmux 会话并启动 iflow
-        success = await self.controller.start_iflow(self.model)
+
+        # 创建 tmux 会话并启动 iflow（添加 -c 参数继续上一次对话）
+        success = await self.controller.start_iflow(self.model, continue_last=True)
         if not success:
             raise RuntimeError(f"[{self.module_id}] 启动 iflow 失败")
         
@@ -168,9 +168,11 @@ class IFlowModule(BaseModule):
         # 销毁 tmux 会话
         await self.controller.destroy_session()
         
-        # 保存交互记录
-        if self.logger:
-            self.logger.save_session()
+        # 保存交互记录（模块停止时保存完整 JSON 文件）
+        if self.logger and self.logger.get_session_log():
+            saved_path = self.logger.save_session(append=False)
+            if saved_path:
+                logger.info(f"[{self.module_id}] 最终交互记录已保存到：{saved_path}")
         
         logger.info(f"[{self.module_id}] iflow 模块已停止")
     
@@ -545,14 +547,16 @@ class IFlowModule(BaseModule):
         message.scope = scope
         
         # 增加回复计数
-        count_before = self.message_store.get_reply_count(current_id) if current_id else 0
+        count_before = (self.message_store.get(current_id).reply_count if self.message_store.get(current_id) else 0) if current_id else 0
         self.message_store.increment_reply_count(current_id)
-        count_after = self.message_store.get_reply_count(current_id) if current_id else 0
+        count_after = count_before + 1
         logger.debug(f"[{self.module_id}] [_on_monitor_message] 回复计数: {count_before} -> {count_after}")
         
-        # 记录接收
+        # 记录接收（根据消息类型标记）
         if self.logger:
-            self.logger.log_received(message.content)
+            # message.type 是 MessageType 枚举：reply(✦) | other(✻/无标记)
+            message_type = "reply" if message.type.value == "reply" else "thought"
+            self.logger.log_received(message.content, message_type)
         
         # 发送到消息总线
         # 获取当前消息的 chat_id
@@ -625,6 +629,19 @@ class IFlowModule(BaseModule):
             logger.debug(f"[{self.module_id}] 当前消息 ID: {self.message_store._current_message_id}")
             completed = self.message_store.complete_current()
             logger.info(f"[{self.module_id}] [COMPLETION] complete_current() 返回: reply_count={completed.reply_count if completed else None}, source={completed.source if completed else None}")
+
+            # 交互完成，追加到固定文件
+            if self.logger:
+                saved_path = self.logger.save_session(append=True)
+                if saved_path:
+                    logger.info(f"[{self.module_id}] 交互记录已追加：{saved_path}")
+                else:
+                    logger.debug(f"[{self.module_id}] 无交互记录需要追加")
+            
+            # 清空当前会话日志，为下一次交互做准备
+            if self.logger:
+                self.logger.clear_session()
+                logger.debug(f"[{self.module_id}] 已清空当前会话日志，准备下一次交互")
 
             if completed and completed.source:
                 # 只有有来源的消息才发送完成通知

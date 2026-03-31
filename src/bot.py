@@ -11,6 +11,7 @@ import os
 import signal
 import sys
 import logging
+from datetime import datetime
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -131,17 +132,17 @@ class LingIflowBot:
     def setup_logging(self) -> None:
         """设置日志"""
         log_level = self.config.get("log_level", "INFO")
-        
+
         # 获取 logger 等级
         level = getattr(logging, log_level, logging.INFO)
-        
+
         # 设置根 logger
         root_logger = logging.getLogger()
         root_logger.setLevel(level)
-        
+
         # 清除现有 handlers
         root_logger.handlers.clear()
-        
+
         # 控制台 handler
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(level)
@@ -149,12 +150,17 @@ class LingIflowBot:
             '%(asctime)s [%(levelname)s] [%(name)s] %(message)s'
         ))
         root_logger.addHandler(console_handler)
-        
+
         # 文件 handler - 按大小轮转，保留 5 个备份，单文件最大 10MB
-        log_dir = Path("logs")
+        # 日志目录：项目根目录下的 logs 目录（bot.py 所在项目的根目录）
+        project_root = Path(__file__).parent.parent
+        log_dir = project_root / "logs"
         log_dir.mkdir(exist_ok=True)
-        log_file = log_dir / "bot.log"
         
+        # 日志文件名：带 iflow 标识和时间戳
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = log_dir / f"iflow_{timestamp}.log"
+
         file_handler = RotatingFileHandler(
             log_file,
             maxBytes=10 * 1024 * 1024,  # 10MB
@@ -166,7 +172,7 @@ class LingIflowBot:
             '%(asctime)s [%(levelname)s] [%(name)s] %(message)s'
         ))
         root_logger.addHandler(file_handler)
-        
+
         # 设置第三方库日志级别
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
