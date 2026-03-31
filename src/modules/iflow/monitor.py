@@ -868,15 +868,19 @@ class IFlowMonitor:
                 return
             
             # 处理无来源缓冲区：整合所有回复，添加说明前缀
-            merged_reply = '\n'.join(self._no_source_buffer)
+            # 每个回复单独用代码块包裹，保持清晰格式
+            reply_blocks = []
+            for i, reply_content in enumerate(self._no_source_buffer, 1):
+                reply_blocks.append(f"回复 {i}/{len(self._no_source_buffer)}：\n\n```\n{reply_content}\n```")
+            
+            merged_reply = '\n\n'.join(reply_blocks)
+            
             # 添加说明前缀（按照 design-v2/21-消息来源差异化处理方案.md）
             formatted_content = f"""未知来源消息回复结束！
 原请求消息内容是：{self._no_source_request_content}
 回复内容如下：
 
-```
-{merged_reply}
-```"""
+{merged_reply}"""
 
             message = OutboundMessage(
                 type=MessageType.REPLY,
