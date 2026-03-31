@@ -552,11 +552,27 @@ class IFlowModule(BaseModule):
         count_after = count_before + 1
         logger.debug(f"[{self.module_id}] [_on_monitor_message] 回复计数: {count_before} -> {count_after}")
         
-        # 记录接收（根据消息类型标记）
+        # 记录接收（根据消息类型标记，并添加额外信息）
         if self.logger:
             # message.type 是 MessageType 枚举：reply(✦) | other(✻/无标记)
             message_type = "reply" if message.type.value == "reply" else "thought"
-            self.logger.log_received(message.content, message_type)
+            
+            # 构建额外信息字典
+            extra_info = {}
+            if hasattr(message, 'metadata') and message.metadata:
+                # 添加发送模式信息（用于区分无来源消息）
+                if 'send_mode' in message.metadata:
+                    extra_info['send_mode'] = message.metadata['send_mode']
+                if 'reply_index' in message.metadata:
+                    extra_info['reply_index'] = message.metadata['reply_index']
+                if 'reply_count' in message.metadata:
+                    extra_info['reply_count'] = message.metadata['reply_count']
+                if 'has_source' in message.metadata:
+                    extra_info['has_source'] = message.metadata['has_source']
+                if 'original_request' in message.metadata:
+                    extra_info['original_request'] = message.metadata['original_request']
+            
+            self.logger.log_received(message.content, message_type, extra_info if extra_info else None)
         
         # 发送到消息总线
         # 获取当前消息的 chat_id

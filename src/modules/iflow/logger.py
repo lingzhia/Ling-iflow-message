@@ -83,7 +83,7 @@ class InteractionLogger:
         self._session_log.append(entry)
         logger.debug(f"[{self.module_id}] 记录发送消息: {content[:50]}...")
     
-    def log_received(self, content: str, message_type: str = "reply") -> None:
+    def log_received(self, content: str, message_type: str = "reply", extra_info: Optional[Dict] = None) -> None:
         """记录收到的回复
         
         Args:
@@ -99,6 +99,12 @@ class InteractionLogger:
             "content": content,
             "module_id": self.module_id
         }
+
+        # 添加额外信息（如果有）
+        if extra_info:
+            for key, value in extra_info.items():
+                entry[key] = value
+        
         self._session_log.append(entry)
         logger.debug(f"[{self.module_id}] 记录接收消息: {content[:50]}...")
     
