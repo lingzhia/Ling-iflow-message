@@ -321,7 +321,6 @@ class IFlowMonitor:
 
                         # 清理去重集合（为下一次对话准备）
                         # 修复：注释掉缓存清空逻辑，保留去重机制避免历史消息重复发送
-                        # 参考：design-v2/19-scope命令历史消息重复问题修复方案.md
                         # self._sent_message_hashes.clear()
                         # self._sent_marker_strings.clear()
 
@@ -719,8 +718,6 @@ class IFlowMonitor:
     def _cleanup_cache(self) -> None:
         """清理旧缓存，保留最近的 N 条消息
 
-        参考：design-v2/19-scope命令历史消息重复问题修复方案.md
-
         清理策略：
         - 最大缓存大小：100 条
         - 保留数量：50 条
@@ -773,9 +770,8 @@ class IFlowMonitor:
         # 添加到已发送集合
         self._sent_marker_strings.add(marker_only)  # 字符串定位
         self._sent_message_hashes.add(content_hash)  # 哈希定位
-        
+
         # 清理旧缓存（控制内存占用）
-        # 参考：design-v2/19-scope命令历史消息重复问题修复方案.md
         self._cleanup_cache()
 
         # 根据 send_mode 决定发送方式
@@ -874,8 +870,8 @@ class IFlowMonitor:
                 reply_blocks.append(f"回复 {i}/{len(self._no_source_buffer)}：\n\n```\n{reply_content}\n```")
             
             merged_reply = '\n\n'.join(reply_blocks)
-            
-            # 添加说明前缀（按照 design-v2/21-消息来源差异化处理方案.md）
+
+            # 添加说明前缀
             formatted_content = f"""未知来源消息回复结束！
 原请求消息内容是：{self._no_source_request_content}
 回复内容如下：

@@ -246,9 +246,8 @@ class WeChatChannel(BaseModule):
             if not user_id:
                 logger.warning(f"[{self.module_id}] 未配置 user_id，跳过启动通知")
                 return
-            
+
             callback_port = self.config.get("callback_port", 8788)
-            # 根据 design-v2/17-渠道架构简化方案.md，tmux 会话名使用命名规则：渠道名+iflow
             channel_name = self.module_id.replace("wechat_", "")
             tmux_session = self.config.get("tmux_session", f"{channel_name}+iflow")
             workspace = self.config.get("workspace", "~/.iflow")
@@ -300,8 +299,7 @@ class WeChatChannel(BaseModule):
             if not user_id:
                 logger.warning(f"[{self.module_id}] 未配置 user_id，跳过停止通知")
                 return
-            
-            # 根据 design-v2/17-渠道架构简化方案.md，tmux 会话名使用命名规则：渠道名+iflow
+
             channel_name = self.module_id.replace("wechat_", "")
             tmux_session = self.config.get("tmux_session", f"{channel_name}+iflow")
 
