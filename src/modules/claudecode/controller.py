@@ -160,9 +160,10 @@ class ClaudeCodeController:
         """
         try:
             output = await self.capture_output(lines=50)
-            # 检测多种确认提示，包括 bypass permissions on 等
-            prompts = ["Quick safety check", "trust this folder", "bypass permissions",
-                       "trust and open", "continue?", "permission", "approve"]
+            # 只检测真正的交互式确认提示，不包括 "bypass permissions on" 这类状态提示
+            # 真正的确认对话框会有类似 "Press Enter" 或 "continue?" 的交互式提示
+            prompts = ["Quick safety check", "trust this folder", "trust and open",
+                       "Do you want to continue", "type 'yes' to"]
             return any(p.lower() in output.lower() for p in prompts)
         except Exception:
             return False
