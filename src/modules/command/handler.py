@@ -677,21 +677,30 @@ class CommandHandler:
         # 确定要查看的目标
         if target:
             # 用户指定了目标
-            if target.startswith("iflow_"):
-                # 直接指定了 iflow 模块
+            if target.startswith("iflow_") or target.startswith("claude_"):
+                # 直接指定了模块
                 module_id = target
             else:
-                # 指定了渠道名，转换为 iflow 模块名
-                module_id = f"iflow_{target}"
+                # 指定了渠道名，尝试查找对应的 iflow 或 claude 模块
+                iflow_id = f"iflow_{target}"
+                claude_id = f"claude_{target}"
+                if iflow_id in self.bus.modules:
+                    module_id = iflow_id
+                elif claude_id in self.bus.modules:
+                    module_id = claude_id
+                else:
+                    return f"❌ 找不到渠道 {target} 对应的模块"
         else:
-            # 未指定目标，查找有可用 tmux 会话的 iflow 模块
-            iflow_modules = [mid for mid in self.bus.modules.keys() if mid.startswith("iflow_")]
-            if not iflow_modules:
-                return "❌ 没有可用的 iflow 模块"
+            # 未指定目标，查找有可用 tmux 会话的 iflow 或 claude 模块
+            # 优先查找 iflow，然后查找 claude
+            ai_modules = [mid for mid in self.bus.modules.keys() 
+                         if mid.startswith("iflow_") or mid.startswith("claude_")]
+            if not ai_modules:
+                return "❌ 没有可用的 AI 模块（iflow 或 claude）"
             
             # 遍历找到 tmux 会话真实存在的模块
             module_id = None
-            for mid in iflow_modules:
+            for mid in ai_modules:
                 mod = self.bus.modules.get(mid)
                 if mod and hasattr(mod, 'controller') and mod.controller:
                     ctrl = mod.controller
@@ -703,7 +712,7 @@ class CommandHandler:
                             break
             
             if not module_id:
-                return f"❌ 没有可用的 tmux 会话（检查了 {len(iflow_modules)} 个 iflow 模块）"
+                return f"❌ 没有可用的 tmux 会话（检查了 {len(ai_modules)} 个 AI 模块）"
         
         # 检查模块是否存在
         if module_id not in self.bus.modules:

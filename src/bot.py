@@ -35,16 +35,18 @@ class LingIflowBot:
     支持单进程多组管理，默认只启动组1，其他组按需实例化。
     """
     
-    def __init__(self, config_path: str = "config.json", active_channel: Optional[str] = None):
+    def __init__(self, config_path: str = "config.json", active_channel: Optional[str] = None, engine: str = "iflow"):
         """初始化机器人
         
         Args:
             config_path: 配置文件路径
             active_channel: 要启动的特定渠道 (wechat_bot1, wechat_bot2, simulator1)，None 表示启动所有渠道
+            engine: AI 引擎类型 ("iflow" 或 "claude")，默认 "iflow"
         """
         self.config_path = config_path
         self.config: Dict = {}
         self.active_channel = active_channel
+        self.engine = engine  # AI 引擎类型
         
         # 工作目录：优先级：配置文件 > 环境变量 > 当前工作目录
         # 默认使用当前工作目录，会在 load_config 后更新
@@ -203,7 +205,6 @@ class LingIflowBot:
             has_feishu = len(self.config.get("feishu_channels", [])) > 0
             has_wechat = len(self.config.get("bots", [])) > 0
             has_simulator = len(self.config.get("simulator_channels", [])) > 0
-            has_claude = len(self.config.get("claude_channels", [])) > 0
 
             # 如果没有任何配置，默认创建企业微信模块
             if not has_feishu and not has_wechat and not has_simulator:
@@ -218,12 +219,11 @@ class LingIflowBot:
             if has_simulator:
                 await self._create_simulator_modules()
 
-            # 5. 为每个渠道创建对应的 iflow 模块和绑定关系
-            await self._setup_channels()
-
-            # 6. 为每个渠道创建对应的 claude 模块和绑定关系（如果配置了 claude_channels）
-            if has_claude:
+            # 5. 根据 engine 参数创建对应的 AI 引擎模块
+            if self.engine == "claude":
                 await self._setup_claude_channels()
+            else:
+                await self._setup_channels()
             
             logger.info("所有组件初始化完成")
             return True
@@ -373,39 +373,56 @@ class LingIflowBot:
             logger.error(f"设置渠道 iflow 失败 {channel_name}: {e}")
 
     async def _setup_claude_channels(self) -> None:
-        """为每个渠道创建对应的 claude 模块和绑定关系"""
-        for claude_config in self.config.get("claude_channels", []):
-            if isinstance(claude_config, dict):
-                channel_name = claude_config.get("name")
-                await self._setup_channel_claude(channel_name, claude_config)
+        """为所有已配置的渠道创建对应的 claude 模块和绑定关系
+        
+        当 engine 参数为 "claude" 时调用，为所有渠道创建 claude 模块
+        """
+        # 为企业微信渠道创建 claude 模块
+        for bot_config in self.config.get("bots", []):
+            if isinstance(bot_config, dict):
+                bot_name = bot_config.get("name")
+                await self._setup_channel_claude(bot_name, bot_config)
+        
+        # 为飞书渠道创建 claude 模块
+        for fs_config in self.config.get("feishu_channels", []):
+            if isinstance(fs_config, dict) and fs_config.get("enabled", True):
+                fs_name = fs_config.get("name")
+                await self._setup_channel_claude(fs_name, fs_config)
+        
+        # 为模拟器渠道创建 claude 模块
+        for sim_config in self.config.get("simulator_channels", []):
+            sim_name = sim_config.get("name")
+            await self._setup_channel_claude(sim_name, sim_config)
 
-    async def _setup_channel_claude(self, channel_name: str, claude_config: Dict) -> None:
+    async def _setup_channel_claude(self, channel_name: str, channel_config: Dict) -> None:
         """为特定渠道设置 claude 模块和绑定关系
 
         Args:
             channel_name: 渠道名称
-            claude_config: claude 配置
+            channel_config: 渠道配置（用于获取 tmux_session 等参数）
         """
         try:
             # 创建 claude 模块
             claude_module_id = f"claude_{channel_name}"
-            tmux_session = claude_config.get("tmux_session", f"{channel_name}+claude")
+            tmux_session = f"{channel_name}+claude"
+
+            # 获取运行用户（从环境变量或使用默认值）
+            run_user = os.environ.get("CLAUDE_RUN_USER", "vboxuser")
 
             claude = await self.manager.create_module(
                 module_type="claude",
                 module_id=claude_module_id,
                 config={
                     "tmux_session": tmux_session,
-                    "model": claude_config.get("model", "sonnet"),
-                    "workspace": claude_config.get("workspace", self.workspace),
-                    "run_user": claude_config.get("run_user", "vboxuser")
+                    "workspace": self.workspace,
+                    "run_user": run_user
                 }
             )
             # 设置 manager 引用
             claude.manager = self.manager
             self.claude_modules[channel_name] = claude
             await self.manager.register_module(claude_module_id)
-            logger.info(f"创建 claude 模块: {claude_module_id}, tmux会话: {tmux_session}")
+            logger.info(f"创建 claude 模块: {claude_module_id}, tmux会话: {tmux_session}, 运行用户: {run_user}")
 
             # 设置绑定关系：channel <-> claude
             if channel_name in self.wechat_modules:
@@ -448,14 +465,14 @@ class LingIflowBot:
                 simulator_module_id = f"simulator_{self.active_channel}"
                 await self.manager.start_module(simulator_module_id)
             
-            # 启动对应的 iflow 模块
-            iflow_module_id = f"iflow_{self.active_channel}"
-            await self.manager.start_module(iflow_module_id)
-
-            # 启动对应的 claude 模块（如果存在）
-            claude_module_id = f"claude_{self.active_channel}"
-            if claude_module_id in self.manager.modules:
-                await self.manager.start_module(claude_module_id)
+            # 根据 engine 类型启动对应的 AI 引擎模块
+            if self.engine == "claude":
+                claude_module_id = f"claude_{self.active_channel}"
+                if claude_module_id in self.manager.modules:
+                    await self.manager.start_module(claude_module_id)
+            else:
+                iflow_module_id = f"iflow_{self.active_channel}"
+                await self.manager.start_module(iflow_module_id)
         else:
             # 启动所有模块
             logger.info("启动所有模块...")
@@ -475,15 +492,15 @@ class LingIflowBot:
                 simulator_module_id = f"simulator_{sim_name}"
                 await self.manager.start_module(simulator_module_id)
 
-            # 启动所有 iflow 模块
-            for channel_name in self.iflow_modules.keys():
-                iflow_module_id = f"iflow_{channel_name}"
-                await self.manager.start_module(iflow_module_id)
-
-            # 启动所有 claude 模块
-            for channel_name in self.claude_modules.keys():
-                claude_module_id = f"claude_{channel_name}"
-                await self.manager.start_module(claude_module_id)
+            # 根据 engine 类型启动对应的 AI 引擎模块
+            if self.engine == "claude":
+                for channel_name in self.claude_modules.keys():
+                    claude_module_id = f"claude_{channel_name}"
+                    await self.manager.start_module(claude_module_id)
+            else:
+                for channel_name in self.iflow_modules.keys():
+                    iflow_module_id = f"iflow_{channel_name}"
+                    await self.manager.start_module(iflow_module_id)
         
         # 启动健康监控
         await self.manager.start_health_monitor()
@@ -965,6 +982,7 @@ async def main():
     # 支持命令行参数指定配置文件
     config_path = "config.json"
     active_channel = None
+    engine = "iflow"  # 默认使用 iflow 引擎
     
     if len(sys.argv) > 1:
         # 解析命令行参数
@@ -976,13 +994,19 @@ async def main():
                     i += 2
                 else:
                     i += 1
+            elif sys.argv[i] == "--engine":
+                if i + 1 < len(sys.argv):
+                    engine = sys.argv[i + 1]
+                    i += 2
+                else:
+                    i += 1
             else:
                 # 第一个非参数的参数是配置文件
                 if not sys.argv[i].startswith("-"):
                     config_path = sys.argv[i]
                 i += 1
     
-    bot = LingIflowBot(config_path, active_channel)
+    bot = LingIflowBot(config_path, active_channel, engine)
     await bot.run()
 
 

@@ -198,20 +198,24 @@ def start(
     config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径"),
     all_channels: bool = typer.Option(False, "--all", "-a", help="启动所有渠道"),
     channel: Optional[str] = typer.Option(None, "--channel", help="启动的特定渠道（使用 ls 列出所有渠道）"),
-    foreground: bool = typer.Option(False, "--foreground", "-f", help="前台模式：启动后进入 tmux 会话")
+    foreground: bool = typer.Option(False, "--foreground", "-f", help="前台模式：启动后进入 tmux 会话"),
+    use_iflow: bool = typer.Option(False, "--iflow", help="使用 iflow 引擎（默认）"),
+    use_claude: bool = typer.Option(False, "--claude", help="使用 Claude Code 引擎")
 ):
     """启动服务
 
     默认后台启动第一个启用的渠道，使用 -a 启动所有渠道
     使用 -f 进入 tmux 前台模式（启动后自动进入 tmux 会话）
+    使用 --iflow 或 --claude 选择 AI 引擎（默认 iflow）
 
     示例：
-      ./manage.py start              后台启动默认渠道（第一个启用的渠道）
+      ./manage.py start              后台启动默认渠道（使用 iflow）
+      ./manage.py start --claude     后台启动默认渠道（使用 Claude Code）
       ./manage.py start -a           后台启动所有渠道
       ./manage.py start -f           前台模式：启动并进入 tmux 会话
       ./manage.py start --channel ls 列出所有可用渠道
       ./manage.py start --channel feishu1  启动指定渠道
-      ./manage.py start -f --channel feishu1  前台模式启动指定渠道
+      ./manage.py start --channel feishu1 --claude  启动指定渠道使用 Claude Code
     """
     print_header("启动服务")
 
@@ -307,6 +311,24 @@ def start(
         print_info(f"启动渠道: {default_channel}")
         cmd_args = [config, "--channel", default_channel]
 
+    # 处理引擎选择参数
+    if use_iflow and use_claude:
+        print_error("--iflow 和 --claude 参数互斥")
+        print_info("请只指定其中一个引擎参数")
+        raise typer.Exit(1)
+
+    engine = "iflow"  # 默认使用 iflow
+    if use_claude:
+        engine = "claude"
+        print_info("使用引擎: Claude Code")
+        cmd_args.extend(["--engine", "claude"])
+    elif use_iflow:
+        engine = "iflow"
+        print_info("使用引擎: iflow")
+        cmd_args.extend(["--engine", "iflow"])
+    else:
+        print_info("使用引擎: iflow（默认）")
+
     # 构建启动命令
     cmd = ["python3", "-m", "src.bot"] + cmd_args
 
@@ -348,7 +370,7 @@ def start(
             return
 
         # 等待 tmux 会话创建
-        tmux_session = f"{target_channel_for_tmux}+iflow"
+        tmux_session = f"{target_channel_for_tmux}+{engine}"
         print_info(f"等待 tmux 会话创建: {tmux_session}")
 
         import time

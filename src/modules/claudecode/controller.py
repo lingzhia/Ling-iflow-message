@@ -177,26 +177,29 @@ class ClaudeCodeController:
             return True
 
         try:
-            # 等待安全确认对话框出现
-            for _ in range(30):  # 最多等待30秒
+            # 检测到安全确认对话框后立即发送 Enter
+            if await self.check_safety_confirmation():
+                logger.info("[ClaudeCodeController] 检测到安全确认对话框，发送 Enter")
+                await asyncio.create_subprocess_exec(
+                    "tmux", "send-keys", "-t", self.tmux_session, "Enter",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                await asyncio.sleep(2)
+
+            # 等待对话框消失（最多 10 秒）
+            for _ in range(10):
                 if not await self.check_safety_confirmation():
                     self._safety_confirmed = True
                     logger.info("[ClaudeCodeController] Safety confirmation completed")
                     return True
+                # 如果还在显示，再次发送 Enter
+                await asyncio.create_subprocess_exec(
+                    "tmux", "send-keys", "-t", self.tmux_session, "Enter",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
                 await asyncio.sleep(1)
-
-            # 尝试发送 Enter
-            await asyncio.create_subprocess_exec(
-                "tmux", "send-keys", "-t", self.tmux_session, "Enter",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            await asyncio.sleep(2)
-
-            # 再次检查是否已确认
-            if not await self.check_safety_confirmation():
-                self._safety_confirmed = True
-                return True
 
             return False
 
