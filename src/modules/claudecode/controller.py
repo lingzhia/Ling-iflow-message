@@ -160,7 +160,10 @@ class ClaudeCodeController:
         """
         try:
             output = await self.capture_output(lines=50)
-            return "Quick safety check" in output or "trust this folder" in output
+            # 检测多种确认提示，包括 bypass permissions on 等
+            prompts = ["Quick safety check", "trust this folder", "bypass permissions",
+                       "trust and open", "continue?", "permission", "approve"]
+            return any(p.lower() in output.lower() for p in prompts)
         except Exception:
             return False
 
@@ -360,10 +363,10 @@ class ClaudeCodeController:
 
         try:
             # 构建启动命令
-            # Claude Code 需要以非 root 用户运行
-            claude_cmd = f"claude -c --dangerously-skip-permissions"
+            # Claude Code 需要以非 root 用户运行，且需要先 cd 到工作目录
+            claude_cmd = f"cd {self._workspace} && claude -c --dangerously-skip-permissions"
             if not continue_last:
-                claude_cmd = "claude --dangerously-skip-permissions"
+                claude_cmd = f"cd {self._workspace} && claude --dangerously-skip-permissions"
 
             # 使用 su 切换到指定用户启动 Claude Code
             cmd = f"tmux new-session -d -s {self.tmux_session} 'su - {self._run_user} -c \"{claude_cmd}\"'"

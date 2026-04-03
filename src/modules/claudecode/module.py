@@ -297,7 +297,7 @@ class ClaudeCodeModule(BaseModule):
             return Response(
                 success=False,
                 error="send_failed",
-                message="消息发送失败"
+                message="消息发送失败，Claude Code 可能未启动或正在等待确认。请尝试发送 /restart 或检查 Claude 状态。"
             )
 
     def subscribe(self, callback: Callable) -> None:
