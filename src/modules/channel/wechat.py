@@ -249,7 +249,7 @@ class WeChatChannel(BaseModule):
 
             callback_port = self.config.get("callback_port", 8788)
             channel_name = self.module_id.replace("wechat_", "")
-            tmux_session = self.config.get("tmux_session", f"{channel_name}+iflow")
+            tmux_session = self.config.get("tmux_session", f"{channel_name}+claude")
             workspace = self.config.get("workspace", "~/.iflow")
             
             # 扩展工作目录路径
@@ -301,7 +301,7 @@ class WeChatChannel(BaseModule):
                 return
 
             channel_name = self.module_id.replace("wechat_", "")
-            tmux_session = self.config.get("tmux_session", f"{channel_name}+iflow")
+            tmux_session = self.config.get("tmux_session", f"{channel_name}+claude")
 
             # 使用当前目录作为工作目录
             from pathlib import Path

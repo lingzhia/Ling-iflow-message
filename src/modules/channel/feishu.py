@@ -1046,7 +1046,7 @@ class FeishuChannel(BaseModule):
         """发送启动通知到飞书"""
         try:
             # 获取配置
-            tmux_session = self.config.get("tmux_session", f"{self.module_id.replace('feishu_', '')}+iflow")
+            tmux_session = self.config.get("tmux_session", f"{self.module_id.replace('feishu_', '')}+claude")
             workspace = Path.cwd()
             
             # 构建通知内容
@@ -1072,7 +1072,7 @@ class FeishuChannel(BaseModule):
     async def _send_shutdown_notification(self) -> None:
         """发送停止通知到飞书"""
         try:
-            tmux_session = self.config.get("tmux_session", f"{self.module_id.replace('feishu_', '')}+iflow")
+            tmux_session = self.config.get("tmux_session", f"{self.module_id.replace('feishu_', '')}+claude")
             workspace = Path.cwd()
             
             service_info = f"""📁 工作目录：{workspace}
