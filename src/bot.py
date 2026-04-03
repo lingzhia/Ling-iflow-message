@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Any
 if False:
     from .modules.channel import WeChatChannel, FeishuChannel, SimulatorChannel
     from .modules.iflow import IFlowModule
+    from .modules.claudecode import ClaudeCodeModule
 
 from .core import MessageBus, Message, ModuleManager
 
@@ -56,6 +57,7 @@ class LingIflowBot:
         self.feishu_modules: Dict[str, FeishuChannel] = {}
         self.simulator_modules: Dict[str, SimulatorChannel] = {}
         self.iflow_modules: Dict[str, IFlowModule] = {}
+        self.claude_modules: Dict[str, ClaudeCodeModule] = {}
         
         # Unix Socket 控制接口
         self.control_socket_path = "/tmp/ling-iflow.sock"
@@ -201,22 +203,27 @@ class LingIflowBot:
             has_feishu = len(self.config.get("feishu_channels", [])) > 0
             has_wechat = len(self.config.get("bots", [])) > 0
             has_simulator = len(self.config.get("simulator_channels", [])) > 0
-            
+            has_claude = len(self.config.get("claude_channels", [])) > 0
+
             # 如果没有任何配置，默认创建企业微信模块
             if not has_feishu and not has_wechat and not has_simulator:
                 has_wechat = True
-            
+
             if has_wechat:
                 await self._create_wechat_modules()
-            
+
             if has_feishu:
                 await self._create_feishu_modules()
-            
+
             if has_simulator:
                 await self._create_simulator_modules()
-            
-            # 7. 为每个渠道创建对应的 iflow 模块和绑定关系
+
+            # 5. 为每个渠道创建对应的 iflow 模块和绑定关系
             await self._setup_channels()
+
+            # 6. 为每个渠道创建对应的 claude 模块和绑定关系（如果配置了 claude_channels）
+            if has_claude:
+                await self._setup_claude_channels()
             
             logger.info("所有组件初始化完成")
             return True
@@ -364,6 +371,61 @@ class LingIflowBot:
         
         except Exception as e:
             logger.error(f"设置渠道 iflow 失败 {channel_name}: {e}")
+
+    async def _setup_claude_channels(self) -> None:
+        """为每个渠道创建对应的 claude 模块和绑定关系"""
+        for claude_config in self.config.get("claude_channels", []):
+            if isinstance(claude_config, dict):
+                channel_name = claude_config.get("name")
+                await self._setup_channel_claude(channel_name, claude_config)
+
+    async def _setup_channel_claude(self, channel_name: str, claude_config: Dict) -> None:
+        """为特定渠道设置 claude 模块和绑定关系
+
+        Args:
+            channel_name: 渠道名称
+            claude_config: claude 配置
+        """
+        try:
+            # 创建 claude 模块
+            claude_module_id = f"claude_{channel_name}"
+            tmux_session = claude_config.get("tmux_session", f"{channel_name}+claude")
+
+            claude = await self.manager.create_module(
+                module_type="claude",
+                module_id=claude_module_id,
+                config={
+                    "tmux_session": tmux_session,
+                    "model": claude_config.get("model", "sonnet"),
+                    "workspace": claude_config.get("workspace", self.workspace),
+                    "run_user": claude_config.get("run_user", "vboxuser")
+                }
+            )
+            # 设置 manager 引用
+            claude.manager = self.manager
+            self.claude_modules[channel_name] = claude
+            await self.manager.register_module(claude_module_id)
+            logger.info(f"创建 claude 模块: {claude_module_id}, tmux会话: {tmux_session}")
+
+            # 设置绑定关系：channel <-> claude
+            if channel_name in self.wechat_modules:
+                wechat_module_id = f"wechat_{channel_name}"
+                self.bus.bind(wechat_module_id, claude_module_id)
+                self.bus.bind(claude_module_id, wechat_module_id)
+                logger.info(f"绑定: {wechat_module_id} <-> {claude_module_id}")
+            elif channel_name in self.feishu_modules:
+                feishu_module_id = f"feishu_{channel_name}"
+                self.bus.bind(feishu_module_id, claude_module_id)
+                self.bus.bind(claude_module_id, feishu_module_id)
+                logger.info(f"绑定: {feishu_module_id} <-> {claude_module_id}")
+            elif channel_name in self.simulator_modules:
+                simulator_module_id = f"simulator_{channel_name}"
+                self.bus.bind(simulator_module_id, claude_module_id)
+                self.bus.bind(claude_module_id, simulator_module_id)
+                logger.info(f"绑定: {simulator_module_id} <-> {claude_module_id}")
+
+        except Exception as e:
+            logger.error(f"设置渠道 claude 失败 {channel_name}: {e}")
     
     async def start(self) -> None:
         """启动所有模块（使用 ModuleManager）"""
@@ -389,29 +451,39 @@ class LingIflowBot:
             # 启动对应的 iflow 模块
             iflow_module_id = f"iflow_{self.active_channel}"
             await self.manager.start_module(iflow_module_id)
+
+            # 启动对应的 claude 模块（如果存在）
+            claude_module_id = f"claude_{self.active_channel}"
+            if claude_module_id in self.manager.modules:
+                await self.manager.start_module(claude_module_id)
         else:
             # 启动所有模块
             logger.info("启动所有模块...")
-            
+
             # 启动所有企业微信模块
             for bot_name in self.wechat_modules.keys():
                 wechat_module_id = f"wechat_{bot_name}"
                 await self.manager.start_module(wechat_module_id)
-            
+
             # 启动所有飞书模块
             for fs_name in self.feishu_modules.keys():
                 feishu_module_id = f"feishu_{fs_name}"
                 await self.manager.start_module(feishu_module_id)
-            
+
             # 启动所有模拟器模块
             for sim_name in self.simulator_modules.keys():
                 simulator_module_id = f"simulator_{sim_name}"
                 await self.manager.start_module(simulator_module_id)
-            
+
             # 启动所有 iflow 模块
             for channel_name in self.iflow_modules.keys():
                 iflow_module_id = f"iflow_{channel_name}"
                 await self.manager.start_module(iflow_module_id)
+
+            # 启动所有 claude 模块
+            for channel_name in self.claude_modules.keys():
+                claude_module_id = f"claude_{channel_name}"
+                await self.manager.start_module(claude_module_id)
         
         # 启动健康监控
         await self.manager.start_health_monitor()

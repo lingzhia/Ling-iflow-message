@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la /opt/code/Ling-iflow-message/design-v2/*.md)",
+      "Bash(ls -la /opt/code/Ling-iflow-message/design-v2/20* /opt/code/Ling-iflow-message/design-v2/11* /opt/code/Ling-iflow-message/design-v2/13*)"
+    ]
+  }
+}

@@ -15,7 +15,7 @@ import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from ...core.base import BaseModule
 from ...core.message import Message, MessageType, MessageContent
@@ -47,6 +47,12 @@ except ImportError:
     FEISHU_AVAILABLE = False
     lark = None
     Emoji = None
+    # 定义类型别名，避免类型注解错误
+    P2ImMessageReceiveV1 = Any
+    P2ImMessageReactionCreatedV1 = Any
+    P2ImMessageReactionDeletedV1 = Any
+    P2ImMessageMessageReadV1 = Any
+    P2ImChatAccessEventBotP2pChatEnteredV1 = Any
 
 
 logger = logging.getLogger(__name__)

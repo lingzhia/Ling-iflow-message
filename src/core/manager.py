@@ -55,6 +55,17 @@ class IFlowStatus:
 
 
 @dataclass
+class ClaudeStatus:
+    """Claude Code 模块专用状态"""
+    module_id: str
+    state: str = "idle"  # idle | generating
+    generating_start: Optional[datetime] = None
+    generating_duration: int = 0
+    total_generated: int = 0
+    total_rejected: int = 0
+
+
+@dataclass
 class StateTransition:
     """状态转换记录"""
     module_id: str
@@ -146,12 +157,15 @@ class ModuleManager:
         
         # 模块实例
         self.modules: Dict[str, Any] = {}
-        
+
         # 模块状态
         self.module_states: Dict[str, ModuleStatus] = {}
-        
+
         # IFlow 专用状态
         self.iflow_status: Dict[str, IFlowStatus] = {}
+
+        # Claude Code 专用状态
+        self.claude_status: Dict[str, ClaudeStatus] = {}
         
         # 依赖关系
         self.dependencies: Dict[str, List[str]] = {}
@@ -205,6 +219,9 @@ class ModuleManager:
         if module_type == "iflow":
             from ..modules.iflow import IFlowModule
             module = IFlowModule(module_id=module_id, **config)
+        elif module_type == "claude":
+            from ..modules.claudecode import ClaudeCodeModule
+            module = ClaudeCodeModule(module_id=module_id, **config)
         elif module_type == "wechat":
             from ..modules.channel import WeChatChannel
             module = WeChatChannel(module_id=module_id, config=config)
@@ -222,13 +239,17 @@ class ModuleManager:
         
         # 存储模块实例
         self.modules[module_id] = module
-        
+
         # 初始化状态
         self.module_states[module_id] = ModuleStatus(module_id=module_id)
-        
+
         # 如果是 IFlow 模块，初始化专用状态
         if module_type == "iflow":
             self.iflow_status[module_id] = IFlowStatus(module_id=module_id)
+
+        # 如果是 Claude Code 模块，初始化专用状态
+        if module_type == "claude":
+            self.claude_status[module_id] = ClaudeStatus(module_id=module_id)
         
         return module
     
@@ -258,10 +279,14 @@ class ModuleManager:
         # 移除模块
         del self.modules[module_id]
         del self.module_states[module_id]
-        
+
         # 移除 IFlow 状态
         if module_id in self.iflow_status:
             del self.iflow_status[module_id]
+
+        # 移除 Claude Code 状态
+        if module_id in self.claude_status:
+            del self.claude_status[module_id]
         
         logger.info(f"[ModuleManager] 模块已销毁: {module_id}")
         return True
@@ -1041,6 +1066,67 @@ class ModuleManager:
             iflow_status.total_generated += 1
         
         logger.debug(f"[ModuleManager] IFlow 状态更新: {module_id} -> {state}")
+
+    # ==================== Claude Code 状态管理 ====================
+
+    def get_claude_status(self, module_id: str) -> Optional[Dict[str, Any]]:
+        """获取 Claude Code 模块状态
+
+        Args:
+            module_id: 模块 ID
+
+        Returns:
+            Claude Code 状态信息
+        """
+        if module_id not in self.claude_status:
+            return None
+
+        status = self.claude_status[module_id]
+        return {
+            "module_id": status.module_id,
+            "state": status.state,
+            "generating_start": status.generating_start.isoformat() if status.generating_start else None,
+            "generating_duration": status.generating_duration,
+            "total_generated": status.total_generated,
+            "total_rejected": status.total_rejected
+        }
+
+    def is_claude_available(self, module_id: str) -> bool:
+        """检查 Claude Code 是否可用(不在生成中)
+
+        Args:
+            module_id: 模块 ID
+
+        Returns:
+            是否可用
+        """
+        if module_id not in self.claude_status:
+            return False
+
+        return self.claude_status[module_id].state == "idle"
+
+    def update_claude_state(self, module_id: str, state: str, duration: int = 0) -> None:
+        """更新 Claude Code 状态
+
+        Args:
+            module_id: 模块 ID
+            state: 状态(idle | generating)
+            duration: 生成持续时间(秒)
+        """
+        if module_id not in self.claude_status:
+            logger.warning(f"[ModuleManager] Claude Code 模块不存在: {module_id}")
+            return
+
+        claude_state = self.claude_status[module_id]
+        claude_state.state = state
+
+        if state == "generating":
+            claude_state.generating_start = datetime.now()
+        elif state == "idle":
+            claude_state.generating_duration = duration
+            claude_state.total_generated += 1
+
+        logger.debug(f"[ModuleManager] Claude Code 状态更新: {module_id} -> {state}")
     
     # ==================== 接收方状态检查 ====================
     
@@ -1101,6 +1187,21 @@ class ModuleManager:
                     "error_message": f"iflow 正在生成中，已持续 {duration} 秒，请稍后再试",
                     "details": {
                         "state": iflow_status.get("state"),
+                        "duration": duration
+                    }
+                }
+
+        # 特殊处理：Claude Code 模块检查生成状态
+        if receiver_id.startswith("claude_"):
+            if not self.is_claude_available(receiver_id):
+                claude_status = self.get_claude_status(receiver_id)
+                duration = claude_status.get("generating_duration", 0)
+                return {
+                    "available": False,
+                    "error": "CLAUDE_GENERATING",
+                    "error_message": f"Claude Code 正在生成中，已持续 {duration} 秒，请稍后再试",
+                    "details": {
+                        "state": claude_status.get("state"),
                         "duration": duration
                     }
                 }
@@ -1447,6 +1548,25 @@ class ModuleManager:
                 # 如果模块不在 iflow_status 中，初始化状态为 idle
                 self.update_iflow_state(module_id, "idle")
                 logger.debug(f"[ModuleManager] 初始化 iflow 模块状态: {module_id} -> idle")
+
+        # 特殊检查：Claude Code 生成中状态
+        if module_id.startswith("claude_"):
+            # 如果模块在 claude_status 中，检查状态
+            if module_id in self.claude_status:
+                if not self.is_claude_available(module_id):
+                    claude_status = self.get_claude_status(module_id)
+                    duration = claude_status.get("generating_duration", 0)
+                    return {
+                        "exists": True,
+                        "available": False,
+                        "reason": "claude_generating",
+                        "message": f"Claude Code 正在生成中，已持续 {duration} 秒",
+                        "duration": duration
+                    }
+            else:
+                # 如果模块不在 claude_status 中，初始化状态为 idle
+                self.update_claude_state(module_id, "idle")
+                logger.debug(f"[ModuleManager] 初始化 claude 模块状态: {module_id} -> idle")
         
         # 接收方可用
         return {

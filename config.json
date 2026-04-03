@@ -41,6 +41,15 @@
       "port": 19999
     }
   ],
+  "claude_channels": [
+    {
+      "name": "simulator1",
+      "model": "sonnet",
+      "tmux_session": "simulator1+claude",
+      "run_user": "vboxuser",
+      "workspace": "/tmp"
+    }
+  ],
   "log_level": "INFO",
   "filter_thinking": true,
   "feishu_channels": [
