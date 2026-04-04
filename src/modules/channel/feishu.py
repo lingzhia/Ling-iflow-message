@@ -1053,14 +1053,14 @@ class FeishuChannel(BaseModule):
             service_info = f"""📁 工作目录：{workspace}
 💻 tmux 会话：{tmux_session} ✓"""
             
-            quick_start = """• 直接发送消息：执行 iFlow 命令
+            quick_start = """• 直接发送消息：和 Claude 对话
 • `/lscmd`：查看所有可用命令"""
             
             tips = "输入 `/lscmd` 查看完整的命令列表和功能说明。"
             
             # 使用通知管理器发送
             await self.notification_manager.send_startup_notification(
-                module_name="iFlow 飞书机器人",
+                module_name="Claude 飞书助手",
                 service_info=service_info,
                 quick_start=quick_start,
                 tips=tips
@@ -1083,7 +1083,7 @@ class FeishuChannel(BaseModule):
             restart_command = f"./manage.py start --channel {channel_name}"
             
             await self.notification_manager.send_shutdown_notification(
-                module_name="iFlow 飞书机器人",
+                module_name="Claude 飞书助手",
                 service_info=service_info,
                 restart_command=restart_command
             )
