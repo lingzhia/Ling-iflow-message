@@ -653,33 +653,59 @@ class LingIflowBot:
                 result = await self.manager.start_module(simulator_module_id)
                 results[simulator_module_id] = result.success
             
-            # 检查并创建 iflow 模块（如果不存在）
-            iflow_module_id = f"iflow_{channel_name}"
-            if iflow_module_id not in self.manager.modules:
-                logger.info(f"动态创建 iflow 模块: {iflow_module_id}")
-                # 查找渠道配置
-                channel_config = None
-                for bot_config in self.config.get("bots", []):
-                    if bot_config.get("name") == channel_name:
-                        channel_config = bot_config
-                        break
-                if not channel_config:
-                    for fs_config in self.config.get("feishu_channels", []):
-                        if fs_config.get("name") == channel_name:
-                            channel_config = fs_config
+            # 根据 engine 类型创建并启动对应的 AI 引擎模块
+            if self.engine == "claude":
+                claude_module_id = f"claude_{channel_name}"
+                if claude_module_id not in self.manager.modules:
+                    logger.info(f"动态创建 claude 模块: {claude_module_id}")
+                    # 查找渠道配置
+                    channel_config = None
+                    for bot_config in self.config.get("bots", []):
+                        if bot_config.get("name") == channel_name:
+                            channel_config = bot_config
                             break
-                if not channel_config:
-                    for sim_config in self.config.get("simulator_channels", []):
-                        if sim_config.get("name") == channel_name:
-                            channel_config = sim_config
-                            break
+                    if not channel_config:
+                        for fs_config in self.config.get("feishu_channels", []):
+                            if fs_config.get("name") == channel_name:
+                                channel_config = fs_config
+                                break
+                    if not channel_config:
+                        for sim_config in self.config.get("simulator_channels", []):
+                            if sim_config.get("name") == channel_name:
+                                channel_config = sim_config
+                                break
+                    
+                    if channel_config:
+                        await self._setup_channel_claude(channel_name, channel_config)
                 
-                if channel_config:
-                    await self._setup_channel_iflow(channel_name, channel_config)
-            
-            # 启动对应的 iflow 模块
-            result = await self.manager.start_module(iflow_module_id)
-            results[iflow_module_id] = result.success
+                result = await self.manager.start_module(claude_module_id)
+                results[claude_module_id] = result.success
+            else:
+                iflow_module_id = f"iflow_{channel_name}"
+                if iflow_module_id not in self.manager.modules:
+                    logger.info(f"动态创建 iflow 模块: {iflow_module_id}")
+                    # 查找渠道配置
+                    channel_config = None
+                    for bot_config in self.config.get("bots", []):
+                        if bot_config.get("name") == channel_name:
+                            channel_config = bot_config
+                            break
+                    if not channel_config:
+                        for fs_config in self.config.get("feishu_channels", []):
+                            if fs_config.get("name") == channel_name:
+                                channel_config = fs_config
+                                break
+                    if not channel_config:
+                        for sim_config in self.config.get("simulator_channels", []):
+                            if sim_config.get("name") == channel_name:
+                                channel_config = sim_config
+                                break
+                    
+                    if channel_config:
+                        await self._setup_channel_iflow(channel_name, channel_config)
+                
+                result = await self.manager.start_module(iflow_module_id)
+                results[iflow_module_id] = result.success
             
             # 启动健康监控
             await self.manager.start_health_monitor()
