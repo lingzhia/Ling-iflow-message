@@ -586,7 +586,9 @@ def restart(
     config: str = typer.Option("config.json", "--config", "-c", help="配置文件路径"),
     all_channels: bool = typer.Option(False, "--all", "-a", help="重启所有渠道"),
     channel: Optional[str] = typer.Option(None, "--channel", help="重启的特定渠道（使用 ls 列出所有渠道）"),
-    foreground: bool = typer.Option(False, "--foreground", "-f", help="前台模式：重启后进入 tmux 会话")
+    foreground: bool = typer.Option(False, "--foreground", "-f", help="前台模式：重启后进入 tmux 会话"),
+    use_iflow: bool = typer.Option(False, "--iflow", help="使用 iFlow 引擎"),
+    use_claude: bool = typer.Option(False, "--claude", help="使用 Claude 引擎")
 ):
     """重启服务
 
@@ -715,6 +717,17 @@ def restart(
     import time
     time.sleep(2)
 
+    # 确定引擎类型
+    engine = "iflow"  # 默认
+    if use_claude:
+        engine = "claude"
+        print_info("使用引擎: Claude Code")
+    elif use_iflow:
+        engine = "iflow"
+        print_info("使用引擎: iFlow")
+    else:
+        print_info("使用引擎: iFlow（默认）")
+
     # 启动服务
     print_info("正在启动服务...")
 
@@ -723,6 +736,9 @@ def restart(
         cmd = ["python3", "-m", "src.bot", config]
     else:
         cmd = ["python3", "-m", "src.bot", config, "--channel", target_channel]
+    
+    # 添加引擎参数
+    cmd.extend(["--engine", engine])
 
     if not foreground:
         # 后台运行（默认）
@@ -730,9 +746,9 @@ def restart(
         log_file.parent.mkdir(exist_ok=True)
 
         if target_channel == "all":
-            full_cmd = f"nohup python3 -m src.bot {config} > logs/bot.log 2>&1 &"
+            full_cmd = f"nohup python3 -m src.bot {config} --engine {engine} > logs/bot.log 2>&1 &"
         else:
-            full_cmd = f"nohup python3 -m src.bot {config} --channel {target_channel} > logs/bot.log 2>&1 &"
+            full_cmd = f"nohup python3 -m src.bot {config} --channel {target_channel} --engine {engine} > logs/bot.log 2>&1 &"
         subprocess.run(full_cmd, shell=True)
 
         print_success("服务已在后台重启")
