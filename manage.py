@@ -347,7 +347,11 @@ def start(
 
         print_info("后台运行，日志输出到: logs/bot.log")
 
-        full_cmd = f"nohup python3 -m src.bot {' '.join(cmd_args)} > logs/bot.log 2>&1 &"
+        # 切换到项目根目录执行，确保能找到 src 模块
+        # 同时设置 LING_IFLOW_WORKSPACE 环境变量，让 iflow/claude 在用户当前目录工作
+        project_root = get_project_root()
+        user_workspace = Path.cwd()
+        full_cmd = f"cd {project_root} && LING_IFLOW_WORKSPACE={user_workspace} nohup python3 -m src.bot {' '.join(cmd_args)} > logs/bot.log 2>&1 &"
         subprocess.run(full_cmd, shell=True)
 
         print_success("服务已在后台启动")
@@ -359,7 +363,10 @@ def start(
         log_file.parent.mkdir(exist_ok=True)
 
         # 后台启动服务
-        full_cmd = f"nohup python3 -m src.bot {' '.join(cmd_args)} > logs/bot.log 2>&1 &"
+        # 设置 LING_IFLOW_WORKSPACE 环境变量，让 iflow/claude 在用户当前目录工作
+        project_root = get_project_root()
+        user_workspace = Path.cwd()
+        full_cmd = f"cd {project_root} && LING_IFLOW_WORKSPACE={user_workspace} nohup python3 -m src.bot {' '.join(cmd_args)} > logs/bot.log 2>&1 &"
         subprocess.run(full_cmd, shell=True)
 
         if all_channels:
@@ -740,15 +747,20 @@ def restart(
     # 添加引擎参数
     cmd.extend(["--engine", engine])
 
+    # 获取项目根目录，确保能找到 src 模块
+    project_root = get_project_root()
+    # 获取用户工作目录，传递给 iflow/claude
+    user_workspace = Path.cwd()
+
     if not foreground:
         # 后台运行（默认）
         log_file = Path("logs/bot.log")
         log_file.parent.mkdir(exist_ok=True)
 
         if target_channel == "all":
-            full_cmd = f"nohup python3 -m src.bot {config} --engine {engine} > logs/bot.log 2>&1 &"
+            full_cmd = f"cd {project_root} && LING_IFLOW_WORKSPACE={user_workspace} nohup python3 -m src.bot {config} --engine {engine} > logs/bot.log 2>&1 &"
         else:
-            full_cmd = f"nohup python3 -m src.bot {config} --channel {target_channel} --engine {engine} > logs/bot.log 2>&1 &"
+            full_cmd = f"cd {project_root} && LING_IFLOW_WORKSPACE={user_workspace} nohup python3 -m src.bot {config} --channel {target_channel} --engine {engine} > logs/bot.log 2>&1 &"
         subprocess.run(full_cmd, shell=True)
 
         print_success("服务已在后台重启")
@@ -761,9 +773,9 @@ def restart(
 
         # 后台启动服务
         if target_channel == "all":
-            full_cmd = f"nohup python3 -m src.bot {config} > logs/bot.log 2>&1 &"
+            full_cmd = f"cd {project_root} && LING_IFLOW_WORKSPACE={user_workspace} nohup python3 -m src.bot {config} > logs/bot.log 2>&1 &"
         else:
-            full_cmd = f"nohup python3 -m src.bot {config} --channel {target_channel} > logs/bot.log 2>&1 &"
+            full_cmd = f"cd {project_root} && LING_IFLOW_WORKSPACE={user_workspace} nohup python3 -m src.bot {config} --channel {target_channel} > logs/bot.log 2>&1 &"
         subprocess.run(full_cmd, shell=True)
 
         if target_channel == "all":

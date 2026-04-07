@@ -76,8 +76,8 @@ class IFlowModule(BaseModule):
         self.log_interactions_enabled = log_interactions
         self.log_dir = log_dir
 
-        # 创建控制器（会话名称延迟分配）
-        self.controller = IFlowController(self._tmux_session_param)
+        # 创建控制器（会话名称延迟分配，传递工作目录）
+        self.controller = IFlowController(self._tmux_session_param, self.workspace)
         self.monitor = IFlowMonitor(self.controller)
         
         # 设置 controller 对 module 的引用，让 monitor 可以访问 message_store

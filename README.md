@@ -2,14 +2,15 @@
 
 ## 项目简介
 
-Ling-iflow-message 是一个基于 tmux 的 iflow CLI 交互模式管理工具，通过消息总线架构实现与多个聊天渠道的双向消息同步。
+Ling-iflow-message 是一个基于 tmux 的 AI CLI 交互模式管理工具，通过消息总线架构实现与多个聊天渠道的双向消息同步。支持 **iflow CLI** 和 **Claude Code CLI** 两种 AI 引擎，可自由切换。
 
 核心功能：
-- **多渠道消息同步** — 聊天消息在渠道端和 iflow CLI 之间双向传递
+- **多 AI 引擎支持** — 支持 iflow 和 Claude Code 两种 AI CLI，可按需选择
+- **多渠道消息同步** — 聊天消息在渠道端和 AI CLI 之间双向传递
 - **消息总线架构** — 模块间完全解耦，易于扩展
 - **tmux 会话管理** — 每个渠道对应一个独立的 tmux 会话
 - **命令系统** — /help, /status, /new, /sessions 等
-- **多实例支持** — 可同时管理多个机器人/iflow 实例
+- **多实例支持** — 可同时管理多个机器人/AI 实例
 
 ---
 
@@ -75,19 +76,27 @@ cp config.example.json config.json
 ### 3. 启动
 
 ```bash
+# 使用 iflow 引擎（默认）
 ./manage.py start
-# 或前台运行（方便调试）
+./manage.py start --iflow
+
+# 使用 Claude Code 引擎
+./manage.py start --claude
+
+# 前台运行（方便调试）
 ./manage.py start -f
+./manage.py start --claude -f
 ```
 
 ### 4. 常用命令
 
 ```bash
-./manage.py start          # 启动服务
-./manage.py stop           # 停止服务
-./manage.py status         # 查看状态
-./manage.py logs -f        # 实时查看日志
-./manage.py channel list   # 列出所有渠道
+./manage.py start                # 启动服务（默认使用 iflow 引擎）
+./manage.py start --claude       # 启动服务（使用 Claude Code 引擎）
+./manage.py stop                 # 停止服务
+./manage.py status               # 查看状态
+./manage.py logs -f              # 实时查看日志
+./manage.py channel list         # 列出所有渠道
 ```
 
 ---
@@ -125,6 +134,7 @@ Ling-iflow-message/
 | **消息总线（Bus）** | 所有模块通过总线发布/订阅消息，完全解耦 |
 | **渠道模块（Channel）** | 对接各聊天平台，收发消息 |
 | **iflow 模块** | 管理 tmux 会话中的 iflow CLI 进程 |
+| **Claude Code 模块** | 管理 tmux 会话中的 Claude Code CLI 进程 |
 | **命令系统** | 处理 /help、/status 等命令 |
 
 ---
@@ -149,6 +159,8 @@ Ling-iflow-message/
 |------|------|
 | [INSTALL.md](INSTALL.md) | 详细的安装、配置和使用说明 |
 | [design-v2/README.md](design-v2/README.md) | 架构设计和模块设计 |
+| [design-v2/03-IFlow模块设计.md](design-v2/03-IFlow模块设计.md) | iflow 模块设计和实现 |
+| [design-v2/15-ClaudeCode渠道设计.md](design-v2/15-ClaudeCode渠道设计.md) | Claude Code 模块设计和实现 |
 | [design-v2/20-飞书渠道设计方案.md](design-v2/20-飞书渠道设计方案.md) | 飞书渠道设计和配置 |
 | [TODO.md](TODO.md) | 项目待办事项 |
 

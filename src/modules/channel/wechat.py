@@ -151,6 +151,7 @@ class WeChatChannel(BaseModule):
         Args:
             bot: bot 实例
         """
+        self._bot = bot
         # 设置给 CommandHandler
         self.command_handler.set_bot(bot)
     
@@ -249,13 +250,23 @@ class WeChatChannel(BaseModule):
 
             callback_port = self.config.get("callback_port", 8788)
             channel_name = self.module_id.replace("wechat_", "")
-            tmux_session = self.config.get("tmux_session", f"{channel_name}+claude")
-            workspace = self.config.get("workspace", "~/.iflow")
             
-            # 扩展工作目录路径
+            # 获取引擎类型，决定 tmux 会话后缀和模块名称
+            bot = getattr(self, '_bot', None)
+            engine = getattr(bot, 'engine', 'iflow') if bot else 'iflow'
+            tmux_session = f"{channel_name}+{engine}"
+            
+            # 获取工作目录（用户启动命令时的目录）
             from pathlib import Path
-            # 使用当前目录作为工作目录
-            expanded_workspace = Path.cwd()
+            import os
+            expanded_workspace = bot
+            if expanded_workspace and hasattr(expanded_workspace, 'workspace'):
+                expanded_workspace = expanded_workspace.workspace
+            else:
+                expanded_workspace = os.environ.get("LING_IFLOW_WORKSPACE", str(Path.cwd()))
+            
+            # 根据引擎类型决定模块名称
+            module_name = "Claude 企业微信机器人" if engine == "claude" else "iFlow 企业微信机器人"
             
             # 获取 iflow 运行状态
             iflow_running = self._check_iflow_status()
@@ -264,12 +275,12 @@ class WeChatChannel(BaseModule):
                 service_info = f"""📁 工作目录: {expanded_workspace}
 💻 tmux 会话: {tmux_session} ✓
 🌐 回调端口: {callback_port}"""
-                quick_start = """• 直接发送消息：执行 iFlow 命令
+                quick_start = """• 直接发送消息：和 AI 对话
 • `/lscmd`：查看所有可用命令"""
                 tips = "输入 `/lscmd` 查看完整的命令列表和功能说明。"
                 
                 await self.notification_manager.send_startup_notification(
-                    module_name="iFlow 企业微信机器人",
+                    module_name=module_name,
                     service_info=service_info,
                     quick_start=quick_start,
                     tips=tips
@@ -279,13 +290,13 @@ class WeChatChannel(BaseModule):
 📁 工作目录: {expanded_workspace}
 🌐 回调端口: {callback_port}"""
                 available_commands = """• `/lscmd`：查看所有可用命令"""
-                tips = "检查 iflow 是否正常启动。"
+                tips = "检查服务是否正常启动。"
                 
                 await self.notification_manager.send_startup_notification(
-                    module_name="iFlow 企业微信机器人",
+                    module_name=module_name,
                     service_info=service_info,
                     tips=tips,
-                    error_message="iflow 未运行，无法处理消息",
+                    error_message="服务未运行，无法处理消息",
                     available_commands=available_commands
                 )
                 
@@ -301,28 +312,31 @@ class WeChatChannel(BaseModule):
                 return
 
             channel_name = self.module_id.replace("wechat_", "")
-            tmux_session = self.config.get("tmux_session", f"{channel_name}+claude")
+            
+            # 获取引擎类型，决定 tmux 会话后缀和模块名称
+            bot = getattr(self, '_bot', None)
+            engine = getattr(bot, 'engine', 'iflow') if bot else 'iflow'
+            tmux_session = f"{channel_name}+{engine}"
 
-            # 使用当前目录作为工作目录
+            # 获取工作目录（用户启动命令时的目录）
             from pathlib import Path
-            expanded_workspace = Path.cwd()
-            
-            # 检查 iflow 运行状态
-            iflow_running = self._check_iflow_status()
-            
-            if iflow_running:
-                service_info = f"""📁 工作目录: {expanded_workspace}
-💻 tmux 会话: {tmux_session}"""
+            import os
+            expanded_workspace = bot
+            if expanded_workspace and hasattr(expanded_workspace, 'workspace'):
+                expanded_workspace = expanded_workspace.workspace
             else:
-                service_info = f"""💻 tmux 会话: 无连接
-📁 工作目录: {expanded_workspace}"""
+                expanded_workspace = os.environ.get("LING_IFLOW_WORKSPACE", str(Path.cwd()))
+            
+            # 根据引擎类型决定模块名称
+            module_name = "Claude 企业微信机器人" if engine == "claude" else "iFlow 企业微信机器人"
             
             # 使用 manage.py 格式的重启命令
             restart_command = f"./manage.py start --channel {channel_name}"
             
             await self.notification_manager.send_shutdown_notification(
-                module_name="iFlow 企业微信机器人",
-                service_info=service_info,
+                module_name=module_name,
+                service_info=f"""📁 工作目录: {expanded_workspace}
+💻 tmux 会话: {tmux_session}""",
                 restart_command=restart_command
             )
                 

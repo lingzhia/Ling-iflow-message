@@ -22,13 +22,15 @@ class IFlowController:
     # 默认会话名称前缀
     SESSION_PREFIX = "iflow"
     
-    def __init__(self, tmux_session: Optional[str] = None):
+    def __init__(self, tmux_session: Optional[str] = None, workspace: Optional[str] = None):
         """初始化 iflow 控制器
         
         Args:
             tmux_session: tmux 会话名称，如果为 None 则自动分配
+            workspace: iflow 工作目录，如果为 None 则使用当前目录
         """
         self._tmux_session = tmux_session
+        self._workspace = workspace
         self._session_assigned = tmux_session is not None
         self._last_sent_message: Optional[str] = None  # 记录最后发送的消息
         self._last_sent_time: Optional[float] = None   # 记录发送时间
@@ -340,10 +342,12 @@ class IFlowController:
             # 参考旧版本：直接在创建 tmux 会话时启动 iflow
             # 使用 shell=True 来解析命令
             # 添加 -c 参数继续上一次对话
+            # 先 cd 到工作目录，然后启动 iflow
+            workspace = self._workspace or "."
             if continue_last:
-                cmd = f"tmux new-session -d -s {self.tmux_session} 'iflow --model {model} --yolo -c'"
+                cmd = f"tmux new-session -d -s {self.tmux_session} 'cd {workspace} && iflow --model {model} --yolo -c'"
             else:
-                cmd = f"tmux new-session -d -s {self.tmux_session} 'iflow --model {model} --yolo'"
+                cmd = f"tmux new-session -d -s {self.tmux_session} 'cd {workspace} && iflow --model {model} --yolo'"
             
             result = await asyncio.create_subprocess_shell(
                 cmd,

@@ -16,7 +16,13 @@
 - 状态历史记录
 - NotificationManager 通知框架
 - MessageConverter 消息转换
+- **Claude Code 模块完整实现**
+  - ClaudeCodeController - tmux 会话控制
+  - ClaudeCodeMonitor - 输出监控和消息提取
+  - ClaudeCodeModule - 完整模块集成
+  - 安全确认对话框自动处理
+  - 引擎选择参数支持（--iflow / --claude）
 
 ---
 
-*最后更新: 2026-03-30*
+*最后更新: 2026-04-07*

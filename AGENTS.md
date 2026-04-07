@@ -2,26 +2,29 @@
 
 ## 项目概述
 
-Ling-iflow 是一个 iflow CLI 交互模式管理工具，通过 tmux 管理和监控 iflow CLI 会话，实现与企业微信、飞书等渠道的双向消息同步。基于消息总线的松耦合架构，支持多渠道、多实例。
+Ling-iflow 是一个 AI CLI 交互模式管理工具，通过 tmux 管理和监控 **iflow CLI** 或 **Claude Code CLI** 会话，实现与企业微信、飞书等渠道的双向消息同步。基于消息总线的松耦合架构，支持多渠道、多实例，可自由选择 AI 引擎。
 
 ## 核心架构
 
 ### 设计模式
 基于**发布-订阅模式**和**消息总线**设计，实现模块解耦。
 
-### 三大核心模块
+### 四大核心模块
 1. **消息渠道 (Channel)** - 处理与外部系统的消息交互
    - `WeChatChannel` - 企业微信渠道（回调模式）
    - `FeishuChannel` - 飞书渠道（WebSocket 长连接，无需公网 IP）
    - `SimulatorChannel` - 模拟器渠道（本地测试）
 2. **消息总线 (MessageBus)** - 模块间消息路由和分发
 3. **iflow 模块 (IFlowModule)** - iflow CLI 的完整管理
+4. **Claude Code 模块 (ClaudeCodeModule)** - Claude Code CLI 的完整管理
 
 ### 核心组件
 - **ModuleManager** - 模块生命周期管理、健康监控、状态历史、性能指标
 - **MessageConverter** - 消息格式转换
 - **NotificationManager** - 事件通知管理
 - **CommandHandler** - 命令解析和执行
+- **IFlowModule** - iflow CLI 会话管理
+- **ClaudeCodeModule** - Claude Code CLI 会话管理
 
 ## 目录结构
 
@@ -132,7 +135,9 @@ vim config.json
 ./manage.py --help
 
 # 启动服务
-./manage.py start                    # 启动默认渠道
+./manage.py start                    # 启动默认渠道（使用 iflow 引擎）
+./manage.py start --claude           # 启动默认渠道（使用 Claude Code 引擎）
+./manage.py start --iflow            # 启动默认渠道（使用 iflow 引擎，默认）
 ./manage.py start -a                 # 启动所有渠道
 ./manage.py start -f                 # 前台模式（进入 tmux）
 ./manage.py start --channel feishu1  # 启动指定渠道
@@ -145,6 +150,7 @@ vim config.json
 
 # 重启服务
 ./manage.py restart                  # 重启默认渠道
+./manage.py restart --claude         # 重启默认渠道（使用 Claude Code 引擎）
 ./manage.py restart -f               # 前台模式重启
 
 # 查看状态
@@ -207,6 +213,25 @@ vim config.json
 - `MessageStore`: 消息存储和归属
 - `InteractionLogger`: 交互记录
 
+### ClaudeCodeModule（Claude Code 模块）
+- 通过 tmux 启动/停止 Claude Code CLI
+- 监控 tmux 输出，提取 AI 回复
+- 消息状态检测（idle/generating）
+- 消息分类（reply/thinking/complete）
+- 自动处理安全确认对话框
+- 健康检查、状态历史、性能指标
+
+**核心子组件：**
+- `ClaudeCodeController`: tmux 会话控制
+- `ClaudeCodeMonitor`: 输出监控
+- `MessageStore`: 消息存储和归属（复用 iflow 模块）
+
+**与 iflow 的主要差异：**
+- Claude Code 启动时需要处理安全确认对话框
+- 使用非 root 用户启动（`--dangerously-skip-permissions` 不能用于 root）
+- 状态检测使用 "Choreographing" 关键词
+- 消息标记使用 `●`（回复）和 `✻`（思考）
+
 ### ModuleManager（模块管理器）
 - 模块创建、启动、停止
 - 健康监控（定期检查）
@@ -229,13 +254,26 @@ vim config.json
 2. **倒数第二原则**：倒数第二的标记已经完整，不会再变化
 3. **状态检测原则**：连续 3 次扫描"生成中"消失，记录最后一条消息
 
+### ClaudeCodeMonitor 消息提取原则
+1. **延迟记录原则**：检测到 2 条或更多消息时才开始记录
+2. **倒数第二原则**：倒数第二的标记已经完整，不会再变化
+3. **状态检测原则**：连续 3 次扫描 "Choreographing" 消失，记录最后一条消息
+4. **安全确认处理**：启动时自动发送 Enter 处理安全确认对话框
+
 ### 回复模式（scope）
 - `reply_only`：只返回 ✦ 标记的回复消息（默认）
 - `all`：返回所有消息（包括 ✻ 思考过程）
 
 ### 消息类型
+
+#### iflow 模块
 - `reply`：AI 回复（✦ 标记）
 - `other`：思考过程（✻ 标记或无标记）
+- `complete`：交互完成通知
+
+#### Claude Code 模块
+- `reply`：AI 回复（● 标记）
+- `thinking`：思考过程（✻ 标记）
 - `complete`：交互完成通知
 
 ### 缓存管理策略
@@ -244,8 +282,8 @@ vim config.json
 - 用于消息去重，避免重复发送
 
 ### tmux 会话命名规则
-- 格式：`<渠道名>+iflow`
-- 示例：`feishu1+iflow`、`wecom1+iflow`
+- **iflow 引擎**：格式为 `<渠道名>+iflow`，示例：`feishu1+iflow`、`wecom1+iflow`
+- **Claude Code 引擎**：格式为 `<渠道名>+claude`，示例：`feishu1+claude`、`simulator1+claude`
 
 ### Unix Socket 控制接口
 - 路径：`/tmp/ling-iflow.sock`
@@ -291,6 +329,7 @@ python3 tools/feishu_test_tool.py
 - `02-消息总线与模块管理.md` - 核心组件
 - `03-IFlow模块设计.md` - iflow 模块详解
 - `04-渠道架构设计.md` - 渠道设计
+- `15-ClaudeCode渠道设计.md` - Claude Code 渠道详解
 - `20-飞书渠道设计方案.md` - 飞书集成
 - `21-消息来源差异化处理方案.md` - 消息处理
 - `22-scope命令历史消息重复问题修复方案.md` - 问题修复

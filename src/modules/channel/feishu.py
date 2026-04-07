@@ -139,6 +139,7 @@ class FeishuChannel(BaseModule):
 
     def set_bot(self, bot) -> None:
         """设置 bot 实例"""
+        self._bot = bot
         self.command_handler.set_bot(bot)
 
     def set_message_bus(self, bus) -> None:
@@ -1045,22 +1046,34 @@ class FeishuChannel(BaseModule):
     async def _send_startup_notification(self) -> None:
         """发送启动通知到飞书"""
         try:
-            # 获取配置
-            tmux_session = self.config.get("tmux_session", f"{self.module_id.replace('feishu_', '')}+claude")
-            workspace = Path.cwd()
+            # 获取引擎类型，决定 tmux 会话后缀和模块名称
+            bot = getattr(self, '_bot', None)
+            engine = getattr(bot, 'engine', 'iflow') if bot else 'iflow'
+            channel_name = self.module_id.replace("feishu_", "")
+            tmux_session = f"{channel_name}+{engine}"
+            
+            # 从 bot 获取工作目录（用户启动命令时的目录）
+            workspace = bot
+            if workspace and hasattr(workspace, 'workspace'):
+                workspace = workspace.workspace
+            else:
+                workspace = os.environ.get("LING_IFLOW_WORKSPACE", str(Path.cwd()))
+            
+            # 根据引擎类型决定模块名称
+            module_name = "Claude 飞书助手" if engine == "claude" else "iFlow 飞书助手"
             
             # 构建通知内容
             service_info = f"""📁 工作目录：{workspace}
 💻 tmux 会话：{tmux_session} ✓"""
             
-            quick_start = """• 直接发送消息：和 Claude 对话
+            quick_start = """• 直接发送消息：和 AI 对话
 • `/lscmd`：查看所有可用命令"""
             
             tips = "输入 `/lscmd` 查看完整的命令列表和功能说明。"
             
             # 使用通知管理器发送
             await self.notification_manager.send_startup_notification(
-                module_name="Claude 飞书助手",
+                module_name=module_name,
                 service_info=service_info,
                 quick_start=quick_start,
                 tips=tips
@@ -1072,18 +1085,29 @@ class FeishuChannel(BaseModule):
     async def _send_shutdown_notification(self) -> None:
         """发送停止通知到飞书"""
         try:
-            tmux_session = self.config.get("tmux_session", f"{self.module_id.replace('feishu_', '')}+claude")
-            workspace = Path.cwd()
+            # 获取引擎类型，决定 tmux 会话后缀和模块名称
+            bot = getattr(self, '_bot', None)
+            engine = getattr(bot, 'engine', 'iflow') if bot else 'iflow'
+            channel_name = self.module_id.replace("feishu_", "")
+            tmux_session = f"{channel_name}+{engine}"
+            
+            # 从 bot 获取工作目录（用户启动命令时的目录）
+            workspace = bot
+            if workspace and hasattr(workspace, 'workspace'):
+                workspace = workspace.workspace
+            else:
+                workspace = os.environ.get("LING_IFLOW_WORKSPACE", str(Path.cwd()))
             
             service_info = f"""📁 工作目录：{workspace}
 💻 tmux 会话：{tmux_session}"""
             
-            # 从 module_id 提取渠道名称 (feishu_feishu1 -> feishu1)
-            channel_name = self.module_id.replace("feishu_", "")
+            # 根据引擎类型决定模块名称
+            module_name = "Claude 飞书助手" if engine == "claude" else "iFlow 飞书助手"
+            
             restart_command = f"./manage.py start --channel {channel_name}"
             
             await self.notification_manager.send_shutdown_notification(
-                module_name="Claude 飞书助手",
+                module_name=module_name,
                 service_info=service_info,
                 restart_command=restart_command
             )

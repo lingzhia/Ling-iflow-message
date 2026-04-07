@@ -4,9 +4,10 @@
 
 ## 项目概述
 
-Ling-iflow 是一个基于消息总线的松耦合架构系统，实现了 iflow CLI 与多种消息渠道的双向通信。核心特点：
+Ling-iflow 是一个基于消息总线的松耦合架构系统，实现了 **iflow CLI** 和 **Claude Code CLI** 与多种消息渠道的双向通信。核心特点：
 
 - **消息总线架构** - 模块间通过消息总线通信，完全解耦
+- **多 AI 引擎支持** - 支持 iflow 和 Claude Code 两种 AI CLI，可自由切换
 - **多渠道支持** - 支持企业微信、飞书、模拟器等多种消息渠道
 - **模块化设计** - 每个模块职责单一，易于扩展和维护
 - **统一管理** - 模块管理器统一管理模块生命周期和状态
@@ -213,9 +214,26 @@ Ling-iflow 是一个基于消息总线的松耦合架构系统，实现了 iflow
 
 **适用场景**：了解已知问题的分析和修复方案
 
+### 15-ClaudeCode渠道设计.md
+
+**ClaudeCodeModule 核心设计**
+
+- ClaudeCodeController（tmux 控制）
+- ClaudeCodeMonitor（输出监控）
+- MessageStore（消息存储，复用 iflow 模块）
+
+**与 iflow 的主要差异**
+
+- 安全确认对话框处理
+- 非 root 用户启动
+- 状态检测方法
+- 消息标记格式
+
+**适用场景**：理解 Claude Code 模块的完整设计和实现
+
 ## 核心组件
 
-### 三大核心模块
+### 四大核心模块
 
 1. **消息渠道** - 处理与外部系统的消息交互
    - WeChatChannel - 企业微信渠道
@@ -230,6 +248,10 @@ Ling-iflow 是一个基于消息总线的松耦合架构系统，实现了 iflow
    - IFlowController - tmux 控制
    - IFlowMonitor - 会话监控
    - SessionManager - 会话管理
+
+4. **Claude Code 模块** - Claude Code CLI 的完整管理
+   - ClaudeCodeController - tmux 控制
+   - ClaudeCodeMonitor - 输出监控
 
 ### 通用组件
 
@@ -260,6 +282,7 @@ Ling-iflow 是一个基于消息总线的松耦合架构系统，实现了 iflow
 - ✅ 命令系统完善
 - ✅ tmux 管理功能
 - ✅ 飞书渠道实现
+- ✅ Claude Code 模块实现
 
 ### 进行中
 
