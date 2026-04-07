@@ -16,6 +16,9 @@ from enum import Enum
 from ...core.logger_adapter import log_tmux_output, log_system_event, MessageType
 
 
+logger = logging.getLogger(__name__)
+
+
 class ClaudeCodeState(Enum):
     """Claude Code 状态"""
     IDLE = "idle"           # 空闲，等待输入

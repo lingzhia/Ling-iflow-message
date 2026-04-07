@@ -81,6 +81,9 @@ class ClaudeCodeModule(BaseModule):
         )
         self.monitor = ClaudeCodeMonitor(self.controller)
 
+        # 设置 monitor 的 module_id
+        self.monitor.module_id = self.module_id
+
         # 设置 controller 对 module 的引用，让 monitor 可以访问 message_store
         self.controller.module = self
 

@@ -460,10 +460,13 @@ class LingIflowBot:
             channel_name: 渠道名称
             channel_config: 渠道配置（用于获取 tmux_session 等参数）
         """
+        # 在try块外部获取logger，确保在整个方法中都可用
+        logger = logging.getLogger(__name__)
+        
         try:
             # 创建 claude 模块
-            claude_module_id = f"claude_{channel_name}"
-            tmux_session = f"{channel_name}+claude"
+            claude_module_id = "claude_" + channel_name
+            tmux_session = channel_name + "+claude"
 
             # 获取运行用户（从环境变量或使用默认值）
             run_user = os.environ.get("CLAUDE_RUN_USER", "vboxuser")
@@ -481,27 +484,29 @@ class LingIflowBot:
             claude.manager = self.manager
             self.claude_modules[channel_name] = claude
             await self.manager.register_module(claude_module_id)
-            logger.info(f"创建 claude 模块: {claude_module_id}, tmux会话: {tmux_session}, 运行用户: {run_user}")
+            logger.info("创建 claude 模块: {}, tmux会话: {}, 运行用户: {}".format(claude_module_id, tmux_session, run_user))
 
             # 设置绑定关系：channel <-> claude
             if channel_name in self.wechat_modules:
-                wechat_module_id = f"wechat_{channel_name}"
+                wechat_module_id = "wechat_" + channel_name
                 self.bus.bind(wechat_module_id, claude_module_id)
                 self.bus.bind(claude_module_id, wechat_module_id)
-                logger.info(f"绑定: {wechat_module_id} <-> {claude_module_id}")
+                logger.info("绑定: {} <-> {}".format(wechat_module_id, claude_module_id))
             elif channel_name in self.feishu_modules:
-                feishu_module_id = f"feishu_{channel_name}"
+                feishu_module_id = "feishu_" + channel_name
                 self.bus.bind(feishu_module_id, claude_module_id)
                 self.bus.bind(claude_module_id, feishu_module_id)
-                logger.info(f"绑定: {feishu_module_id} <-> {claude_module_id}")
+                logger.info("绑定: {} <-> {}".format(feishu_module_id, claude_module_id))
             elif channel_name in self.simulator_modules:
-                simulator_module_id = f"simulator_{channel_name}"
+                simulator_module_id = "simulator_" + channel_name
                 self.bus.bind(simulator_module_id, claude_module_id)
                 self.bus.bind(claude_module_id, simulator_module_id)
-                logger.info(f"绑定: {simulator_module_id} <-> {claude_module_id}")
+                logger.info("绑定: {} <-> {}".format(simulator_module_id, claude_module_id))
 
         except Exception as e:
-            logging.getLogger(__name__).error(f"设置渠道 claude 失败 {channel_name}: {e}")
+            # 直接使用logging模块，避免logger变量问题，并打印完整堆栈跟踪
+            import traceback
+            logging.error("设置渠道 claude 失败 {}: {}\n{}".format(channel_name, e, traceback.format_exc()))
     
     async def start(self) -> None:
         """启动所有模块（使用 ModuleManager）"""
