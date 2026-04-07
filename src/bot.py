@@ -391,6 +391,9 @@ class LingIflowBot:
             channel_name: 渠道名称
             channel_config: 渠道配置
         """
+        # 确保logger在方法中可用
+        logger = logging.getLogger(__name__)
+        
         try:
             # 创建 iflow 模块
             iflow_module_id = f"iflow_{channel_name}"
@@ -436,6 +439,9 @@ class LingIflowBot:
         
         当 engine 参数为 "claude" 时调用，为所有渠道创建 claude 模块
         """
+        # 确保logger在方法中可用
+        logger = logging.getLogger(__name__)
+        
         # 为企业微信渠道创建 claude 模块
         for bot_config in self.config.get("bots", []):
             if isinstance(bot_config, dict):
@@ -460,6 +466,9 @@ class LingIflowBot:
             channel_name: 渠道名称
             channel_config: 渠道配置（用于获取 tmux_session 等参数）
         """
+        # 确保logger在方法中可用
+        logger = logging.getLogger(__name__)
+        
         try:
             # 创建 claude 模块
             claude_module_id = f"claude_{channel_name}"
