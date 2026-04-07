@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Callable, Any
 from enum import Enum
 
-logger = logging.getLogger(__name__)
+from ...core.logger_adapter import log_tmux_output, log_system_event, MessageType
 
 
 class ClaudeCodeState(Enum):
@@ -77,6 +77,7 @@ class ClaudeCodeMonitor:
         self._state = ClaudeCodeState.IDLE
         self._generating_start_time: Optional[datetime] = None
         self._last_generating_duration: int = 0
+        self._non_generating_count: Optional[int] = None  # 连续检测到非生成状态的次数
 
         # 初始化状态标志（防止在模块初始化期间触发错误的状态变更）
         self._is_initialized = False
@@ -482,7 +483,25 @@ class ClaudeCodeMonitor:
                 await self._call_callback(self._on_state_change, old_state, self._state)
 
         elif not is_generating and self._state == ClaudeCodeState.GENERATING:
-            logger.debug(f"[ClaudeCodeMonitor] 检测到状态可能变更: is_generating={is_generating}, state={self._state.value}")
+            # 连续多次检测到非生成状态，才确认状态转换
+            if self._non_generating_count is None:
+                self._non_generating_count = 1
+                logger.debug(f"[ClaudeCodeMonitor] 检测到生成结束信号（第1次）")
+            else:
+                self._non_generating_count += 1
+                logger.debug(f"[ClaudeCodeMonitor] 检测到生成结束信号（第{self._non_generating_count}次）")
+            
+            # 连续3次检测到非生成状态，确认生成结束
+            if self._non_generating_count >= 3:
+                self._state = ClaudeCodeState.IDLE
+                self._non_generating_count = None
+                generating_duration = (datetime.now() - self._generating_start_time).total_seconds()
+                self.stats["state_changes"] += 1
+                logger.info(f"[ClaudeCodeMonitor] State changed: {old_state.value} -> {self._state.value} (duration={generating_duration:.1f}s)")
+                
+                # 触发状态变更回调
+                if self._on_state_change:
+                    await self._call_callback(self._on_state_change, old_state, self._state)
 
     def _detect_generating(self, output: str) -> bool:
         """检测是否处于生成中状态
@@ -568,6 +587,9 @@ class ClaudeCodeMonitor:
         - 包含 "╭─" / "╰─" 等分隔符
         - 是进度条或状态显示
 
+        注意：不要将表格字符（│, ├, ┬, ┴等）判定为TUI界面行，
+             这些字符是用户消息的一部分，应该被收集。
+
         Args:
             line: 要检查的行
 
@@ -578,7 +600,8 @@ class ClaudeCodeMonitor:
         if '●' in line or '✻' in line:
             return False
 
-        tui_markers = ['Choreographing', '╭─', '╰─', '│', '├', '┬', '┴']
+        # 只检查真正的TUI标记，不包括表格字符
+        tui_markers = ['Choreographing', '╭─', '╰─']
 
         line_stripped = line.strip()
 
@@ -603,6 +626,14 @@ class ClaudeCodeMonitor:
         """
         messages = []
         lines = output.split('\n')
+
+        # 使用日志适配器记录完整的tmux输入内容
+        log_tmux_output(
+            logger,
+            self.module_id,
+            f"📥 tmux输入内容: 行数={len(lines)}, 内容={output}",
+            level=logging.DEBUG
+        )
 
         logger.debug(f"[ClaudeCodeMonitor] _extract_messages: processing {len(lines)} lines")
 
@@ -637,7 +668,8 @@ class ClaudeCodeMonitor:
                     self._request_matched = True
                     logger.info(f"[ClaudeCodeMonitor] 请求消息未匹配到记录，使用缓冲发送，原始请求: {received_message[:50]}")
 
-        logger.debug(f"[ClaudeCodeMonitor] _extract_messages: scanning {len(lines)} lines for markers (●, ✻)")
+        logger.info(f"[ClaudeCodeMonitor] _extract_messages: 扫描 {len(lines)} 行，寻找标记 (●, ✻)")
+        logger.info(f"[ClaudeCodeMonitor] 输出内容（前500字符）: {output[:500]}")
 
         for i, line in enumerate(lines):
             line_stripped = line.strip()
@@ -647,25 +679,27 @@ class ClaudeCodeMonitor:
                 logger.debug(f"[ClaudeCodeMonitor] 跳过 TUI 界面行: {line[:50]}")
                 continue
 
-            # 检查标记行
-            has_bullet = '●' in line
-            has_thought = '✻' in line
+            # 检查标记行（只检测以标记符号开头的行）
+            has_bullet = line_stripped.startswith('●')
+            has_thought = line_stripped.startswith('✻')
 
             if has_bullet or has_thought:
                 marker_type = '●' if has_bullet else '✻'
-                marker_content = line.replace('●', '').replace('✻', '').strip()
+                marker_content = line_stripped[1:].strip()
 
-                logger.debug(f"[ClaudeCodeMonitor] Line {i}: 检测到标记行")
-                logger.debug(f"  Raw line: {line}")
-                logger.debug(f"  Marker type: {marker_type}")
-                logger.debug(f"  Marker content: {marker_content}")
+                logger.info(f"[ClaudeCodeMonitor] 第 {i} 行: 检测到标记行")
+                logger.info(f"  原始行: {line}")
+                logger.info(f"  标记类型: {marker_type}")
+                logger.info(f"  标记内容: {marker_content}")
 
                 if not marker_content:
-                    logger.debug(f"[ClaudeCodeMonitor] 跳过空标记内容")
+                    logger.info(f"[ClaudeCodeMonitor] 跳过空标记内容")
                     continue
 
                 # 收集后续行（消息延续）
                 content_lines = [marker_content]
+
+                logger.info(f"[ClaudeCodeMonitor] 开始收集后续行，从第 {i+1} 行开始")
 
                 for j in range(i + 1, len(lines)):
                     next_line = lines[j]
@@ -676,9 +710,9 @@ class ClaudeCodeMonitor:
                         logger.debug(f"[ClaudeCodeMonitor] 跳过 TUI 界面行: {next_line[:50]}")
                         continue
 
-                    # 如果遇到新的标记行，停止
-                    if '●' in next_line or '✻' in next_line:
-                        logger.debug(f"[ClaudeCodeMonitor] 遇到新标记，停止收集: {next_line[:50]}")
+                    # 如果遇到新的标记行，停止（只检测以标记符号开头的行）
+                    if next_line_stripped.startswith('●') or next_line_stripped.startswith('✻'):
+                        logger.info(f"[ClaudeCodeMonitor] 遇到新标记，停止收集: {next_line[:50]}")
                         break
 
                     # 跳过空行
@@ -688,16 +722,20 @@ class ClaudeCodeMonitor:
 
                     # 检查行是否以空格开头（表示是前一条消息的延续）
                     if next_line.startswith('  ') or next_line.startswith('\t'):
-                        logger.debug(f"[ClaudeCodeMonitor] 收集缩进行: {next_line[:80]}")
+                        logger.info(f"[ClaudeCodeMonitor] 收集缩进行 {j}: {next_line[:80]}")
+                        content_lines.append(next_line_stripped)
+                    elif next_line_stripped.startswith('─') or next_line_stripped.startswith('-'):
+                        # 遇到分隔符，收集并继续
+                        logger.info(f"[ClaudeCodeMonitor] 遇到分隔符，收集并继续: {next_line[:50]}")
                         content_lines.append(next_line_stripped)
                     else:
-                        logger.debug(f"[ClaudeCodeMonitor] 遇到非缩进行，停止收集: {next_line[:50]}")
+                        logger.info(f"[ClaudeCodeMonitor] 遇到非缩进行，停止收集: {next_line[:50]}")
                         break
 
                 # 合并内容
                 full_content = '\n'.join(content_lines)
 
-                logger.debug(f"[ClaudeCodeMonitor] 提取的消息内容: {full_content[:100]}...")
+                logger.info(f"[ClaudeCodeMonitor] 提取的完整消息内容:\n{full_content}")
 
                 messages.append({
                     'content': full_content,
@@ -772,6 +810,14 @@ class ClaudeCodeMonitor:
         """
         marker_symbol = message_data.get('marker_type', '')
         full_content = message_data.get('content', '')
+
+        # 使用日志适配器记录完整的tmux消息内容
+        log_tmux_output(
+            logger,
+            self.module_id,
+            f"📤 tmux提取并发送消息: marker={marker_symbol}, content={full_content}",
+            level=logging.INFO
+        )
 
         # 创建出站消息
         msg_type = MessageType.REPLY if marker_symbol == '●' else MessageType.THINKING

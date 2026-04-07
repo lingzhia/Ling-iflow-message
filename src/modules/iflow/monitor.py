@@ -650,14 +650,14 @@ class IFlowMonitor:
                 logger.debug(f"[IFlowMonitor] 跳过 TUI 界面行: {line[:50]}")
                 continue
             
-            # 检查标记行
-            has_diamond = '✦' in line
-            has_thought = '✻' in line
+            # 检查标记行（只检测以标记符号开头的行）
+            has_diamond = line_stripped.startswith('✦')
+            has_thought = line_stripped.startswith('✻')
             
             if has_diamond or has_thought:
                 # 提取标记内容（去掉标记符号）
                 marker_type = '✦' if has_diamond else '✻'
-                marker_content = line.replace('✦', '').replace('✻', '').strip()
+                marker_content = line_stripped[1:].strip()
                 
                 logger.debug(f"[IFlowMonitor] Line {i}: 检测到标记行")
                 logger.debug(f"  Raw line: {line}")
@@ -681,8 +681,8 @@ class IFlowMonitor:
                         logger.debug(f"[IFlowMonitor] 跳过 TUI 界面行: {next_line[:50]}")
                         continue
                     
-                    # 如果遇到新的标记行，停止
-                    if '✦' in next_line or '✻' in next_line:
+                    # 如果遇到新的标记行，停止（只检测以标记符号开头的行）
+                    if next_line_stripped.startswith('✦') or next_line_stripped.startswith('✻'):
                         logger.debug(f"[IFlowMonitor] 遇到新标记，停止收集: {next_line[:50]}")
                         break
                     

@@ -23,6 +23,7 @@ if False:
     from .modules.claudecode import ClaudeCodeModule
 
 from .core import MessageBus, Message, ModuleManager
+from .core.logger_adapter import ModuleAwareFormatter, MessageType
 
 
 logger = logging.getLogger(__name__)
@@ -134,7 +135,11 @@ class LingIflowBot:
             return False
     
     def setup_logging(self) -> None:
-        """设置日志"""
+        """设置日志
+        
+        日志文件名格式：渠道名+ai引擎名+日期+进程号
+        例如：feishu-iflow-20260330-23423.log
+        """
         log_level = self.config.get("log_level", "INFO")
 
         # 获取 logger 等级
@@ -147,39 +152,86 @@ class LingIflowBot:
         # 清除现有 handlers
         root_logger.handlers.clear()
 
-        # 控制台 handler
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(level)
-        console_handler.setFormatter(logging.Formatter(
-            '%(asctime)s [%(levelname)s] [%(name)s] %(message)s'
-        ))
-        root_logger.addHandler(console_handler)
-
-        # 文件 handler - 按大小轮转，保留 5 个备份，单文件最大 10MB
-        # 日志目录：项目根目录下的 logs 目录（bot.py 所在项目的根目录）
+        # 日志目录：项目根目录下的 logs 目录
         project_root = Path(__file__).parent.parent
         log_dir = project_root / "logs"
         log_dir.mkdir(exist_ok=True)
-        
-        # 日志文件名：带 iflow 标识和时间戳
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = log_dir / f"iflow_{timestamp}.log"
 
-        file_handler = RotatingFileHandler(
+        # 获取渠道名称（优先使用第一个配置的渠道）
+        channel_name = "default"
+        feishu_channels = self.config.get("feishu_channels", [])
+        bots = self.config.get("bots", [])
+        if feishu_channels:
+            channel_name = feishu_channels[0].get("name", "feishu")
+        elif bots:
+            channel_name = bots[0].get("name", "wechat")
+
+        # 获取进程号
+        pid = os.getpid()
+
+        # 生成日志文件名：渠道名+ai引擎名+日期+进程号
+        date_str = datetime.now().strftime("%Y%m%d")
+        log_filename = f"{channel_name}-{self.engine}-{date_str}-{pid}.log"
+        log_file = log_dir / log_filename
+
+        # 清理旧日志文件（保留最近10个）
+        self._cleanup_old_logs(log_dir, 10)
+
+        # 定义日志格式（包含模块标识）
+        log_format = '%(asctime)s [%(levelname)s] [%(name)s] [%(module_id)s] [%(message_type)s] %(message)s'
+
+        # 控制台 handler（简化格式）
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(level)
+        console_handler.setFormatter(logging.Formatter(
+            '%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        ))
+        root_logger.addHandler(console_handler)
+
+        # 文件 handler（包含模块标识，使用自定义格式化器）
+        file_handler = logging.FileHandler(
             log_file,
-            maxBytes=10 * 1024 * 1024,  # 10MB
-            backupCount=5,
+            mode='a',
             encoding='utf-8'
         )
         file_handler.setLevel(level)
-        file_handler.setFormatter(logging.Formatter(
-            '%(asctime)s [%(levelname)s] [%(name)s] %(message)s'
+        file_handler.setFormatter(ModuleAwareFormatter(
+            log_format,
+            datefmt='%Y-%m-%d %H:%M:%S'
         ))
         root_logger.addHandler(file_handler)
+
+        logger.info(f"日志文件已创建: {log_file}")
+        logger.info(f"进程号: {pid}, 渠道: {channel_name}, 引擎: {self.engine}")
 
         # 设置第三方库日志级别
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
+        logging.getLogger("asyncio").setLevel(logging.WARNING)
+
+    def _cleanup_old_logs(self, log_dir: Path, keep_count: int = 10) -> None:
+        """清理旧日志文件，只保留最近的N个
+        
+        Args:
+            log_dir: 日志目录
+            keep_count: 保留的文件数量
+        """
+        try:
+            # 获取所有日志文件（按修改时间排序）
+            log_files = sorted(
+                log_dir.glob("*.log"),
+                key=lambda f: f.stat().st_mtime,
+                reverse=True
+            )
+
+            # 如果文件数量超过保留数量，删除旧的
+            if len(log_files) > keep_count:
+                for old_log in log_files[keep_count:]:
+                    old_log.unlink()
+                    logger.info(f"已删除旧日志文件: {old_log.name}")
+        except Exception as e:
+            logger.warning(f"清理旧日志文件失败: {e}")
     
     async def setup(self) -> bool:
         """初始化所有组件

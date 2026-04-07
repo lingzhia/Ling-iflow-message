@@ -19,6 +19,11 @@ from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from ...core.base import BaseModule
 from ...core.message import Message, MessageType, MessageContent
+from ...core.logger_adapter import log_feishu_message, log_system_event
+
+logger = logging.getLogger(__name__)
+from ...core.message import Message, MessageType, MessageContent
+from ...core.logger_adapter import log_feishu_message, log_system_event
 
 try:
     import lark_oapi as lark
@@ -55,7 +60,7 @@ except ImportError:
     P2ImChatAccessEventBotP2pChatEnteredV1 = Any
 
 
-logger = logging.getLogger(__name__)
+from ...core.logger_adapter import log_feishu_message, log_system_event, MessageType
 
 # 消息类型显示映射
 MSG_TYPE_MAP = {
@@ -736,6 +741,23 @@ class FeishuChannel(BaseModule):
                 message.chat_id
             )
             
+            # 使用新的日志适配器记录飞书消息（完整内容）
+            log_feishu_message(
+                logger, 
+                self.module_id,
+                f"📨 飞书收到消息: msg_id={message.id[:8]}, receive_id={receive_id}, content={content}",
+                level=logging.INFO
+            )
+            
+            # 记录完整的消息元数据
+            log_system_event(
+                logger,
+                self.module_id,
+                f"📋 消息元数据: from_module={message.from_module}, chat_id={message.chat_id}, "
+                f"is_group={message.metadata.get('is_group', False)}, metadata={message.metadata}",
+                level=logging.DEBUG
+            )
+            
             logger.info(f"[{self.module_id}] [_on_receive] 收到消息: msg_id={message.id[:8]}, content={content[:80]}..., receive_id={receive_id}")
             
             if not content:
@@ -746,16 +768,43 @@ class FeishuChannel(BaseModule):
             if receive_id:
                 receive_id_type = "chat_id" if receive_id.startswith("oc_") else "open_id"
                 logger.info(f"[{self.module_id}] [_on_receive] 准备发送到飞书: receive_id={receive_id}, type={receive_id_type}")
+                
+                # 记录准备发送的消息
+                log_feishu_message(
+                    logger,
+                    self.module_id,
+                    f"📤 准备发送到飞书: receive_id={receive_id}, type={receive_id_type}, content={content}",
+                    level=logging.INFO
+                )
+                
                 success = await self.send_message(content, receive_id, receive_id_type)
                 if success:
                     logger.info(f"[{self.module_id}] [_on_receive] ✅ 消息已发送到飞书：{receive_id}")
+                    log_feishu_message(
+                        logger,
+                        self.module_id,
+                        f"✅ 消息发送成功: receive_id={receive_id}",
+                        level=logging.INFO
+                    )
                 else:
                     logger.error(f"[{self.module_id}] [_on_receive] ❌ 消息发送失败")
+                    log_feishu_message(
+                        logger,
+                        self.module_id,
+                        f"❌ 消息发送失败: receive_id={receive_id}",
+                        level=logging.ERROR
+                    )
             else:
                 logger.warning(f"[{self.module_id}] [_on_receive] 未指定接收者 ID，无法发送消息")
                 
         except Exception as e:
             logger.error(f"[{self.module_id}] 处理消息失败：{e}", exc_info=True)
+            log_system_event(
+                logger,
+                self.module_id,
+                f"❌ 处理消息失败: {str(e)}",
+                level=logging.ERROR
+            )
 
     async def send_message(
         self,
@@ -849,6 +898,9 @@ class FeishuChannel(BaseModule):
 
     def _build_card_elements(self, content: str) -> list:
         """将 Markdown 内容转换为飞书卡片元素"""
+        logger.info(f"[{self.module_id}] [_build_card_elements] 接收到的内容长度: {len(content)}")
+        logger.info(f"[{self.module_id}] [_build_card_elements] 接收到的内容（前500字符）: {content[:500]}")
+        logger.info(f"[{self.module_id}] [_build_card_elements] 完整内容:\n{content}")
         # 简单实现：直接返回 Markdown 元素
         # 可以扩展为支持表格、标题等复杂格式
         return [{"tag": "markdown", "content": content}]
