@@ -161,7 +161,14 @@ class LingIflowBot:
         channel_name = "default"
         feishu_channels = self.config.get("feishu_channels", [])
         bots = self.config.get("bots", [])
-        if feishu_channels:
+        simulator_channels = self.config.get("simulator_channels", [])
+        
+        # 根据 engine 类型优先选择对应类型的渠道
+        if self.engine == "claude" and feishu_channels:
+            channel_name = feishu_channels[0].get("name", "feishu")
+        elif simulator_channels:
+            channel_name = simulator_channels[0].get("name", "simulator")
+        elif feishu_channels:
             channel_name = feishu_channels[0].get("name", "feishu")
         elif bots:
             channel_name = bots[0].get("name", "wechat")

@@ -18,6 +18,7 @@ except ImportError:
 
 from ...core.base import BaseModule
 from ...core.message import Message, MessageType, MessageContent
+from ...core.logger_adapter import log_feishu_message, log_system_event, MessageType as LogMessageType
 
 
 logger = logging.getLogger(__name__)
@@ -170,13 +171,20 @@ class SimulatorChannel(BaseModule):
         
         try:
             # 存储连接
+            address = writer.get_extra_info('peername')
             self._connections[conn_id] = {
                 "reader": reader,
                 "writer": writer,
-                "address": writer.get_extra_info('peername')
+                "address": address
             }
             
             logger.info(f"[{self.module_id}] 客户端已连接: {conn_id}")
+            log_system_event(
+                logger,
+                self.module_id,
+                f"🔗 客户端已连接: conn_id={conn_id}, address={address}",
+                level=logging.INFO
+            )
             
             # 接收消息循环
             while self._running:
@@ -196,13 +204,32 @@ class SimulatorChannel(BaseModule):
                     
                 except asyncio.IncompleteReadError:
                     # 连接关闭
+                    logger.info(f"[{self.module_id}] 客户端 {conn_id} 连接关闭（IncompleteReadError）")
+                    log_system_event(
+                        logger,
+                        self.module_id,
+                        f"🔌 客户端连接关闭: conn_id={conn_id}, reason=IncompleteReadError",
+                        level=logging.INFO
+                    )
                     break
                 except Exception as e:
                     logger.error(f"[{self.module_id}] 处理客户端 {conn_id} 消息失败: {e}")
+                    log_system_event(
+                        logger,
+                        self.module_id,
+                        f"❌ 处理客户端 {conn_id} 消息失败: {str(e)}",
+                        level=logging.ERROR
+                    )
                     break
                     
         except Exception as e:
             logger.error(f"[{self.module_id}] 客户端 {conn_id} 连接错误: {e}")
+            log_system_event(
+                logger,
+                self.module_id,
+                f"❌ 客户端 {conn_id} 连接错误: {str(e)}",
+                level=logging.ERROR
+            )
         finally:
             # 清理连接
             if conn_id in self._connections:
@@ -215,6 +242,12 @@ class SimulatorChannel(BaseModule):
                 pass
             
             logger.info(f"[{self.module_id}] 客户端已断开: {conn_id}")
+            log_system_event(
+                logger,
+                self.module_id,
+                f"🔌 客户端已断开: conn_id={conn_id}",
+                level=logging.INFO
+            )
     
     async def _handle_client_message(self, conn_id: str, message_json: Dict[str, Any]) -> None:
         """处理客户端消息
@@ -232,6 +265,25 @@ class SimulatorChannel(BaseModule):
                 metadata = message_json.get("metadata", {})
                 chat_id = metadata.get("chat_id", conn_id)
                 
+                # 使用日志适配器记录接收到的模拟器消息
+                log_feishu_message(
+                    logger,
+                    self.module_id,
+                    f"📨 模拟器收到消息: conn_id={conn_id}, chat_id={chat_id}, content={content}",
+                    level=logging.INFO
+                )
+                
+                # 记录完整的消息元数据
+                log_system_event(
+                    logger,
+                    self.module_id,
+                    f"📋 消息元数据: conn_id={conn_id}, message_id={message_json.get('id')}, "
+                    f"from_module={self.module_id}, chat_id={chat_id}, metadata={metadata}",
+                    level=logging.DEBUG
+                )
+                
+                logger.info(f"[{self.module_id}] [_handle_client_message] 收到消息: content={content[:80]}..., conn_id={conn_id}")
+                
                 # 解析命令
                 parsed = self.command_handler.parse_command(content)
                 
@@ -239,6 +291,13 @@ class SimulatorChannel(BaseModule):
                 if parsed.get("is_command"):
                     result = await self.command_handler.execute(parsed, chat_id)
                     if result:
+                        # 记录命令回复
+                        log_system_event(
+                            logger,
+                            self.module_id,
+                            f"📤 命令回复: chat_id={chat_id}, result={result}",
+                            level=logging.INFO
+                        )
                         # 发送命令回复到客户端
                         await self._send_to_client(conn_id, {
                             "type": "bot_message",
@@ -264,6 +323,14 @@ class SimulatorChannel(BaseModule):
                     }
                 )
                 
+                # 记录发送到消息总线的消息
+                log_system_event(
+                    logger,
+                    self.module_id,
+                    f"📤 发送消息到消息总线: msg_id={message.id}, content={content}, chat_id={chat_id}",
+                    level=logging.INFO
+                )
+                
                 # 发送到消息总线
                 if self.message_bus:
                     await self.send_to_bus(message)
@@ -277,6 +344,12 @@ class SimulatorChannel(BaseModule):
                 
             elif message_type == "close":
                 # 关闭消息：断开连接
+                log_system_event(
+                    logger,
+                    self.module_id,
+                    f"🔌 客户端请求关闭: conn_id={conn_id}",
+                    level=logging.INFO
+                )
                 if conn_id in self._connections:
                     conn = self._connections[conn_id]
                     if "writer" in conn:
@@ -285,9 +358,21 @@ class SimulatorChannel(BaseModule):
                         
             else:
                 logger.warning(f"[{self.module_id}] 未知消息类型: {message_type}")
+                log_system_event(
+                    logger,
+                    self.module_id,
+                    f"⚠️  未知消息类型: {message_type}",
+                    level=logging.WARNING
+                )
                 
         except Exception as e:
             logger.error(f"[{self.module_id}] 处理客户端 {conn_id} 消息失败: {e}", exc_info=True)
+            log_system_event(
+                logger,
+                self.module_id,
+                f"❌ 处理客户端 {conn_id} 消息失败: {str(e)}",
+                level=logging.ERROR
+            )
     
     async def _send_message_to_client(self, conn: Dict, message: Message) -> None:
         """发送消息到客户端
@@ -323,6 +408,26 @@ class SimulatorChannel(BaseModule):
                 }
             }
             
+            # 记录发送到客户端的消息
+            content = message.content.text if message.content else ""
+            log_feishu_message(
+                logger,
+                self.module_id,
+                f"📤 发送消息到模拟器客户端: msg_id={message.id}, content={content[:80]}..., message_type={message.type}, scope={scope}",
+                level=logging.INFO
+            )
+            
+            # 记录完整的消息元数据
+            log_system_event(
+                logger,
+                self.module_id,
+                f"📋 发送消息元数据: msg_id={message.id}, from_module={message.from_module}, "
+                f"message_type={message.type}, scope={scope}, metadata={message.metadata}",
+                level=logging.DEBUG
+            )
+            
+            logger.info(f"[{self.module_id}] [_send_message_to_client] 发送消息: content={content[:80]}..., type={message.type}")
+            
             writer = conn.get("writer")
             if writer:
                 message_data = json.dumps(message_json, ensure_ascii=False).encode('utf-8')
@@ -332,6 +437,12 @@ class SimulatorChannel(BaseModule):
                 
         except Exception as e:
             logger.error(f"[{self.module_id}] 发送消息到客户端失败: {e}")
+            log_system_event(
+                logger,
+                self.module_id,
+                f"❌ 发送消息到客户端失败: {str(e)}",
+                level=logging.ERROR
+            )
     
     async def _send_to_client(self, conn_id: str, message_json: Dict) -> None:
         """发送消息到客户端（直接发送JSON）
@@ -344,7 +455,25 @@ class SimulatorChannel(BaseModule):
             conn = self._connections.get(conn_id)
             if not conn:
                 logger.warning(f"[{self.module_id}] 连接不存在: {conn_id}")
+                log_system_event(
+                    logger,
+                    self.module_id,
+                    f"⚠️  发送消息失败: 连接不存在 conn_id={conn_id}",
+                    level=logging.WARNING
+                )
                 return
+            
+            # 记录发送到客户端的直接JSON消息
+            msg_type = message_json.get("type", "unknown")
+            content = message_json.get("content", "")
+            log_feishu_message(
+                logger,
+                self.module_id,
+                f"📤 发送直接JSON消息到客户端: conn_id={conn_id}, type={msg_type}, content={content[:80] if content else 'N/A'}...",
+                level=logging.INFO
+            )
+            
+            logger.info(f"[{self.module_id}] [_send_to_client] 发送消息: conn_id={conn_id}, type={msg_type}")
             
             writer = conn.get("writer")
             if writer:
