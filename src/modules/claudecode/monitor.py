@@ -446,6 +446,7 @@ class ClaudeCodeMonitor:
                 # 检查是否有 ● 标记（简单响应可能不显示 "Choreographing"）
                 # 直接提取最后一条消息并发送
                 has_response_marker = '●' in output
+                logger.debug(f"[ClaudeCodeMonitor] lightweight 检查: has_response_marker={has_response_marker}, output包含●={'●' in output}")
                 if has_response_marker:
                     full_output = await self.controller.capture_output(lines=self.LINES_FULL)
                     if full_output:
@@ -522,9 +523,16 @@ class ClaudeCodeMonitor:
             是否处于生成中
         """
         # 方法1：检测状态指示器关键词
-        indicators = ["Choreographing", "Baking…", "Honking…", "Thinking…", "Orbiting…", 
-                     "Baking...", "Honking...", "Thinking...", "Orbiting..."]
+        indicators = ["Choreographing", "Baking…", "Honking…", "Thinking…", "Orbiting…", "Moseying…", "Contemplating…",
+                     "Baking...", "Honking...", "Thinking...", "Orbiting...", "Moseying...", "Contemplating..."]
+        
+        # 调试日志：输出检测到的指示器
+        found_indicators = [ind for ind in indicators if ind in output]
+        if found_indicators:
+            logger.debug(f"[ClaudeCodeMonitor] _detect_generating: 检测到状态指示器: {found_indicators}")
+        
         if any(indicator in output for indicator in indicators):
+            logger.debug(f"[ClaudeCodeMonitor] _detect_generating: 返回 True (状态指示器)")
             return True
         
         # 方法2：检测最后几行是否有用户输入但没有回复
@@ -555,8 +563,10 @@ class ClaudeCodeMonitor:
             
             if not has_reply_after_input:
                 # 用户输入后没有回复，正在生成
+                logger.debug(f"[ClaudeCodeMonitor] _detect_generating: 用户输入后无回复，返回 True")
                 return True
         
+        logger.debug(f"[ClaudeCodeMonitor] _detect_generating: 返回 False (无生成状态)")
         return False
 
     def _extract_received_message(self, lines: List[str]) -> tuple[Optional[str], Optional[int]]:
