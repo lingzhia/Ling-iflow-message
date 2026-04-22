@@ -41,7 +41,7 @@
       "port": 19999
     }
   ],
-  "log_level": "INFO",
+  "log_level": "DEBUG",
   "filter_thinking": true,
   "feishu_channels": [
     {

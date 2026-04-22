@@ -486,10 +486,10 @@ class ClaudeCodeController:
             捕获的输出
         """
         try:
-            # 使用 -S 参数从最后 N 行开始捕获
+            # 捕获整个 tmux 会话（不限制行数）
             result = await asyncio.create_subprocess_exec(
                 "tmux", "capture-pane", "-t", self.tmux_session,
-                "-S", f"-{lines}", "-p",
+                "-p",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )

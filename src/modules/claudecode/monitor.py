@@ -111,6 +111,10 @@ class ClaudeCodeMonitor:
         # 初始化时记录已存在的消息（避免发送历史消息）
         self._initial_messages_loaded: bool = False
 
+        # 记录最新的请求消息（用于快速回复检测）
+        self._last_request_message: Optional[str] = None
+        logger.debug(f"[ClaudeCodeMonitor] __init__: _last_request_message 初始化为 None")
+
         # 发送模式控制（消息来源差异化处理）
         self._send_mode: str = "STREAM_MODE"
         self._current_request_record: Optional[Any] = None
@@ -243,24 +247,6 @@ class ClaudeCodeMonitor:
                 else:
                     self._is_initialized = True
                     logger.info(f"[ClaudeCodeMonitor] 初始化完成 ({initialization_duration:.1f}s)")
-                    
-                    # 记录初始化时已存在的消息，避免后续重复发送
-                    if not self._initial_messages_loaded:
-                        full_output = await self.controller.capture_output(lines=self.LINES_FULL)
-                        if full_output:
-                            initial_messages = self._extract_messages(full_output)
-                            if initial_messages:
-                                # 将所有已存在的消息添加到去重集合
-                                for msg in initial_messages:
-                                    marker_only = msg.get('marker_only', '')
-                                    full_content = msg.get('content', '')
-                                    if marker_only:
-                                        self._sent_marker_strings.add(marker_only)
-                                    if full_content:
-                                        content_hash = hashlib.md5(full_content.encode()).hexdigest()
-                                        self._sent_message_hashes.add(content_hash)
-                                logger.info(f"[ClaudeCodeMonitor] 已记录 {len(initial_messages)} 条历史消息，避免重复发送")
-                        self._initial_messages_loaded = True
 
             # 先检测状态变化
             await self._check_state(output)
@@ -366,103 +352,161 @@ class ClaudeCodeMonitor:
     async def _check_lightweight(self) -> None:
         """轻量级检查（IDLE 状态）
 
-        只检查是否出现"生成中"关键词，不进行消息提取。
+        只检查是否出现生成状态指示器，不进行消息提取。
         """
         self.stats["check_count"] += 1
 
+        # 调试日志：追踪 _last_request_message 的值
+        logger.debug(f"[ClaudeCodeMonitor] _check_lightweight 开始: check_count={self.stats['check_count']}, _last_request_message='{self._last_request_message}'")
+
         try:
+            # 只扫描最近的 20 行（轻量级模式）
             output = await self.controller.capture_output(lines=self.LINES_LIGHTWEIGHT)
 
             if not output:
                 return
 
-            # 检查是否处于初始化期间（启动后 5 秒内）
-            # 在初始化期间，跳过历史消息的发送
-            if not self._is_initialized:
-                if self._initialization_time is None:
-                    self._initialization_time = datetime.now()
-                    logger.debug(f"[ClaudeCodeMonitor] 开始初始化计时")
-
-                initialization_duration = (datetime.now() - self._initialization_time).total_seconds()
-                if initialization_duration < 5.0:
-                    logger.debug(f"[ClaudeCodeMonitor] 初始化期间，跳过 lightweight 检查 ({initialization_duration:.1f}s / 5.0s)")
-                    # 初始化期间不触发状态变更，只等待初始化完成
-                    return
-                else:
-                    self._is_initialized = True
-                    logger.info(f"[ClaudeCodeMonitor] 初始化完成 ({initialization_duration:.1f}s)")
-                    
-                    # 记录初始化时已存在的消息，避免后续重复发送
-                    if not self._initial_messages_loaded:
-                        full_output = await self.controller.capture_output(lines=self.LINES_FULL)
-                        if full_output:
-                            initial_messages = self._extract_messages(full_output)
-                            if initial_messages:
-                                # 将所有已存在的消息添加到去重集合
-                                for msg in initial_messages:
-                                    marker_only = msg.get('marker_only', '')
-                                    full_content = msg.get('content', '')
-                                    if marker_only:
-                                        self._sent_marker_strings.add(marker_only)
-                                    if full_content:
-                                        content_hash = hashlib.md5(full_content.encode()).hexdigest()
-                                        self._sent_message_hashes.add(content_hash)
-                                logger.info(f"[ClaudeCodeMonitor] 已记录 {len(initial_messages)} 条历史消息，避免重复发送")
-                        self._initial_messages_loaded = True
-                    # 初始化完成后，继续执行后续检查
-                    # 不要 return，让代码继续执行下面的逻辑
-                    # 但是要确保状态是 IDLE，避免历史消息触发错误的状态变更
-                    self._state = ClaudeCodeState.IDLE
-                    # 设置稳定期结束时间
-                    self._stabilization_end_time = datetime.now() + timedelta(seconds=self._stabilization_period)
-                    logger.info(f"[ClaudeCodeMonitor] 初始化完成后重置状态为 IDLE，进入稳定期 {self._stabilization_period}s")
-
-            # 检查是否在稳定期内
-            if self._stabilization_end_time:
-                if datetime.now() < self._stabilization_end_time:
-                    remaining_time = (self._stabilization_end_time - datetime.now()).total_seconds()
-                    logger.debug(f"[ClaudeCodeMonitor] 在稳定期内，跳过状态检测 ({remaining_time:.1f}s 剩余)")
-                    # 稳定期内只检查是否正在生成，不触发状态变更
-                    is_generating = self._detect_generating(output)
-                    return
-                else:
-                    # 稳定期结束
-                    self._stabilization_end_time = None
-                    logger.info(f"[ClaudeCodeMonitor] 稳定期结束，开始正常状态检测")
-
+            # 检查是否出现生成状态指示器
             is_generating = self._detect_generating(output)
 
             if is_generating:
+                # 检测到生成状态，需要执行一次完整的检查来初始化状态
+                # 先更新状态
                 self._state = ClaudeCodeState.GENERATING
                 self._generating_start_time = datetime.now()
                 self.stats["state_changes"] += 1
                 logger.info(f"[ClaudeCodeMonitor] State changed: IDLE -> GENERATING (lightweight detected)")
-
+                
+                # 获取完整输出进行消息提取
                 full_output = await self.controller.capture_output(lines=self.LINES_FULL)
-                await self._check_state(full_output)
-
+                
+                # 提取并发送消息
+                await self._process_generating_state(full_output)
+                
                 logger.debug(f"[ClaudeCodeMonitor] Check #{self.stats['check_count']}: lightweight -> full")
             else:
-                # 检查是否有 ● 标记（简单响应可能不显示 "Choreographing"）
-                # 直接提取最后一条消息并发送
-                has_response_marker = '●' in output
-                logger.debug(f"[ClaudeCodeMonitor] lightweight 检查: has_response_marker={has_response_marker}, output包含●={'●' in output}")
-                if has_response_marker:
+                # 仍然在 IDLE 状态，检查是否有新的请求消息
+                logger.debug(f"[ClaudeCodeMonitor] IDLE mode: no generating detected")
+                
+                # 提取最新的请求消息
+                lines = output.split('\n')
+                logger.debug(f"[ClaudeCodeMonitor] _check_lightweight: 捕获了 {len(lines)} 行，内容前500字符: {output[:500]}")
+                received_message, received_line = self._extract_received_message(lines)
+                
+                logger.debug(f"[ClaudeCodeMonitor] _check_lightweight: received_message={received_message}, received_line={received_line}")
+                logger.debug(f"[ClaudeCodeMonitor] _check_lightweight: _last_request_message={self._last_request_message}")
+                
+                if received_message is not None:
+                    # 检查请求消息是否变化
+                    logger.debug(f"[ClaudeCodeMonitor] 检查请求消息变化: _last_request_message='{self._last_request_message}', received_message='{received_message}'")
+                    if self._last_request_message != received_message:
+                        logger.info(f"[ClaudeCodeMonitor] 检测到新的请求消息: {received_message[:50]}...（之前: {self._last_request_message[:50] if self._last_request_message else 'None'}...）")
+                        
+                        # 更新最新请求消息
+                        old_request_message = self._last_request_message
+                        self._last_request_message = received_message
+                        logger.debug(f"[ClaudeCodeMonitor] _last_request_message 已更新: '{old_request_message}' -> '{received_message}'")
+                        
+                        # 消息来源差异化处理
+                        if not self._request_matched and received_message and hasattr(self.controller, 'module') and self.controller.module:
+                            message_store = self.controller.module.message_store
+                            matched_record = message_store.find_by_content(received_message)
+                            
+                            if matched_record:
+                                self._current_request_record = matched_record
+                                self._request_matched = True
+                                
+                                if matched_record.source:
+                                    self._send_mode = "STREAM_MODE"
+                                    logger.info(f"[ClaudeCodeMonitor] 请求消息有明确来源 ({matched_record.source})，使用流式发送")
+                                else:
+                                    self._send_mode = "BUFFER_MODE"
+                                    matched_record.requires_buffering = True
+                                    self._no_source_request_content = matched_record.content
+                                    logger.info(f"[ClaudeCodeMonitor] 请求消息无明确来源，使用缓冲发送，原始请求: {matched_record.content[:50]}")
+                            else:
+                                self._send_mode = "BUFFER_MODE"
+                                self._current_request_record = None
+                                self._no_source_request_content = received_message
+                                self._request_matched = True
+                                logger.info(f"[ClaudeCodeMonitor] 请求消息未匹配到记录，使用缓冲发送，原始请求: {received_message[:50]}")
+                        
+                        # 提取最新的回复消息（使用已经捕获的output）
+                        if output:
+                            current_messages = self._extract_messages(output)
+                            if current_messages:
+                                # 发送倒数第2条消息（延迟记录原则）
+                                if len(current_messages) >= 2:
+                                    message_to_send = current_messages[-2]
+                                    logger.info(f"[ClaudeCodeMonitor] 快速回复：发送倒数第2条消息（延迟记录原则）")
+                                    await self._send_message(message_to_send)
+                                elif len(current_messages) == 1:
+                                    # 只有1条消息，可能是正在更新，等待下次检查
+                                    logger.info(f"[ClaudeCodeMonitor] 只有1条消息，等待下次检查")
+                
+                # 初始化历史消息（在第10次扫描时）
+                if self.stats["check_count"] == 10 and not self._initial_messages_loaded:
+                    logger.info(f"[ClaudeCodeMonitor] 初始化历史消息...")
                     full_output = await self.controller.capture_output(lines=self.LINES_FULL)
                     if full_output:
-                        current_messages = self._extract_messages(full_output)
-                        if current_messages:
-                            # 只发送最后一条消息（最新的回复）
-                            last_message = current_messages[-1]
-                            # 注意：_send_message_simple 内部会进行去重检查
-                            # 如果消息已发送，会直接返回，不会重复发送
-                            logger.debug(f"[ClaudeCodeMonitor] lightweight 检测到 ● 标记，尝试发送最后一条消息")
-                            await self._send_message_simple(last_message)
-                elif self.stats["check_count"] % 60 == 0:
+                        initial_messages = self._extract_messages(full_output)
+                        if initial_messages:
+                            # 将所有已存在的消息添加到去重集合
+                            for msg in initial_messages:
+                                marker_only = msg.get('marker_only', '')
+                                full_content = msg.get('content', '')
+                                if marker_only:
+                                    self._sent_marker_strings.add(marker_only)
+                                if full_content:
+                                    content_hash = hashlib.md5(full_content.encode()).hexdigest()
+                                    self._sent_message_hashes.add(content_hash)
+                            logger.info(f"[ClaudeCodeMonitor] 已记录 {len(initial_messages)} 条历史消息，避免重复发送")
+                    self._initial_messages_loaded = True
+                
+                if self.stats["check_count"] % 60 == 0:  # 每30秒输出一次（0.5s间隔）
                     logger.debug(f"[ClaudeCodeMonitor] Check #{self.stats['check_count']}: lightweight mode (idle)")
 
         except Exception as e:
             logger.error(f"[ClaudeCodeMonitor] Error in lightweight check: {e}", exc_info=True)
+
+    async def _process_generating_state(self, output: str) -> None:
+        """处理 GENERATING 状态下的消息提取和发送
+
+        Args:
+            output: tmux 输出
+        """
+        # 提取所有消息
+        current_messages = self._extract_messages(output)
+        logger.info(f"[ClaudeCodeMonitor] GENERATING state: extracted {len(current_messages)} messages")
+
+        # 延迟记录原则：只有2条或更多消息时才开始记录
+        if len(current_messages) < 2:
+            logger.info(f"[ClaudeCodeMonitor] 只有 {len(current_messages)} 条消息，不记录（延迟记录原则）")
+            return
+
+        # 定位已记录的最新消息
+        last_sent_index = self._locate_last_sent_message(current_messages)
+
+        # 计算需要记录的消息
+        if last_sent_index is None:
+            messages_to_send = current_messages[:-1]
+            logger.info(f"[ClaudeCodeMonitor] 未找到已记录消息，记录第1条到倒数第2条：{len(messages_to_send)} 条")
+        else:
+            messages_to_send = current_messages[last_sent_index + 1:-1]
+            logger.info(f"[ClaudeCodeMonitor] 找到已记录消息（索引={last_sent_index}），记录其后到倒数第2条：{len(messages_to_send)} 条")
+
+        # 记录并发送消息
+        if len(messages_to_send) > 0:
+            logger.info(f"[ClaudeCodeMonitor] 记录并发送 {len(messages_to_send)} 条消息")
+
+            for i, message in enumerate(messages_to_send):
+                marker_symbol = message['marker_type']
+                logger.info(f"[ClaudeCodeMonitor] 记录消息: {marker_symbol} - {message['content'][:50]}...")
+
+                await self._send_message(message)
+                logger.info(f"[ClaudeCodeMonitor] 发送消息: {marker_symbol} - {message['content'][:50]}...")
+        else:
+            logger.info(f"[ClaudeCodeMonitor] 没有需要发送的消息")
 
     async def _check_state(self, output: str) -> None:
         """检测 Claude Code 状态
@@ -515,6 +559,7 @@ class ClaudeCodeMonitor:
         2. 检查最后几行是否有用户输入提示符 `❯` 但没有对应的回复标记 `●`
 
         注意：这个方法主要用于检测正在生成的状态，不应用于历史消息。
+        只检测最后10行，避免检测历史消息中的状态指示器。
 
         Args:
             output: tmux 输出
@@ -522,25 +567,25 @@ class ClaudeCodeMonitor:
         Returns:
             是否处于生成中
         """
-        # 方法1：检测状态指示器关键词
-        indicators = ["Choreographing", "Baking…", "Honking…", "Thinking…", "Orbiting…", "Moseying…", "Contemplating…",
-                     "Baking...", "Honking...", "Thinking...", "Orbiting...", "Moseying...", "Contemplating..."]
-        
-        # 调试日志：输出检测到的指示器
-        found_indicators = [ind for ind in indicators if ind in output]
-        if found_indicators:
-            logger.debug(f"[ClaudeCodeMonitor] _detect_generating: 检测到状态指示器: {found_indicators}")
-        
-        if any(indicator in output for indicator in indicators):
-            logger.debug(f"[ClaudeCodeMonitor] _detect_generating: 返回 True (状态指示器)")
-            return True
-        
-        # 方法2：检测最后几行是否有用户输入但没有回复
         # 只检查最后10行，避免检测历史消息
         lines = output.split('\n')
         recent_lines = lines[-10:] if len(lines) >= 10 else lines
         
-        # 查找最后一个用户输入提示符
+        # 方法1：检测状态指示器关键词（只在最后10行中检测）
+        indicators = ["Choreographing", "Baking…", "Honking…", "Thinking…", "Orbiting…", "Moseying…", "Contemplating…",
+                     "Baking...", "Honking...", "Thinking...", "Orbiting...", "Moseying...", "Contemplating..."]
+        
+        # 调试日志：输出检测到的指示器
+        found_indicators = [ind for ind in indicators if ind in '\n'.join(recent_lines)]
+        if found_indicators:
+            logger.debug(f"[ClaudeCodeMonitor] _detect_generating: 在最后10行中检测到状态指示器: {found_indicators}")
+        
+        if any(indicator in '\n'.join(recent_lines) for indicator in indicators):
+            logger.debug(f"[ClaudeCodeMonitor] _detect_generating: 返回 True (状态指示器)")
+            return True
+        
+        # 方法2：检测最后几行是否有用户输入但没有回复
+        # 查找最后一个用户输入提示符（只在最后10行中检测）
         last_user_input_index = -1
         for i in range(len(recent_lines) - 1, -1, -1):
             line_stripped = recent_lines[i].strip()
@@ -550,8 +595,10 @@ class ClaudeCodeMonitor:
                 input_content = line_stripped[1:].strip()
                 # 如果输入内容不为空，才认为是有效的用户输入
                 if input_content:
-                    last_user_input_index = i
-                    break
+                    # 过滤掉命令（如exit, clear等）
+                    if input_content.lower() not in ['exit', 'clear', 'quit', 'q']:
+                        last_user_input_index = i
+                        break
         
         # 如果有用户输入，检查后面是否有回复标记
         if last_user_input_index >= 0:
@@ -581,6 +628,8 @@ class ClaudeCodeMonitor:
         Returns:
             (消息内容, 消息行号) 或 (None, None)
         """
+        logger.debug(f"[ClaudeCodeMonitor] _extract_received_message: 扫描 {len(lines)} 行")
+        
         # 从下往上扫描，找到最后一个用户发送的消息
         for i in range(len(lines) - 1, -1, -1):
             line_stripped = lines[i].strip()
@@ -588,8 +637,13 @@ class ClaudeCodeMonitor:
             if line_stripped.startswith('❯'):
                 # 提取消息内容（去掉 `❯` 前缀）
                 message_content = line_stripped[1:].strip()
-                return message_content, i
+                logger.debug(f"[ClaudeCodeMonitor] _extract_received_message: 找到 ❯ 行 (行 {i}), 内容='{message_content}'")
+                # 只返回非空的用户请求
+                if message_content:
+                    logger.debug(f"[ClaudeCodeMonitor] _extract_received_message: 返回 '{message_content}', 行号 {i}")
+                    return message_content, i
 
+        logger.debug(f"[ClaudeCodeMonitor] _extract_received_message: 未找到非空用户输入")
         return None, None
 
     def _is_tui_line(self, line: str) -> bool:
@@ -683,7 +737,8 @@ class ClaudeCodeMonitor:
 
         logger.info(f"[ClaudeCodeMonitor] _extract_messages: 扫描 {len(lines)} 行，寻找标记 (●, ✻)")
         logger.info(f"[ClaudeCodeMonitor] 输出内容（前500字符）: {output[:500]}")
-
+        
+        # 扫描整个输出提取消息（与iflow相同）
         for i, line in enumerate(lines):
             line_stripped = line.strip()
 
@@ -757,6 +812,10 @@ class ClaudeCodeMonitor:
                 })
 
         logger.debug(f"[ClaudeCodeMonitor] _extract_messages: extracted {len(messages)} messages total")
+        
+        # 注意：不在这里更新 _last_request_message，只在 _check_lightweight 中更新
+        # 这样可以确保快速回复检测逻辑正常工作
+        
         return messages
 
     def _cleanup_cache(self) -> None:
